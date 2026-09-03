@@ -51,7 +51,7 @@ Finding
       ├── timeline           (present/absent per finding)
       ├── opposite_trades    (present/absent per finding)
       ├── signal_explain     (present/absent per finding)
-      └── policy_lookup      (present/absent per finding)
+      └── policy_lookup      (case-wide retrieval — not finding-derived)
 
 InvestigationContext
 └── focused_finding_id  →  Finding.finding_id
@@ -234,10 +234,15 @@ Representation on a Finding — explicit per-capability flags, not a bare list:
 Rules:
 
 - Absence/false means **unsupported**, not "empty".
-- Every finding must declare all four keys (explicit beats inferred).
+- Every finding must declare all derived keys (explicit beats inferred). The
+  vocabulary is open to extension; keys are only those actually derived.
 - Capabilities are computed **only from evidence actually returned by the Risk
   Platform** for that finding (e.g. `opposite_trades` requires trade-composition
   data; `timeline` requires multiple timestamped evidence items).
+- `policy_lookup` is **not finding-derived**: policy retrieval is a case-wide
+  runtime capability, plannable for every focused finding. Whether a finding
+  has an authoritative finding-level policy basis is carried by `policy_refs`
+  / the tool's `finding_policy_status` — a data state, not a capability.
 - A capability value of `true` is a promise: the corresponding drilldown will
   succeed or return `empty` — never `unsupported`.
 - Unknown future capability requests against an older finding snapshot resolve
@@ -516,9 +521,10 @@ Anti-pattern guardrails baked into the separation:
 ## 4. Validation Rules (invariants)
 
 1. **Capability-gated execution** — A tool backed by a finding-scoped
-   capability (`timeline`, `opposite_trades`, `signal_explain`,
-   `policy_lookup`) cannot execute if the current finding does not declare
-   that capability. Enforced twice: at plan validation (reject/skip early)
+   capability (`timeline`, `opposite_trades`, `signal_explain`) cannot
+   execute if the current finding does not declare that capability.
+   (`policy_lookup` carries no finding capability gate: policy retrieval is
+   case-wide.) Enforced twice: at plan validation (reject/skip early)
    and again at execution time (runtime revalidation — defense in depth).
 2. **No unvalidated execution** — Planner output must pass deterministic plan
    validation (registry membership, argument resolvability from context,

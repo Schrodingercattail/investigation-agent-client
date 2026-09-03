@@ -162,7 +162,7 @@ context*. Each investigation action has a natural scope:
 | "Why is this finding flagged?" | explanation; relevant rule/feature evidence | unrelated policies; full timeline; unrelated features |
 | "Show all withdrawals supporting this finding" | complete withdrawals | unrelated ML features; unrelated policies |
 | "Show the timeline" | complete timeline for the scope | unrelated feature dumps |
-| "Which policy requirements apply?" | relevant policy references only | the whole case citation set |
+| "Which policy requirements apply?" | finding-level basis: directly relevant references only (max 2); no finding-level basis: "no basis" statement + complete case-level set, labeled case-level | unrelated policies presented as finding support |
 | "Generate the investigation bundle" | artifact creation + where to find it | re-running unrelated investigation steps |
 
 Scope discipline is enforced at composition, not by hoping the model

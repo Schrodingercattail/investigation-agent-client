@@ -252,9 +252,16 @@ the canonical planning vocabulary is: `fetch_case`, `generate_artifact`,
 
 | skill_id | required_capabilities | allowed_tools | planning_steps |
 |---|---|---|---|
-| `case_intake` | — | risk_case_fetch, artifact_bundle | fetch_case, generate_artifact |
+| `case_intake` | — | risk_case_fetch, artifact_bundle, policy_lookup | fetch_case, retrieve_policy, generate_artifact |
 | `timeline_investigation` | timeline | finding_drilldown(view=timeline), signal_explain, policy_lookup, artifact_bundle | inspect_timeline, explain_signal, retrieve_policy, generate_artifact |
 | `trade_investigation` | opposite_trades | finding_drilldown(view=opposite_trades), signal_explain, policy_lookup, artifact_bundle | inspect_opposite_trades, explain_signal, retrieve_policy, generate_artifact |
+
+`retrieve_policy` (→ `policy_lookup`) is a **case-wide policy continuation**:
+policy retrieval requires no finding capability, so it is plannable for every
+focused finding via `case_intake` (always eligible). Whether a finding has an
+authoritative finding-level policy basis is a data question, answered by the
+tool result (`finding_policy_status`: `associated` | `no_finding_level_basis`)
+— never a capability verdict.
 
 Registry rules:
 

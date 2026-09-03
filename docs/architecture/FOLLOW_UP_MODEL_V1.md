@@ -112,7 +112,7 @@ a target step has no implemented tool, the follow-up must not be displayed).
 |---|---|---|---|---|
 | `explain_finding` | Why is this finding flagged? | `signal_explain` | timeline_investigation / explain_signal | ✅ `signal_explain` tool implemented |
 | `show_supporting_evidence` | Show supporting evidence | `timeline` | timeline_investigation / inspect_timeline | ✅ via finding_drilldown (timeline view) |
-| `check_policy_requirements` | Which policy requirements apply? | `policy_lookup` | timeline_investigation / retrieve_policy | ✅ `policy_lookup` tool implemented (end-to-end verified) |
+| `check_policy_requirements` | Which policy requirements apply? | — (none; policy retrieval is case-wide) | case_intake / retrieve_policy | ✅ `policy_lookup` tool implemented (executes for every focused finding; result reports `finding_policy_status`) |
 | `show_related_timeline` | Show related timeline | `timeline` | timeline_investigation / inspect_timeline | ✅ via finding_drilldown (timeline view) |
 | `generate_next_step_checklist` | Generate next-step investigation checklist | — | case_intake / generate_artifact | — future (`artifact_bundle` unimplemented) |
 
@@ -128,8 +128,12 @@ a target step has no implemented tool, the follow-up must not be displayed).
 
 Executability is evaluated at selection time against the live registries:
 a candidate is executable only when `target_skill` exists, `target_step`
-exists in that skill's `planning_steps`, and the step→tool binding resolves
-to an implemented execution path. Templates whose targets are not (yet)
+exists in that skill's `planning_steps`, the step→tool binding resolves
+to an implemented execution path, **and the target skill is eligible for
+the focused finding under the Skill Registry's `required_capabilities` —
+the same eligibility the planner uses**. (A chip whose skill cannot be
+planned for this finding would fail `SKILL_NOT_ELIGIBLE`: a dead button,
+violating P13/P19.) Templates whose targets are not (yet)
 implemented simply never surface — no placeholder buttons.
 
 ---
@@ -177,7 +181,8 @@ Filtering pipeline:
 
 1. **Candidate templates** (all definitions)
 2. **Capability filtering** — `required_capabilities` ⊆ focused finding's
-   `FindingCapability`
+   `FindingCapability`, and the target skill is eligible for the finding
+   (the planner's own registry truth)
 3. **Context/scope filtering** — finding-level candidates require
    `focused_finding_id`; timeline-event candidates require
    `focused_finding_id` + `focused_event_id`; case-level candidates may run
