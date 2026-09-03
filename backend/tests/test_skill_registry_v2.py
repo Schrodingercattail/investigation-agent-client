@@ -61,8 +61,14 @@ class TestRegistryContents:
     def test_case_intake_shape(self):
         s = SKILLS["case_intake"]
         assert s.required_capabilities == []
-        assert set(s.allowed_tools) == {"risk_case_fetch", "artifact_bundle"}
-        assert s.planning_steps == ["fetch_case", "generate_artifact"]
+        # retrieve_policy rides here (case-wide policy continuation): policy
+        # retrieval needs no finding capability, so the check_policy
+        # follow-up stays plannable for EVERY focused finding (P13/P19) —
+        # never gated by another skill's timeline requirement.
+        assert set(s.allowed_tools) == {
+            "risk_case_fetch", "artifact_bundle", "policy_lookup"}
+        assert s.planning_steps == [
+            "fetch_case", "retrieve_policy", "generate_artifact"]
 
     def test_timeline_skill_shape(self):
         s = SKILLS["timeline_investigation"]
@@ -71,7 +77,8 @@ class TestRegistryContents:
             "finding_drilldown", "signal_explain", "policy_lookup", "artifact_bundle",
         }
         assert s.planning_steps == [
-            "inspect_timeline", "explain_signal", "retrieve_policy", "generate_artifact",
+            "inspect_timeline", "inspect_evidence", "explain_signal",
+            "retrieve_policy", "generate_artifact",
         ]
 
     def test_trade_skill_shape(self):

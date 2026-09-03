@@ -115,7 +115,12 @@ def signal_explain(
                     f"Finding {finding_id} does not support signal "
                     f"explanation."
                 ),
-                detail={"supported_capabilities": sorted(finding.capabilities)},
+                detail={
+                    "capability": "signal_explain",
+                    "scope": "finding",
+                    "finding_id": finding_id,
+                    "supported_capabilities": sorted(finding.capabilities),
+                },
             ),
         )
 

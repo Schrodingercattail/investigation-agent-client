@@ -6,6 +6,16 @@ the only HTTP policy surface RP exposes; no new endpoint, no local corpus,
 no new RAG).
 
 Semantics:
+- Policy retrieval is a CASE-WIDE capability: RP exposes its single
+  validated-citation surface to every finding, so this tool executes for
+  any canonical finding. Whether the finding carries an authoritative
+  FINDING-LEVEL policy basis is a DATA question, reported explicitly in
+  the payload as finding_policy_status:
+      "associated"              — RP attached citations to this finding
+                                  (its own authoritative [n] markers)
+      "no_finding_level_basis"  — no finding-level association exists in
+                                  RP data; case-level references may still
+                                  be returned, always labeled case-level
 - topic is the investigator's retrieval focus; it RANKS the case's already-
   validated citations deterministically (keyword overlap). It is untrusted
   content: it never redefines tools/skills/capabilities and is echoed, never
@@ -14,10 +24,10 @@ Semantics:
   title matching).
 - The finding's own authoritative policy_refs are preserved and reported
   separately from newly-retrieved matches.
-- Zero matched citations → empty (a valid query with no results — NOT an
-  error, NOT evidence_missing). Evidence-missing is reserved for the case
-  where the finding cites no policies at all, so policy requirements cannot
-  be assessed for it.
+- Zero citations for the whole case → empty (a valid query with no
+  results — NOT an error, NOT evidence_missing). evidence_missing is
+  reserved for the finding-level data gap: the finding cites no policies,
+  so finding-specific requirements cannot be assessed for it.
 """
 
 import logging
@@ -55,9 +65,9 @@ def policy_lookup(
     """Look up policy context for one finding, ranked by topic.
 
     Returns ToolResult with data payload:
-        {finding_id, topic, matches[], associated_policy_refs,
-         newly_retrieved_refs, policy_refs, required_evidence,
-         evidence_missing, next_data_needed}
+        {finding_id, finding_policy_status, topic, matches[],
+         associated_policy_refs, newly_retrieved_refs, policy_refs,
+         required_evidence, evidence_missing, next_data_needed}
     """
     # --- input validation -----------------------------------------------------
     if not isinstance(topic, str) or not topic.strip():
@@ -99,18 +109,11 @@ def policy_lookup(
         )
     finding = matches_finding[0]
 
-    # Capability gate: policy_lookup is a policy_lookup-capability action.
-    if not finding.capabilities.supports("policy_lookup"):
-        return ToolResult(
-            outcome=ToolResultOutcome.UNSUPPORTED,
-            error=ToolError(
-                code="CAPABILITY_NOT_SUPPORTED",
-                message=(
-                    f"Finding {finding_id} does not support policy lookup."
-                ),
-                detail={"supported_capabilities": sorted(finding.capabilities)},
-            ),
-        )
+    # No capability gate: retrieval is case-wide. The finding-level policy
+    # basis is reported as data, never conflated with execution support.
+    finding_policy_status = (
+        "associated" if finding.policy_refs else "no_finding_level_basis"
+    )
 
     # --- retrieve the case's authoritative citations ----------------------------
     try:
@@ -136,9 +139,16 @@ def policy_lookup(
 
     citations = list((explanation or {}).get("citations") or [])
 
-    # --- normalize + partition ---------------------------------------------------
+    # --- relevance: the FINDING's own authoritative text is the topic -------
+    # §11/§20: the injected generic topic ("policy requirements for finding
+    # F3") matches every case citation equally, so relevance must come from
+    # the finding itself — its title/summary (RP text). Finding-level
+    # policy_refs stay Priority 1 via split_policy_refs association.
     try:
-        matches = normalize_policy_matches(citations=citations, topic=topic)
+        f_title = getattr(finding, "title", "") or ""
+        f_summary = getattr(finding, "summary", "") or ""
+        finding_topic = " ".join([f_title, f_summary, topic]).strip()
+        matches = normalize_policy_matches(citations=citations, topic=finding_topic)
         associated, newly = split_policy_refs(finding=finding, matches=matches)
     except (KeyError, TypeError, ValueError, AttributeError) as e:
         logger.error("policy_lookup normalization failure: %s", e)
@@ -157,9 +167,35 @@ def policy_lookup(
             data={"finding_id": finding_id, "topic": topic,
                   "matches": [], "policy_refs": []},
             warnings=[
-                "No policy citations were returned for this case.",
+                "The Risk Platform returned no policy citations for this "
+                "case; no policy basis can apply to this finding.",
             ],
         )
+
+    # --- relevance discipline (§11) ------------------------------------------
+    # Conversation answers render at most the top 2 references, ordered:
+    #   Priority 1: finding-associated citations (RP attached [n] to THIS
+    #               finding — authoritative for it),
+    #   Priority 2: next-step / procedural policy (SOP-style), which
+    #               describes investigation requirements that always apply,
+    #   Priority 3: remaining case-level citations by keyword relevance —
+    #               a citation is NOT included merely because it exists in
+    #               the case (e.g. a network/cluster policy must not attach
+    #               to a withdrawal-frequency finding).
+    # The full case-level set remains visible in artifacts' Policy
+    # References; this cap governs the conversational answer only.
+    def _p2_rank(m: dict) -> int:
+        blob = f"{m.get('section', '')} {m.get('snippet', '')}".lower()
+        procedural = ("sop" in blob or "investigation flow" in blob
+                      or "triage" in blob or "standard investigation" in blob)
+        return (0 if m.get("citation_id") in {p.citation_id for p in associated}
+                else 1 if procedural else 2, -(m.get("relevance") or 0),
+                str(m.get("citation_id")))
+
+    matches = sorted(matches, key=_p2_rank)
+    associated = sorted(associated,
+                        key=lambda p: (str(p.citation_id)))
+    newly = [p for p in newly]
 
     # Evidence-missing: the finding cites NO policies at all, so policy
     # requirements specific to it cannot be assessed (case-level citations
@@ -172,6 +208,7 @@ def policy_lookup(
 
     payload = {
         "finding_id": finding_id,
+        "finding_policy_status": finding_policy_status,
         "topic": topic,
         "matches": matches,
         "associated_policy_refs": [p.model_dump() for p in associated],

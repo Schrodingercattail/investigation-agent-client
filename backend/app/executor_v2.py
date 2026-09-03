@@ -42,6 +42,7 @@ from app.models import (
     ToolCallStatusV2,
     ToolCallV2,
     ToolResult,
+    ToolResultOutcome,
 )
 from app.skills import SKILLS, check_plan
 
@@ -98,7 +99,9 @@ def default_tool_provider() -> ToolProvider:
     provider.register("finding_drilldown", lambda args: finding_drilldown(
         finding_id=args.get("finding_id", ""),
         view=args.get("view", "timeline"),
-        top_n=args.get("top_n", 20),
+        # no top_n injection: an ordinary timeline request is COMPLETE;
+        # only an explicit user-requested subset passes top_n (P4)
+        **({"top_n": args["top_n"]} if "top_n" in args else {}),
         case_id=args.get("case_id"),
     ))
     provider.register("signal_explain", lambda args: signal_explain(
@@ -186,14 +189,16 @@ class ExecutorV2:
         args = dict(step.arguments)
         if step.type == "fetch_case" and "case_id" not in args:
             args["case_id"] = context.case_id
-        if step.type in ("inspect_timeline", "inspect_opposite_trades") \
+        if step.type in ("inspect_timeline", "inspect_evidence",
+                         "inspect_opposite_trades") \
                 and "finding_id" not in args:
             # Focus Mode: the focused finding is the canonical drilldown
             # target; the planner never picks entity ids.
             args["finding_id"] = context.focused_finding_id
         if step.type == "explain_signal" and "finding_id" not in args:
             args["finding_id"] = context.focused_finding_id
-        if step.type in ("inspect_timeline", "inspect_opposite_trades",
+        if step.type in ("inspect_timeline", "inspect_evidence",
+                         "inspect_opposite_trades",
                          "explain_signal") and "case_id" not in args:
             args["case_id"] = context.case_id
         if step.type == "explain_signal" and "signal_type" not in args:
@@ -216,19 +221,48 @@ class ExecutorV2:
     @staticmethod
     def _artifact_arguments(
         step: PlanStep, context: InvestigationContext, task_id: str,
-        prior_calls: list[ToolCallV2],
+        prior_calls: list[ToolCallV2], user_request: str = "",
     ) -> dict[str, Any]:
-        """Deterministic runtime arguments for generate_artifact: scope from
-        context (focused finding → finding scope; else case scope), format
-        locked to md, plus the executed tool calls of this task so far
-        (provenance source — the artifact call itself is not yet in the list,
-        so it can never cite itself)."""
-        scope = "finding" if context.focused_finding_id else "case"
+        """Deterministic runtime arguments for generate_artifact.
+
+        Scope resolution (P11 — request scope must be semantically explicit):
+        1. EXPLICIT user language wins: "…for this case" / "case-level
+           bundle" → case scope; "…for this finding" / "for F<n>" → finding
+           scope. The user's words are echoed deterministically — never
+           reinterpreted.
+        2. Otherwise the context decides: focused finding → finding scope;
+           no focus → case scope.
+        Format locked to md; the executed tool calls of this task so far are
+        the provenance source (the artifact call itself is not yet in the
+        list, so it can never cite itself)."""
+        import re as _re
+        req_l = (user_request or "").lower()
+        explicit_case = bool(_re.search(
+            r"for (this|the) (whole |entire )?case\b|case[- ]level (bundle|artifact|report)",
+            req_l))
+        explicit_finding = bool(_re.search(
+            r"for (this|the) (focused )?finding\b|for f\d+\b|"
+            r"finding[- ]level (bundle|artifact|report)", req_l))
+
+        if explicit_case and not explicit_finding:
+            scope, finding_id = "case", None
+        elif explicit_finding and context.focused_finding_id:
+            scope, finding_id = "finding", context.focused_finding_id
+        elif explicit_finding:
+            # finding-scope request with no focused finding: cannot resolve
+            # a target — fall back to case scope (bounded, honest)
+            scope, finding_id = "case", None
+        else:
+            scope = "finding" if context.focused_finding_id else "case"
+            finding_id = context.focused_finding_id if scope == "finding" \
+                else None
+
         args = dict(step.arguments)
-        args.setdefault("scope", scope)
+        args["scope"] = scope          # resolved scope overrides vocabulary
         args.setdefault("format", "md")
         args.setdefault("case_id", context.case_id)
-        args.setdefault("finding_id", context.focused_finding_id)
+        if scope == "finding":
+            args.setdefault("finding_id", finding_id)
         args["task_id"] = task_id
         # deep-copy the executed records so the artifact tool sees results,
         # excluding any artifact_bundle calls (provenance = data sources only)
@@ -311,6 +345,7 @@ class ExecutorV2:
                 context=context,
                 investigation_id=task.investigation_id,
                 task_id=task.task_id,
+                user_request=task.user_request,
                 collected_calls=tool_calls,
                 collected_artifact_ids=artifact_ids,
                 collected_artifacts=collected_artifacts,
@@ -355,6 +390,7 @@ class ExecutorV2:
         collected_artifact_ids: list[str],
         collected_artifacts: list[dict[str, Any]],
         provenance_pool: list[ToolCallV2] | None = None,
+        user_request: str = "",
     ) -> ExecutorError | None:
         """Execute one plan step. Returns an ExecutorError when it is fatal
         (unimplemented tool / raised exception), else None."""
@@ -398,7 +434,8 @@ class ExecutorV2:
             arguments=(
                 self._artifact_arguments(step, context, task_id,
                                          (provenance_pool or [])
-                                         + collected_calls)
+                                         + collected_calls,
+                                         user_request=user_request)
                 if step.type == "generate_artifact"
                 else self._runtime_arguments(step, context)
             ),
@@ -428,7 +465,16 @@ class ExecutorV2:
         completed_ts = _now()
         tool_call.completed_at = completed_ts
 
-        if tool_result.outcome.value == "success":
+        # EMPTY is a VALID step answer (P20): the tool executed and
+        # truthfully reported "nothing there" — the step succeeded in
+        # producing its authoritative result. The outcome stays EMPTY on
+        # the recorded ToolCall/ToolResult (auditable, distinct), and the
+        # response composer explains the empty meaning per scope. A
+        # required step failing for a real reason still fails the task.
+        if tool_result.outcome == ToolResultOutcome.EMPTY:
+            tool_call.status = ToolCallStatusV2.SUCCESS
+            step.status = PlanStepStatus.SUCCESS
+        elif tool_result.outcome.value == "success":
             tool_call.status = ToolCallStatusV2.SUCCESS
             step.status = PlanStepStatus.SUCCESS
         else:

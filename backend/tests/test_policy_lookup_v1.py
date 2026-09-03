@@ -135,10 +135,14 @@ class TestSuccessPath:
         assert (2, "AML#2.2#004") in new_keys       # cited elsewhere, not on F2
 
 
-# --- capability gate -----------------------------------------------------------------------
+# --- retrieval capability vs. finding-level basis (data, not gate) -------------------------
 
 class TestCapabilityGate:
-    def test_unsupported_capability_is_unsupported_not_empty(self):
+    """Policy retrieval is case-wide: it executes for every canonical
+    finding. Whether the finding has an authoritative finding-level policy
+    basis is reported as data (finding_policy_status), never as a gate."""
+
+    def test_uncited_finding_executes_with_no_basis_status(self):
         case, cc = make_case()
         poor = FindingCapability.model_validate(["timeline"])
         from app.models import Finding
@@ -146,8 +150,19 @@ class TestCapabilityGate:
             finding_id="F8", case_id="U00299", type="feature_observation",
             title="Some Observation", summary="s", capabilities=poor)]
         r = run(cc, finding_id="F8")
-        assert r.outcome == ToolResultOutcome.UNSUPPORTED
-        assert r.data is None
+        assert r.outcome == ToolResultOutcome.SUCCESS
+        assert r.data["finding_policy_status"] == "no_finding_level_basis"
+        assert r.data["evidence_missing"] is True       # finding-level gap
+        assert r.data["matches"]                        # case-level refs exist
+
+    def test_cited_finding_reports_associated_status(self):
+        case, cc = make_case()
+        f = ct_finding(case)
+        assert f.policy_refs                            # fixture cites F2 with [1]
+        r = run(cc, finding_id=f.finding_id)
+        assert r.outcome == ToolResultOutcome.SUCCESS
+        assert r.data["finding_policy_status"] == "associated"
+        assert r.data["evidence_missing"] is False
 
 
 # --- 9–11. outcome semantics -----------------------------------------------------------------

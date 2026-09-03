@@ -203,7 +203,9 @@ class TestSectionRendering:
         r = run(scope="case", sources=self.full_sources())
         content = r.data["artifact"]["content"]
         assert "## Timeline" in content
-        assert "| Time | Event | Importance | Evidence |" in content
+        assert "| Time | Event | Evidence |" in content
+        # importance/severity labels are not shown (unexplained in UI)
+        assert "| high |" not in content and "| medium |" not in content
         assert "2026-08-19T10:30:00Z" in content
         assert "withdrawal:WD00000" in content
 
@@ -250,11 +252,37 @@ class TestSectionRendering:
             r.data["next_data_needed"][-1] or "more rule context" in \
             str(r.data["next_data_needed"])
 
-    def test_actual_evidence_refs_preserved(self):
+    def test_no_investigation_evidence_section_without_concrete_evidence(self):
+        # FINAL rule: concrete record IDs must never appear in a user-facing
+        # artifact unless the complete authoritative record set was
+        # retrieved. A case-scope bundle without a view="evidence"
+        # investigation carries no Investigation Evidence section and NO
+        # representative pointers (TX/WD ids from the bounded payload).
         r = run(scope="case", sources=[tc_fetch()])
         content = r.data["artifact"]["content"]
-        assert "transaction:TX00000" in content
+        assert "## Investigation Evidence" not in content
+        assert "Evidence reference pointers" not in content
+        assert "representative" not in content
+        assert "TX00000" not in content          # bounded-payload record IDs
+        assert "WD00000" not in content
         assert "FAKE" not in content
+
+    def test_finding_scope_artifact_also_excludes_pointers(self):
+        # Same rule applies at finding scope: no partial pointers section.
+        r = run(scope="finding", sources=[tc_fetch()], finding_id="F3")
+        content = r.data["artifact"]["content"]
+        assert "## Investigation Evidence" not in content
+        assert "TX00000" not in content
+        assert "WD00000" not in content
+
+    def test_timeline_table_shows_no_importance(self):
+        # §4: artifact timeline tables carry investigation-useful fields
+        # only; unexplained high/medium/low labels are not shown.
+        r = run(scope="case", sources=self.full_sources())
+        content = r.data["artifact"]["content"]
+        assert "| Time | Event | Evidence |" in content
+        assert "| Importance" not in content
+        assert "| high |" not in content and "| medium |" not in content
 
     def test_actual_citation_refs_preserved(self):
         r = run(scope="case", sources=self.full_sources())
@@ -295,6 +323,25 @@ class TestProvenance:
         r = run(scope="case", sources=sources)
         assert r.data["artifact"]["source_tool_calls"] == \
             [tc.tool_call_id for tc in sources]
+
+    def test_no_contributing_calls_is_bounded_empty_not_fabricated_provenance(self):
+        """P10: when NO executed result contributed content, the tool must
+        return a bounded EMPTY — never label non-contributing calls as
+        artifact sources (the removed degenerate fallback listed them all)."""
+        unrelated = ToolCallV2(
+            tool_call_id="TC-UNREL", investigation_id="I", task_id="T-1",
+            tool_name="policy_lookup", arguments={},
+            status=ToolCallStatusV2.SUCCESS,
+            result=ToolResult(outcome=ToolResultOutcome.SUCCESS,
+                              data={"unrelated": True}),
+            started_at="2026-08-28T00:00:00Z",
+            completed_at="2026-08-28T00:00:01Z",
+        )
+        r = run(scope="case", sources=[unrelated])
+        assert r.outcome == ToolResultOutcome.EMPTY
+        assert "artifact" not in r.data
+        assert any("No content-contributing tool calls" in w
+                   for w in r.warnings)
 
     def test_artifact_attached_to_taskv2(self):
         store = TaskStoreV2(":memory:")
@@ -421,7 +468,7 @@ class TestPurityAndPersistence:
 
     def test_artifact_followup_goes_through_pipeline_not_direct_call(self):
         from app.followups import CASE_TEMPLATES
-        export = next(t for t in CASE_TEMPLATES if t.follow_up_id == "export_artifact")
+        export = next(t for t in CASE_TEMPLATES if t.follow_up_id == "check_artifact")
         assert export.target_step == "generate_artifact"
         assert isinstance(export.intent, str)     # a next-turn request
         assert not callable(export.intent)

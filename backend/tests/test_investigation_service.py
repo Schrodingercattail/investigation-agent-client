@@ -68,7 +68,7 @@ def rp_mocks():
             fx.rp_evidence_payload(uid), fx.rp_explanation_payload()),
     ), patch(
         "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-        new=lambda self, uid: fx.rp_evidence_payload(uid),
+        new=lambda self, uid, expose_complete_records=False: fx.rp_evidence_payload(uid),
     ))
 
 
@@ -141,7 +141,8 @@ class TestResponseComposition:
                                        focus_source=FocusSource.USER_SELECTED)
         with rp_mocks()[0], rp_mocks()[1]:
             r = svc.run_turn("Show the timeline.", focused, [F3])
-        assert "Investigation result" in r.response
+        # human-readable prose (no raw "Investigation result" header)
+        assert "timeline" in r.response.lower()
         assert any("Withdrawal" in line or "detected" in line.lower()
                    for line in r.response.splitlines())
 
@@ -151,10 +152,10 @@ class TestResponseComposition:
                                        focus_source=FocusSource.USER_SELECTED)
         with rp_mocks()[0], rp_mocks()[1]:
             r = svc.run_turn("Show the timeline.", focused, [F3])
-        assert "Evidence references:" in r.response
-        assert any(ref.id.startswith("WD")
-                   for tc in r.execution.tool_calls
-                   for ref in tc.result.evidence_refs)
+        # §6: conversational responses carry no raw evidence-reference dump
+        assert "Evidence references:" not in r.response
+        # timeline events still list their summaries (navigation view)
+        assert "Withdrawal" in r.response
 
     def test_evidence_missing_surfaced_without_fabrication(self):
         calls = [ToolCallV2(
@@ -166,7 +167,8 @@ class TestResponseComposition:
         )]
         text = compose_response(user_request="q", skill_id="timeline_investigation",
                                 plan=None, tool_calls=calls, execution_errors=[])
-        assert "evidence_missing" in text
+        # human-readable gap statement, no raw flag names
+        assert "complete transaction-level evidence is not available" in text
         assert "per-trade attribution" in text
 
     def test_empty_remains_distinct(self):
@@ -379,7 +381,11 @@ class TestPersistenceAndFailures:
         assert r.task.status == TaskStatusV2.FAILED
         assert r.planning_failure.code == "LLM_OUTPUT_INVALID"
         assert r.execution is None
-        assert "No tools were executed" in r.response
+        # P14: readable boundary for unmappable requests — no internals
+        assert "couldn't map that request" in r.response
+        assert "LLM_OUTPUT_INVALID" not in r.response
+        assert "bad json" not in r.response
+        assert r.execution is None
 
     def test_executor_failure_recorded(self):
         from app.executor_v2 import ExecutorV2, ExecutorError, ToolProvider
@@ -393,7 +399,12 @@ class TestPersistenceAndFailures:
         assert r.task.status == TaskStatusV2.FAILED
         assert any(e.code == "TOOL_NOT_IMPLEMENTED" for e in r.execution.errors)
         assert r.execution.tool_calls == []
-        assert "could not be completed" in r.response
+        # P14: capability-unavailable wording, no internal identifiers
+        assert "not available in the current system" in r.response
+        assert "could not be reached" not in r.response
+        for term in ("TC-", "fetch_case", "risk_case_fetch", "step",
+                     "S1", "plan"):
+            assert term not in r.response
 
     def test_task_persistence_roundtrip(self, tmp_path):
         store = TaskStoreV2(tmp_path / "svc.db")
@@ -423,7 +434,8 @@ class TestPersistenceAndFailures:
         # both steps visible in the audit trail
         assert any(tc.tool_name == "risk_case_fetch"
                    for tc in r.execution.tool_calls)
-        assert "Markdown investigation bundle" in r.response
+        # §9: response points the user to the Artifacts panel location
+        assert "Artifacts panel on the right" in r.response
 
     def test_signal_explain_event_level_path_executes(self):
         # signal_explain is implemented now: an explain_signal step on an
@@ -436,7 +448,17 @@ class TestPersistenceAndFailures:
         focused = InvestigationContext(case_id="U00299", focused_finding_id="F3",
                                        focused_event_id="F3-E002",
                                        focus_source=FocusSource.USER_SELECTED)
-        r = svc.run_turn("Why is this event important?", focused, [F3])
+        # hermetic: patch both RP touch points (case fetch inside the tool +
+        # evidence fetch inside the tool)
+        with patch(
+            "app.domain_tools.risk_case_fetch.RiskPlatformAdapter.fetch_case",
+            new=lambda self, uid: (
+                fx.rp_evidence_payload(uid), fx.rp_explanation_payload()),
+        ), patch(
+            "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
+            new=lambda self, uid, expose_complete_records=False: fx.rp_evidence_payload(uid),
+        ):
+            r = svc.run_turn("Why is this event important?", focused, [F3])
         assert r.task.status == TaskStatusV2.COMPLETED
         assert r.execution.tool_calls[0].tool_name == "signal_explain"
         assert r.execution.tool_calls[0].result.outcome == ToolResultOutcome.SUCCESS
@@ -445,5 +467,5 @@ class TestPersistenceAndFailures:
         assert data["evidence_missing"] is False
         assert "rule" in data                    # grounded rule explanation
         assert data["rule"]["name"]              # actual rule identity echoed
-        # response composer surfaces the grounded explanation
-        assert "Investigation result" in r.response
+        # response composer surfaces the grounded human-readable explanation
+        assert "flagged by the rule" in r.response

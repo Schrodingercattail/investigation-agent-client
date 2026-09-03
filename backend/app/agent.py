@@ -1,10 +1,24 @@
 import json
+import logging
 import re
 from typing import Any
 
 from app.agent_protocol import parse_agent_decision
+from app.exceptions import (
+    AgentExecutionError,
+    LLMError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+    MaxStepsExceededError,
+    ToolArgumentError,
+    ToolExecutionError,
+    ToolNotFoundError,
+)
 from app.llm_provider import ClaudeProvider
 from app.tools import TOOL_REGISTRY, execute_tool
+
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """
@@ -14,43 +28,47 @@ Your job is to investigate a risk case by using the available tools.
 
 Available tools:
 
-1. policy_search
-   Use this to retrieve relevant policy snippets.
+1. risk_case_fetch (PRIMARY - Authoritative Investigation Context)
+   Use this to retrieve the complete authoritative investigation context from Risk Platform.
+   This provides:
+   - Authoritative findings (with canonical names from Risk Platform)
+   - Validated citations (with semantic support, not just policy ID checking)
+   - Risk summary (scores, detection methods, recommended actions)
+   - Explanation metadata
+
+   You MUST provide these arguments:
+   {
+     "case_id": string  // The case ID to investigate (e.g., "U00299", "U00010")
+   }
+
+   The returned findings and citations are authoritative from Risk Platform.
+   DO NOT attempt to recreate findings, validate citations, or apply Risk Platform logic.
+   Trust the Risk Platform as the source of truth for risk domain information.
+
+2. policy_search (Optional - Broader Policy Context)
+   Use this to retrieve additional policy context beyond what Risk Platform provides.
    You MUST provide these arguments:
    {
      "query": string,   // Your semantic search query
      "top_k": integer  // Number of results (usually 3-5)
    }
 
-2. evidence_fetch
-   Use this to retrieve canonical evidence and unified findings.
-   The runtime will automatically provide the case_id from the user intent.
-   Output: {"action":"tool_call","tool_request":{"tool":"evidence_fetch","args":{}}}
-
-3. compose_structured_result
-   Use this to generate structured findings and actions.
-   The runtime will automatically provide evidence and policies from previous tool results.
-   You do NOT need to reproduce those objects.
-   Output: {"action":"tool_call","tool_request":{"tool":"compose_structured_result","args":{}}}
-
-4. citation_validate
-   Use this to validate claim-level citations.
-   The runtime will automatically provide claims and policies from previous results.
-   You do NOT need to reproduce those objects.
-   Output: {"action":"tool_call","tool_request":{"tool":"citation_validate","args":{}}}
+Legacy tools (transitional - will be removed in Phase 2):
+3. evidence_fetch - Superseded by risk_case_fetch
+4. compose_structured_result - Superseded by risk_case_fetch
+5. citation_validate - Superseded by risk_case_fetch
 
 Rules:
 
 - You may only use the available tools.
-- Never invent evidence.
+- Never invent evidence or findings.
 - ALWAYS output compact, valid JSON.
 - NEVER use Markdown code fences like ```json. Output raw JSON only.
-- When you need information, call the appropriate tool.
-- After receiving a tool result, decide what to do next based on the result.
+- When investigating a case, START with risk_case_fetch to get authoritative context.
+- After receiving tool results, decide what to do next based on the investigation needs.
 - You may call multiple tools in sequence as needed.
-- For tools that use previous results (compose_structured_result, citation_validate),
-  use empty args {}. The runtime will inject the required context.
-- When the investigation is complete, return a final action.
+- The Risk Platform provides authoritative domain capabilities (findings, citations).
+- Your role is orchestration: decide which tools to call and when.
 
 For a tool call, output exactly this structure:
 
@@ -139,7 +157,17 @@ class InvestigationAgent:
         Supports: "Investigate case U00299", "case U00299", etc.
         """
         match = re.search(r"\bcase\s+([A-Za-z0-9_-]*\d[A-Za-z0-9_-]*)\b", user_intent, re.IGNORECASE)
-        return match.group(1) if match else None
+        if not match:
+            return None
+
+        raw_case_id = match.group(1)
+        # Normalize to canonical U-prefixed format for Risk Platform
+        # Risk Platform uses U-prefix as canonical identifier (e.g., U00010)
+        # User may enter "00010" -> normalize to "U00010"
+        # User may enter "U00010" -> already canonical, return as-is
+        if not raw_case_id.startswith('U'):
+            return f"U{raw_case_id}"
+        return raw_case_id
 
     def _normalize_tool_args(
         self,
@@ -218,13 +246,26 @@ class InvestigationAgent:
                 )
 
             claims = structured_result.get("findings", [])
-            if isinstance(claims, list) and len(claims) == 0:
-                # Fallback for legacy format
-                claims = structured_result
+            if not isinstance(claims, list):
+                # Wrong type - this is an error
+                raise ValueError(
+                    f"Cannot call citation_validate: 'findings' must be a list. "
+                    f"Got: {type(claims).__name__}"
+                )
+            # Empty claims array is valid for low-risk cases - proceed anyway
             return {
                 "claims": claims,
                 "policies": policies,
             }
+
+        elif tool_name == "risk_case_fetch":
+            # Inject case_id from user intent (like evidence_fetch)
+            case_id = self._extract_case_id(user_intent)
+            if not case_id:
+                raise ValueError(
+                    f"Cannot call risk_case_fetch: no case_id found in user_intent: '{user_intent}'"
+                )
+            return {"case_id": case_id}
 
         elif tool_name == "policy_search":
             # LLM must provide query and top_k for semantic search
@@ -265,7 +306,8 @@ class InvestigationAgent:
             "status": "completed" | "max_steps_exceeded" | "error",
             "steps": [...],
             "final_decision": ...,
-            "error": ...
+            "error": ...,
+            "error_details": {...}
         }
         """
         messages = [
@@ -285,114 +327,193 @@ class InvestigationAgent:
         # Runtime context: stores tool results by tool name for argument injection
         runtime_context: dict[str, Any] = {}
 
-        while step_number < max_steps:
-            step_number += 1
+        try:
+            while step_number < max_steps:
+                step_number += 1
 
-            try:
-                decision = self.decide(messages)
-            except Exception as e:
-                return {
-                    "status": "error",
-                    "steps": steps,
-                    "error": f"LLM decision failed at step {step_number}: {e}",
-                }
+                # Get LLM decision with error handling
+                try:
+                    decision = self.decide(messages)
+                    logger.debug(f"Step {step_number}: LLM decision = {decision.action}")
+                except Exception as e:
+                    error_msg = f"LLM decision failed at step {step_number}: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
 
-            # Check if LLM wants to finish
-            if decision.action == "final":
-                return {
-                    "status": "completed",
-                    "steps": steps,
-                    "final_decision": decision.model_dump(),
-                }
+                    # Try to provide more specific error information
+                    error_type = "unknown"
+                    if "timeout" in str(e).lower():
+                        error_type = "timeout"
+                        raise LLMTimeoutError(
+                            f"LLM request timed out at step {step_number}",
+                            context={"step": step_number}
+                        ) from e
+                    elif "rate" in str(e).lower() or "quota" in str(e).lower():
+                        error_type = "rate_limit"
+                        raise LLMRateLimitError(
+                            f"LLM rate limit exceeded at step {step_number}",
+                            context={"step": step_number}
+                        ) from e
 
-            # Validate tool_call action
-            if decision.action != "tool_call":
-                return {
-                    "status": "error",
-                    "steps": steps,
-                    "error": (
+                    raise LLMError(
+                        error_msg,
+                        context={"step": step_number, "original_error": str(e)}
+                    ) from e
+
+                # Check if LLM wants to finish
+                if decision.action == "final":
+                    logger.info(f"Agent completed successfully at step {step_number}")
+                    return {
+                        "status": "completed",
+                        "steps": steps,
+                        "final_decision": decision.model_dump(),
+                    }
+
+                # Validate tool_call action
+                if decision.action != "tool_call":
+                    error_msg = (
                         f"Invalid action at step {step_number}: "
                         f"expected 'tool_call' or 'final', got '{decision.action}'"
-                    ),
-                }
+                    )
+                    logger.error(error_msg)
+                    raise AgentExecutionError(
+                        error_msg,
+                        step_number=step_number,
+                        agent_state={"last_action": decision.action},
+                    )
 
-            # Get tool request
-            tool_request = decision.tool_request
-            if tool_request is None:
-                return {
-                    "status": "error",
-                    "steps": steps,
-                    "error": (
+                # Get tool request
+                tool_request = decision.tool_request
+                if tool_request is None:
+                    error_msg = (
                         f"Agent returned 'tool_call' without tool_request "
                         f"at step {step_number}"
-                    ),
-                }
+                    )
+                    logger.error(error_msg)
+                    raise AgentExecutionError(
+                        error_msg,
+                        step_number=step_number,
+                        agent_state={"decision": decision.model_dump()},
+                    )
 
-            tool_name = tool_request.tool
-            llm_args = tool_request.args or {}
+                tool_name = tool_request.tool
+                llm_args = tool_request.args or {}
 
-            # Normalize and inject runtime arguments
-            try:
-                normalized_args = self._normalize_tool_args(
-                    tool_name,
-                    llm_args,
-                    runtime_context,
-                    user_intent,
-                )
-            except Exception as e:
-                return {
-                    "status": "error",
-                    "steps": steps,
-                    "error": (
-                        f"Argument normalization failed at step {step_number}: "
-                        f"tool={tool_name}, error={e}"
-                    ),
-                }
+                logger.debug(f"Step {step_number}: Executing tool '{tool_name}'")
 
-            # Execute the tool with normalized arguments
-            try:
-                tool_result = execute_tool(tool_name, normalized_args)
-            except Exception as e:
-                return {
-                    "status": "error",
-                    "steps": steps,
-                    "error": (
+                # Normalize and inject runtime arguments
+                try:
+                    normalized_args = self._normalize_tool_args(
+                        tool_name,
+                        llm_args,
+                        runtime_context,
+                        user_intent,
+                    )
+                except ValueError as e:
+                    # Argument normalization failed - this is a tool argument error
+                    error_msg = (
+                        f"Tool argument normalization failed at step {step_number}: "
+                        f"tool={tool_name}, error={str(e)}"
+                    )
+                    logger.error(error_msg)
+                    raise ToolArgumentError(
+                        error_msg,
+                        tool_name=tool_name,
+                        args={"llm_args": llm_args, "available_context": list(runtime_context.keys())},
+                    ) from e
+                except Exception as e:
+                    # Unexpected error during normalization
+                    error_msg = (
+                        f"Unexpected error during argument normalization at step {step_number}: "
+                        f"tool={tool_name}, error={str(e)}"
+                    )
+                    logger.error(error_msg, exc_info=True)
+                    raise AgentExecutionError(
+                        error_msg,
+                        step_number=step_number,
+                        agent_state={"tool_name": tool_name, "llm_args": llm_args},
+                    ) from e
+
+                # Execute the tool with normalized arguments
+                try:
+                    tool_result = execute_tool(tool_name, normalized_args)
+                    logger.debug(f"Step {step_number}: Tool '{tool_name}' completed successfully")
+                except ValueError as e:
+                    # Tool execution failed with a known error
+                    error_msg = (
                         f"Tool execution failed at step {step_number}: "
-                        f"tool={tool_name}, error={e}"
-                    ),
+                        f"tool={tool_name}, error={str(e)}"
+                    )
+                    logger.error(error_msg)
+                    raise ToolExecutionError(
+                        error_msg,
+                        tool_name=tool_name,
+                        args=normalized_args,
+                    ) from e
+                except Exception as e:
+                    # Unexpected error during tool execution
+                    error_msg = (
+                        f"Unexpected tool execution error at step {step_number}: "
+                        f"tool={tool_name}, error={str(e)}"
+                    )
+                    logger.error(error_msg, exc_info=True)
+                    raise ToolExecutionError(
+                        error_msg,
+                        tool_name=tool_name,
+                        args=normalized_args,
+                    ) from e
+
+                # Store result in runtime context for future argument injection
+                runtime_context[tool_name] = tool_result
+
+                # Record this step
+                step_record = {
+                    "step": step_number,
+                    "tool_name": tool_name,
+                    "tool_args": normalized_args,  # Record the actual args used
+                    "result": tool_result,
                 }
+                steps.append(step_record)
 
-            # Store result in runtime context for future argument injection
-            runtime_context[tool_name] = tool_result
+                # Append assistant's tool decision to messages
+                messages.append({
+                    "role": "assistant",
+                    "content": decision.model_dump_json(),
+                })
 
-            # Record this step
-            step_record = {
-                "step": step_number,
-                "tool_name": tool_name,
-                "tool_args": normalized_args,  # Record the actual args used
-                "result": tool_result,
+                # Append tool result to messages for next LLM call
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"Tool execution result:\n"
+                        f"{json.dumps(tool_result, indent=2)}\n\n"
+                        f"Decide what to do next."
+                    ),
+                })
+
+            # Max steps reached
+            error_msg = f"Agent did not complete within {max_steps} steps"
+            logger.warning(error_msg)
+            raise MaxStepsExceededError(
+                error_msg,
+                step_number=max_steps,
+                agent_state={"steps_taken": len(steps), "max_steps": max_steps},
+            )
+
+        except (LLMError, ToolExecutionError, AgentExecutionError, MaxStepsExceededError) as e:
+            # Known error types - convert to proper result format
+            return {
+                "status": "error" if not isinstance(e, MaxStepsExceededError) else "max_steps_exceeded",
+                "steps": steps,
+                "error": e.message,
+                "error_details": e.to_dict() if hasattr(e, "to_dict") else {"type": type(e).__name__},
             }
-            steps.append(step_record)
-
-            # Append assistant's tool decision to messages
-            messages.append({
-                "role": "assistant",
-                "content": decision.model_dump_json(),
-            })
-
-            # Append tool result to messages for next LLM call
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"Tool execution result:\n"
-                    f"{json.dumps(tool_result, indent=2)}\n\n"
-                    f"Decide what to do next."
-                ),
-            })
-
-        # Max steps reached
-        return {
-            "status": "max_steps_exceeded",
-            "steps": steps,
-            "error": f"Agent did not complete within {max_steps} steps",
-        }
+        except Exception as e:
+            # Unexpected error - log and return error status
+            error_msg = f"Unexpected error in agent loop: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return {
+                "status": "error",
+                "steps": steps,
+                "error": error_msg,
+                "error_details": {"type": "UnexpectedError", "original_error": str(e)},
+            }

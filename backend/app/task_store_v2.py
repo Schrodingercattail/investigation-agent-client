@@ -15,10 +15,11 @@ import json
 import logging
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.models import TaskV2
+from app.models import Investigation, TaskV2
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,9 @@ _DEFAULT_DB = Path(__file__).parent.parent / "data" / "investigation_agent_v2.db
 
 
 class TaskStoreV2:
-    """SQLite-backed store for TaskV2 audit containers."""
+    """SQLite-backed store for TaskV2 audit containers and Investigation
+    sessions (the smallest compatible extension of the V2 persistence
+    boundary — same DB file, no second persistence mechanism)."""
 
     def __init__(self, db_path: Path | str | None = None):
         self._db_path = str(db_path or _DEFAULT_DB)
@@ -65,6 +68,34 @@ class TaskStoreV2:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_v2_inv "
                 "ON tasks_v2(investigation_id)"
+            )
+            # Investigation sessions (same store, same DB file — no second
+            # persistence mechanism; document column keeps the model reloadable)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS investigations (
+                    investigation_id TEXT PRIMARY KEY,
+                    case_id          TEXT NOT NULL,
+                    status           TEXT NOT NULL,
+                    created_at       TEXT,
+                    updated_at       TEXT,
+                    document         TEXT NOT NULL
+                )
+                """
+            )
+            # Session state per investigation: evolved InvestigationContext,
+            # per-task plans, executed ToolCall records. Document-per-record
+            # (same pattern as tasks_v2/investigations) so the shape can grow
+            # without migrations. This replaces the Week 1 process-local
+            # _SESSIONS map — true persistence across refresh AND restart.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS investigation_sessions (
+                    investigation_id TEXT PRIMARY KEY,
+                    updated_at       TEXT,
+                    document         TEXT NOT NULL
+                )
+                """
             )
             conn.commit()
 
@@ -122,3 +153,98 @@ class TaskStoreV2:
                 (investigation_id,),
             ).fetchall()
         return [TaskV2.model_validate_json(r["document"]) for r in rows]
+
+    # --- Investigation session persistence ---------------------------------
+
+    def save_investigation(self, investigation: Investigation) -> Investigation:
+        with self._lock:
+            conn = self._connection()
+            conn.execute(
+                """INSERT OR REPLACE INTO investigations
+                   (investigation_id, case_id, status, created_at, updated_at,
+                    document)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    investigation.investigation_id,
+                    investigation.case_id,
+                    investigation.status.value,
+                    investigation.created_at,
+                    investigation.updated_at,
+                    investigation.model_dump_json(),
+                ),
+            )
+            conn.commit()
+        return investigation
+
+    def get_investigation(self, investigation_id: str) -> Investigation | None:
+        with self._lock:
+            row = self._connection().execute(
+                "SELECT document FROM investigations WHERE investigation_id = ?",
+                (investigation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return Investigation.model_validate_json(row["document"])
+
+    # --- Investigation session state ----------------------------------------
+    #
+    # The session document is the minimal read-model needed to reconstruct a
+    # reopened workspace: the evolved InvestigationContext, per-task plans,
+    # and the executed ToolCall records (normalized results included) plus
+    # produced artifacts. Tasks/Artifacts also live in their own tables; the
+    # session document references them by id and stores the rendering payloads
+    # so a reload never needs to re-execute anything.
+
+    def save_session(self, investigation_id: str, document: dict) -> None:
+        with self._lock:
+            conn = self._connection()
+            conn.execute(
+                """INSERT OR REPLACE INTO investigation_sessions
+                   (investigation_id, updated_at, document)
+                   VALUES (?, ?, ?)""",
+                (
+                    investigation_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    json.dumps(document),
+                ),
+            )
+            conn.commit()
+
+    def get_session(self, investigation_id: str) -> dict | None:
+        with self._lock:
+            row = self._connection().execute(
+                "SELECT document FROM investigation_sessions "
+                "WHERE investigation_id = ?",
+                (investigation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row["document"])
+
+    def delete_session(self, investigation_id: str) -> None:
+        with self._lock:
+            conn = self._connection()
+            conn.execute(
+                "DELETE FROM investigation_sessions WHERE investigation_id = ?",
+                (investigation_id,),
+            )
+            conn.execute(
+                "DELETE FROM tasks_v2 WHERE investigation_id = ?",
+                (investigation_id,),
+            )
+            conn.execute(
+                "DELETE FROM investigations WHERE investigation_id = ?",
+                (investigation_id,),
+            )
+            conn.commit()
+
+    def list_investigations(self) -> list[Investigation]:
+        """All investigations, deterministic by updated_at descending (the
+        history list)."""
+        with self._lock:
+            rows = self._connection().execute(
+                "SELECT document FROM investigations "
+                "ORDER BY COALESCE(updated_at, created_at) DESC, "
+                "investigation_id ASC",
+            ).fetchall()
+        return [Investigation.model_validate_json(r["document"]) for r in rows]

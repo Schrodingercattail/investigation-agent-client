@@ -183,6 +183,47 @@ class TestFindingNormalization:
         assert all(p.chunk_id == "AML#2.1#001" or p.citation_id == 1
                    for p in cited.policy_refs)
 
+    def test_unmarked_findings_never_inherit_case_citations(self):
+        """Regression (U00010): a finding whose authoritative text carries NO
+        [n] marker must receive zero policy_refs — even when the explanation
+        carries citations elsewhere and even when the finding text shares
+        words with citation doc/section titles (the old token-overlap
+        heuristic wrongly copied ALL case citations onto unmarked findings)."""
+        explanation = rp_explanation_payload()
+        # Findings with no markers; one mentions doc-like words deliberately.
+        explanation["key_findings"] = [
+            "1. New account with high activity.",
+            "2. Opposite trade ratio.",
+            "3. Coordinated Trading Pattern [1]",
+        ]
+        result = normalize_case(
+            case_id="U00299",
+            evidence=rp_evidence_payload(),
+            explanation=explanation,
+        )
+        by_title = {f.title: f for f in result["findings"]}
+        assert not by_title["New account with high activity."].policy_refs
+        assert not by_title["Opposite trade ratio."].policy_refs
+        # marked finding still mirrors exactly its marker's citation
+        marked = by_title["Coordinated Trading Pattern"]
+        assert [p.citation_id for p in marked.policy_refs] == [1]
+        # case-level set stays complete and untouched
+        assert [p.citation_id for p in result["policy_refs"]] == [1, 2]
+
+    def test_multiple_markers_mirror_in_marker_order(self):
+        explanation = rp_explanation_payload()
+        explanation["key_findings"] = [
+            "1. Mixed Evidence Finding [2] and [1]",
+        ]
+        result = normalize_case(
+            case_id="U00299",
+            evidence=rp_evidence_payload(),
+            explanation=explanation,
+        )
+        f = result["findings"][0]
+        # both marked citations mirrored, in first-appearance order, deduped
+        assert [p.citation_id for p in f.policy_refs] == [2, 1]
+
     def test_rule_only_finding_appended_after_canonical(self):
         explanation = rp_explanation_payload()
         explanation["key_findings"] = []       # explanation says nothing
@@ -195,6 +236,46 @@ class TestFindingNormalization:
         assert "Coordinated Trading Pattern" in names          # from rule_evidence
         assert "High Withdrawal Frequency" in names
 
+    def test_rule_already_in_explanation_is_not_duplicated(self):
+        """Regression (real U00010): RP renders explanation finding names
+        with sentence punctuation ('High withdrawal frequency.') while
+        rule_evidence.rule_name has none ('High withdrawal frequency').
+        Exact-string comparison duplicated every explained rule as an extra
+        finding (12 instead of 9). Punctuation/case-insensitive identity
+        must prevent that — the same authoritative finding stays one."""
+        explanation = rp_explanation_payload()
+        # RP's real shape: explanation name with '.', rule_name without.
+        explanation["key_findings"] = [
+            "1. Coordinated Trading Pattern [1]",
+            "2. High Withdrawal Frequency.",
+        ]
+        result = normalize_case(
+            case_id="U00299",
+            evidence=rp_evidence_payload(),
+            explanation=explanation,
+        )
+        titles = [f.title for f in result["findings"]]
+        assert titles == [
+            "Coordinated Trading Pattern", "High Withdrawal Frequency.",
+        ]  # rule_evidence adds NO third finding
+        assert len(result["findings"]) == 2
+
+    def test_distinct_rule_findings_both_preserved(self):
+        """A rule NOT covered by the explanation is still a real finding —
+        normalization never merges genuinely distinct RP findings."""
+        explanation = rp_explanation_payload()
+        explanation["key_findings"] = [
+            "1. Coordinated Trading Pattern [1]",
+        ]
+        result = normalize_case(
+            case_id="U00299",
+            evidence=rp_evidence_payload(),
+            explanation=explanation,
+        )
+        titles = [f.title for f in result["findings"]]
+        assert titles == ["Coordinated Trading Pattern",
+                          "High Withdrawal Frequency"]  # distinct, appended
+
 
 # --- capability derivation -----------------------------------------------------------
 
@@ -206,11 +287,11 @@ class TestCapabilityDerivation:
             withdrawal_evidence_count=0,
             opposite_trade_ratio=0.4524,     # ratio exists at CASE level...
             has_rule_trigger=False,
-            citations_for_finding=True,
         )
         assert "timeline" in caps
         assert "signal_explain" in caps
-        assert "policy_lookup" in caps
+        # policy retrieval is case-wide — never finding-derived
+        assert "policy_lookup" not in caps
         assert "opposite_trades" not in caps   # ...but this finding isn't about it
 
     def test_coordinated_trading_finding_gets_opposite_trades(self):
@@ -220,7 +301,6 @@ class TestCapabilityDerivation:
             withdrawal_evidence_count=1,
             opposite_trade_ratio=0.4524,
             has_rule_trigger=True,
-            citations_for_finding=True,
         )
         assert caps.supports("opposite_trades")
         assert caps.supports("timeline")
@@ -233,7 +313,6 @@ class TestCapabilityDerivation:
             withdrawal_evidence_count=0,
             opposite_trade_ratio=None,
             has_rule_trigger=True,
-            citations_for_finding=False,
         )
         assert not caps.supports("timeline")
 
@@ -244,7 +323,6 @@ class TestCapabilityDerivation:
             withdrawal_evidence_count=2,
             opposite_trade_ratio=0.5,
             has_rule_trigger=True,
-            citations_for_finding=True,
         )
         a = derive_capabilities(**kwargs)
         b = derive_capabilities(**kwargs)

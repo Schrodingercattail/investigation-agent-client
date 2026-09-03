@@ -213,6 +213,24 @@ class FocusSource(str, Enum):
     SYSTEM_DEFAULT = "system_default"
 
 
+class RequestIntent(str, Enum):
+    """The kind of request a user turn expresses, resolved BEFORE any
+    target resolution (P12/P14: routing precedes target resolution).
+
+    - CAPABILITY_QUESTION : "what can you do?" — answered with the
+      executable capability guide, no target needed.
+    - ARTIFACT_CASE       : explicit artifact request, case scope.
+    - ARTIFACT_FINDING    : explicit artifact request for the focused
+      finding (requires one; without it the user is guided).
+    - INVESTIGATION       : a case/finding investigation request that goes
+      through normal target resolution.
+    """
+    CAPABILITY_QUESTION = "capability_question"
+    ARTIFACT_CASE = "artifact_case"
+    ARTIFACT_FINDING = "artifact_finding"
+    INVESTIGATION = "investigation"
+
+
 class InvestigationContext(BaseModel):
     """Explicit short-term memory. Serializable and inspectable — there is no
     hidden state: anything the agent knows is here or in the task log."""

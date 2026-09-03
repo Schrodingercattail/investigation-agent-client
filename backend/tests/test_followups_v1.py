@@ -62,9 +62,14 @@ class TestCapabilityFiltering:
         out = select(caps=["timeline", "policy_lookup"])
         assert "explain_finding" not in ids(out)
 
-    def test_without_policy_lookup_no_check_policy(self):
+    def test_check_policy_needs_no_capability(self):
+        # policy retrieval is case-wide (finding_policy_status reports the
+        # finding-level basis as DATA) — the chip is executable for every
+        # finding-scoped context, with or without any capability set.
         out = select(caps=["timeline", "signal_explain"])
-        assert "check_policy" not in ids(out)
+        assert "check_policy" in ids(out)
+        out = select(caps=[])
+        assert "check_policy" in ids(out)
 
     def test_no_trade_followups_without_opposite_trades(self):
         # F3 lacks opposite_trades: no trade-related follow-up can appear
@@ -97,13 +102,13 @@ class TestContextScopeGating:
 
     def test_no_focus_produces_no_finding_or_event_followups(self):
         # No focus suppresses finding/event candidates; the case-level
-        # export_artifact follow-up remains legitimately available.
+        # check_artifact follow-up remains legitimately available.
         out = select_followups(SelectionInput(
             trigger=TriggerReason.TASK_COMPLETED,
             context=ctx(None, None),
             finding_capabilities=ALL_WEEK1_CAPS,
         ))
-        assert ids(out) == ["export_artifact"]
+        assert ids(out) == ["check_artifact"]
         assert all(f.applicable_context.value == "case" for f in out)
 
     def test_event_without_finding_invalid_by_model(self):
@@ -180,14 +185,14 @@ class TestMaxAndDeterminism:
 class TestExecutableOnly:
     def test_non_existent_candidate_is_omitted(self):
         # show_evidence / next_actions / verify_next remain intentionally
-        # undefined (no distinct implemented path). export_artifact became a
+        # undefined (no distinct implemented path). check_artifact became a
         # real case-level candidate when artifact_bundle was implemented.
         all_known = {t.follow_up_id for t in FINDING_TEMPLATES + EVENT_TEMPLATES + CASE_TEMPLATES}
         assert "show_evidence" not in all_known
         assert "next_actions" not in all_known
         assert "verify_next" not in all_known
-        assert "export_artifact" in all_known
-        export = next(t for t in CASE_TEMPLATES if t.follow_up_id == "export_artifact")
+        assert "check_artifact" in all_known
+        export = next(t for t in CASE_TEMPLATES if t.follow_up_id == "check_artifact")
         assert export.target_step == "generate_artifact"
         assert export.applicable_context.value == "case"
 

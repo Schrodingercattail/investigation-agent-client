@@ -100,7 +100,7 @@ def rp_patches():
         ),
         patch(
             "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-            new=lambda self, uid: evidence,
+            new=lambda self, uid, expose_complete_records=False: evidence,
         ),
     )
 
@@ -230,7 +230,7 @@ class TestPositivePath:
         assert r.context.focus_source is None
         # follow-ups: case-level export only, no finding/event chips
         fu_ids = [f.follow_up_id for f in r.follow_ups]
-        assert fu_ids == ["export_artifact"]
+        assert fu_ids == ["check_artifact"]
         assert all(f.applicable_context.value == "case" for f in r.follow_ups)
 
     def test_turn2_timeline(self, session):
@@ -248,9 +248,9 @@ class TestPositivePath:
         assert len(events) >= 2
         assert any((e["event_id"] if isinstance(e, dict) else e.event_id)
                    == "F3-E002" for e in events)
-        # factual response
-        assert "Investigation result" in r.response
-        assert "Evidence references:" in r.response
+        # human-readable response with grounded facts; no raw ref dump (§6)
+        assert "timeline" in r.response.lower()
+        assert "Evidence references:" not in r.response
         # context preserved
         assert r.context.focused_finding_id == "F3"
         assert r.context.focused_event_id is None
@@ -275,7 +275,9 @@ class TestPositivePath:
         assert r.context.focused_event_id == session["event_id"]
         assert r.context.focus_source == FocusSource.USER_SELECTED
         # grounded response
-        assert "Rule: High Withdrawal Frequency" in r.response
+        # humanized field names in the grounded explanation (P7)
+        assert "Withdrawal frequency (24h) = 14" in r.response
+        assert "withdrawal_frequency_24h" not in r.response
 
     def test_turn4_policy(self, session):
         r = session["turns"][3]
@@ -292,8 +294,9 @@ class TestPositivePath:
                         for c in fx.rp_explanation_payload()["citations"]}
         for m in data["matches"]:
             assert source_cites.get(m["citation_id"]) == m["chunk_id"]
-        # response renders count + document/section + citation refs
-        assert "Policy references matching" in r.response
+        # §12: human-readable policy answer, <= 2 refs, mapping in-response
+        assert "policy reference" in r.response
+        assert str(r.response).count("[") <= 4      # <=2 refs × [n] each
         assert "AML_Suspicious_Indicators.md" in r.response
         # context unchanged
         assert r.context.focused_finding_id == "F3"
@@ -303,8 +306,10 @@ class TestPositivePath:
     def test_turn5_artifact(self, session):
         r = session["turns"][4]
         assert r.task.status == TaskStatusV2.COMPLETED
-        tc = r.execution.tool_calls[0]
-        assert tc.tool_name == "artifact_bundle"
+        # scripted plan: fetch_case (supplies findings) + artifact_bundle
+        assert r.execution.tool_calls[0].tool_name == "risk_case_fetch"
+        tc = next(t for t in r.execution.tool_calls
+                  if t.tool_name == "artifact_bundle")
         assert tc.arguments["format"] == "md"
         art = r.execution.artifacts[0]
         assert art["format"] == "md"
@@ -315,13 +320,16 @@ class TestPositivePath:
                      + session["turns"][1].execution.tool_calls
                      + session["turns"][2].execution.tool_calls
                      + session["turns"][3].execution.tool_calls]
+        # the bundle turn's own fetch also contributes
+        prior_ids += [t.tool_call_id for t in r.execution.tool_calls
+                      if t.tool_name == "risk_case_fetch"]
         assert art["source_tool_calls"]
         assert set(art["source_tool_calls"]) <= set(prior_ids)
         assert tc.tool_call_id not in art["source_tool_calls"]
         # artifact attached to the task
         assert r.task.artifact_ids == [art["artifact_id"]]
-        # response identifies the artifact
-        assert "Markdown investigation bundle" in r.response
+        # response identifies the artifact + its UI location (§9)
+        assert "Artifacts panel on the right" in r.response
         assert art["artifact_id"] in r.response
         # deterministic markdown content
         assert art["content"].startswith("# Finding Investigation Bundle")

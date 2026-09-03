@@ -45,7 +45,7 @@ def make_case(case_id="U00299", evidence_overrides=None):
 def patch_evidence(evidence: dict):
     return patch(
         "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-        new=lambda self, uid: evidence,
+        new=lambda self, uid, expose_complete_records=False: evidence,
     )
 
 
@@ -226,7 +226,7 @@ class TestIntegrationFailures:
         f = withdrawal_finding(case)
         with patch(
             "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-            new=lambda self, uid: (_ for _ in ()).throw(
+            new=lambda self, uid, expose_complete_records=False: (_ for _ in ()).throw(
                 RiskPlatformError("unavailable", "Risk Platform timed out")),
         ):
             res = finding_drilldown(finding_id=f.finding_id, view="timeline",
@@ -241,7 +241,7 @@ class TestIntegrationFailures:
         f = withdrawal_finding(case)
         with patch(
             "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-            new=lambda self, uid: evidence,
+            new=lambda self, uid, expose_complete_records=False: evidence,
         ):
             res = finding_drilldown(finding_id=f.finding_id, view="timeline",
                                     case_context=case.data)
@@ -336,10 +336,14 @@ class TestProviderIntegration:
         provider = default_tool_provider()
         assert provider.has("finding_drilldown")
         f = withdrawal_finding(case_U00299)
+        # hermetic: patch both RP touch points (case fetch + evidence fetch)
         with patch(
             "app.domain_tools.risk_case_fetch.RiskPlatformAdapter.fetch_case",
             new=lambda self, uid: (
                 fx.rp_evidence_payload(uid), fx.rp_explanation_payload()),
+        ), patch(
+            "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
+            new=lambda self, uid, expose_complete_records=False: fx.rp_evidence_payload(uid),
         ):
             # No case_context/case_id → tool fetches the case itself.
             res = provider.get("finding_drilldown")({
@@ -387,7 +391,7 @@ class TestProviderIntegration:
                 fx.rp_evidence_payload(uid), fx.rp_explanation_payload()),
         ), patch(
             "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-            new=lambda self, uid: fx.rp_evidence_payload(uid),
+            new=lambda self, uid, expose_complete_records=False: fx.rp_evidence_payload(uid),
         ):
             ex = ExecutorV2(default_tool_provider())
             res = ex.execute(plan, task, ctx, finding_capabilities=caps)

@@ -186,7 +186,11 @@ class TestDeterministicResolution:
         assert step.tool_name == "finding_drilldown"
         assert step.arguments["view"] == "timeline"
 
-    def test_opposite_trades_step_maps_to_its_locked_view(self):
+    def test_non_executable_skill_excluded_from_planner(self):
+        """DEF-3/P19: trade_investigation's core step binds to the
+        opposite_trades view, which finding_drilldown does not implement.
+        The skill must NEVER enter the planner candidate set — registry
+        metadata alone cannot make a path executable."""
         caps = FindingCapability.model_validate(["opposite_trades"])
         ctx = InvestigationContext(case_id="X", focused_finding_id="F2")
         llm = FakeLLM(json_response(
@@ -195,10 +199,18 @@ class TestDeterministicResolution:
         ))
         plan = PlannerV2(llm).plan("Which trades composed this?", ctx,
                                    ["trade_investigation"], caps)
-        assert isinstance(plan, Plan)
-        step = plan.steps[0]
-        assert step.tool_name == "finding_drilldown"
-        assert step.arguments["view"] == "opposite_trades"
+        from app.planner_v2 import PlanningFailure
+        assert isinstance(plan, PlanningFailure)
+        assert plan.code == "NO_ELIGIBLE_SKILL"
+        # nothing executed: no fabricated, no partial run
+        assert "opposite_trades" not in str(plan)
+
+    def test_executable_skills_still_eligible(self):
+        """The executable-path guard excludes ONLY non-executable skills."""
+        from app.skills import skill_path_executable
+        assert skill_path_executable("case_intake")
+        assert skill_path_executable("timeline_investigation")
+        assert not skill_path_executable("trade_investigation")
 
     def test_llm_cannot_override_parameter_locks(self):
         # Even though the LLM schema has no slot for arguments, verify at the
@@ -324,6 +336,60 @@ class TestSafetyBoundaries:
         )
         plan = PlannerV2(FakeLLM(wrapped)).plan("x", CTX_CASE, ["case_intake"])
         assert isinstance(plan, Plan)
+
+    def test_prose_wrapped_json_still_parses(self):
+        """§16: surrounding prose around ONE object is harmless formatting —
+        the balanced-object extraction recovers it without ever inferring
+        structure."""
+        wrapped = (
+            'Here is the plan you asked for:\n'
+            '{"skill_id": "case_intake", "goal": "ov", '
+            '"steps": [{"type": "fetch_case", "reason": "ctx"}]}\n'
+            'Let me know if anything else is needed.'
+        )
+        plan = PlannerV2(FakeLLM(wrapped)).plan("x", CTX_CASE, ["case_intake"])
+        assert isinstance(plan, Plan)
+        assert plan.steps[0].type == "fetch_case"
+
+    def test_truncated_json_is_bounded_failure(self):
+        """Captured real failure mode (thinking-style provider truncates at
+        max_tokens): text cut mid-JSON must remain a bounded failure — the
+        parser must NEVER reconstruct missing steps."""
+        truncated = ('{"skill_id": "case_intake", "goal": "g", "steps": '
+                     '[{"type": "fetch_case", "reason": "No case context '
+                     'exists')
+        result = PlannerV2(FakeLLM(truncated)).plan("x", CTX_CASE, ["case_intake"])
+        from app.planner_v2 import PlanningFailure
+        assert isinstance(result, PlanningFailure)
+        assert result.code == "LLM_OUTPUT_INVALID"
+
+    def test_empty_text_is_bounded_failure(self):
+        """Thinking-only provider response (no text block) stays a bounded
+        failure — never an inferred or fabricated plan."""
+        result = PlannerV2(FakeLLM("")).plan("x", CTX_CASE, ["case_intake"])
+        from app.planner_v2 import PlanningFailure
+        assert isinstance(result, PlanningFailure)
+        assert result.code == "LLM_OUTPUT_INVALID"
+
+    def test_two_objects_rejected(self):
+        """Extraction is limited to a SINGLE object; ambiguous multi-object
+        output is not guessed apart."""
+        two = ('{"skill_id": "case_intake", "goal": "a", "steps": []} '
+               'and also {"skill_id": "timeline_investigation", "goal": "b", '
+               '"steps": []}')
+        result = PlannerV2(FakeLLM(two)).plan("x", CTX_CASE, ["case_intake"])
+        from app.planner_v2 import PlanningFailure
+        assert isinstance(result, PlanningFailure)
+
+    def test_planner_budget_allows_thinking_models(self):
+        """The planner's max_tokens budget accommodates thinking-style
+        providers (root cause of real LLM_OUTPUT_INVALID: a 512-token budget
+        truncated the JSON after the model's thinking block). The planner
+        must request a budget large enough for thinking + JSON."""
+        import inspect
+        from app.planner_v2 import PlannerV2
+        src = inspect.getsource(PlannerV2.plan)
+        assert "max_tokens=2048" in src
 
     def test_convenience_wrapper_passthrough(self):
         result = plan_turn(

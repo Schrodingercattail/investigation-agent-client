@@ -1,14 +1,25 @@
 """finding_drilldown — Week 1 Focus Mode drill-down tool.
 
-Week 1 view: "timeline" only (opposite_trades is future work).
+Views:
+- "timeline"  : chronological events of a finding. Built from the COMPLETE
+                authoritative evidence (RP opt-in complete records); top_n
+                bounds the returned list ONLY when the user explicitly
+                requested a subset (labeled truncated + total, never
+                presented as the complete timeline).
+- "evidence"  : CONCRETE EVIDENCE view — the COMPLETE authoritative record
+                set (all RP-stored withdrawals/transactions relevant to the
+                finding). top_n is IGNORED for this view: completeness is
+                its contract, and a subset may never be presented as the
+                evidence.
 
 Pipeline:
   input validation (finding_id, view lock, top_n bounds)
   → canonical Finding resolution from case context (no title guessing)
   → capability enforcement (finding must declare "timeline")
-  → RiskPlatformAdapter.fetch_case (existing endpoint, no new RP endpoints)
-  → adapter normalize_timeline_events (RP shapes → TimelineEvent dicts)
-  → validated TimelineEvent models, chronological, deterministic IDs
+  → RiskPlatformAdapter.fetch_case / fetch_case_evidence (existing RP
+    endpoints; expose_complete_records only for view="evidence")
+  → adapter normalization (RP shapes → TimelineEvent / evidence records)
+  → validated models, chronological, deterministic IDs
   → normalized ToolResult
 
 The tool returns structured data only — never a final narrative — and never
@@ -20,6 +31,7 @@ from typing import Any
 
 from app.adapters.risk_platform import (
     RiskPlatformError,
+    normalize_evidence_records,
     normalize_timeline_events,
 )
 from app.models import (
@@ -36,7 +48,7 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_VIEWS = {"timeline"}          # opposite_trades arrives in a later step
+ALLOWED_VIEWS = {"timeline", "evidence"}   # opposite_trades arrives later
 TOP_N_DEFAULT = 20
 TOP_N_MAX = 100
 
@@ -51,17 +63,20 @@ def _validation_error(message: str) -> ToolResult:
 def finding_drilldown(
     finding_id: str,
     view: str = "timeline",
-    top_n: int = TOP_N_DEFAULT,
+    top_n: int | None = None,
     case_context: dict[str, Any] | None = None,
     case_id: str | None = None,
 ) -> ToolResult:
-    """Drill into one finding's timeline composition.
+    """Drill into one finding's timeline or concrete evidence.
 
     Args:
         finding_id: canonical Finding ID from the current case context.
-        view: locked to "timeline" in Week 1 (parameter-locked by the
-              timeline_investigation skill).
-        top_n: maximum events returned, 1..TOP_N_MAX.
+        view: "timeline" or "evidence" — both are COMPLETE views.
+        top_n: EXPLICIT user-requested subset only ("show 5 examples").
+            None (default — an ordinary request) returns the complete
+            available timeline; an explicit N bounds the returned events
+            and marks the result truncated=True with total_events, so a
+            subset can never masquerade as the complete timeline.
         case_context: canonical case payload previously returned by
             risk_case_fetch ({case_id, findings: [Finding...]}) — the source
             for deterministic finding resolution. Providing it avoids a
@@ -70,8 +85,10 @@ def finding_drilldown(
             then fetches the case itself through the adapter.
 
     Returns ToolResult with data payload:
-        {finding_id, view, events: [TimelineEvent...], total_events,
-         truncated, top_n}
+        timeline view: {finding_id, view, events: [TimelineEvent...],
+                        total_events, truncated, top_n}
+        evidence view: {finding_id, view, records: [...], record_count,
+                        risk_features, streams, complete: true}
     """
     # --- input validation -----------------------------------------------------
     if not isinstance(finding_id, str) or not finding_id.strip():
@@ -85,9 +102,12 @@ def finding_drilldown(
             f"view {view!r} is not supported by finding_drilldown; "
             f"supported views: {sorted(ALLOWED_VIEWS)}."
         )
-    if not isinstance(top_n, int) or isinstance(top_n, bool) or top_n < 1:
-        return _validation_error("top_n must be a positive integer.")
-    top_n = min(top_n, TOP_N_MAX)
+    if top_n is not None:
+        if not isinstance(top_n, int) or isinstance(top_n, bool) or top_n < 1:
+            return _validation_error(
+                "top_n must be a positive integer (or omitted for the "
+                "complete result).")
+        top_n = min(top_n, TOP_N_MAX)
 
     # --- canonical finding resolution -------------------------------------------
     findings: list[Finding] = []
@@ -135,11 +155,23 @@ def finding_drilldown(
                     f"Finding {finding_id} does not support the timeline "
                     "investigation."
                 ),
-                detail={"supported_capabilities": sorted(finding.capabilities)},
+                detail={
+                    "capability": "timeline",
+                    "scope": "finding",
+                    "finding_id": finding_id,
+                    "supported_capabilities": sorted(finding.capabilities),
+                },
             ),
         )
 
     # --- fetch raw evidence if not already supplied -----------------------------
+    # RP's default response is a top-5 REPRESENTATIVE subset. Both
+    # investigation views fetch the COMPLETE record set: a plain "show the
+    # timeline" must yield the complete authoritative timeline, never the
+    # representative 5. top_n bounds the returned events ONLY as an
+    # explicit-user-subset mechanism (planner passes it solely for requests
+    # like "show me 5 recent events") — and a bounded result is always
+    # flagged truncated=true with the total, never presented as complete.
     evidence: dict[str, Any]
     try:
         if case_context is not None and "_raw_evidence" in case_context:
@@ -150,7 +182,10 @@ def finding_drilldown(
                 cid = case_context["case_id"]
             else:
                 cid = case_id
-            evidence = RiskPlatformAdapter().fetch_case_evidence(str(cid))
+            evidence = RiskPlatformAdapter().fetch_case_evidence(
+                str(cid),
+                expose_complete_records=True,
+            )
     except RiskPlatformError as err:
         logger.error("finding_drilldown integration failure: %s", err.message)
         code = {
@@ -164,6 +199,53 @@ def finding_drilldown(
             error=ToolError(code=code, message=err.message,
                             detail={"status_code": err.status_code}
                             if err.status_code else None),
+        )
+
+    # --- evidence view: COMPLETE concrete records (top_n never applies) ---------
+    if view == "evidence":
+        try:
+            payload = normalize_evidence_records(
+                case_id=str(case_id or evidence.get("user_id", "")),
+                evidence=evidence,
+                finding=finding,
+            )
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error("finding_drilldown evidence normalization failure: %s", e)
+            return ToolResult(
+                outcome=ToolResultOutcome.INTEGRATION_ERROR,
+                error=ToolError(
+                    code="RISK_PLATFORM_MALFORMED_RESPONSE",
+                    message=f"Could not normalize evidence records: {e}",
+                ),
+            )
+        if payload["record_count"] == 0:
+            return ToolResult(
+                outcome=ToolResultOutcome.EMPTY,
+                data={
+                    "finding_id": finding_id, "view": view,
+                    "records": [], "record_count": 0,
+                    "risk_features": payload.get("risk_features", {}),
+                    "streams": payload.get("streams", {}),
+                    "complete": True,
+                },
+                warnings=[
+                    "The Risk Platform holds no concrete withdrawal/"
+                    "transaction records for this finding's evidence "
+                    "streams; only aggregate feature values exist.",
+                ],
+            )
+        payload["complete"] = True   # completeness is this view's contract
+        payload["finding_id"] = finding_id
+        payload["view"] = view
+        # Provenance: finding-level citations ride along, as in the timeline.
+        return ToolResult(
+            outcome=ToolResultOutcome.SUCCESS,
+            data=payload,
+            evidence_refs=[
+                EvidenceRef(kind=r["record_kind"], id=r["record_id"])
+                for r in payload["records"]
+            ],
+            citation_refs=list(finding.policy_refs),
         )
 
     # --- timeline normalization (adapter owns RP shapes) --------------------------
@@ -216,8 +298,11 @@ def finding_drilldown(
         ]
 
     total = len(events)
-    truncated = total > top_n
-    events = events[:top_n]
+    # P4: ordinary request (top_n=None) → COMPLETE timeline. Only an
+    # explicit user-requested subset bounds the result, always labeled.
+    truncated = top_n is not None and total > top_n
+    if truncated:
+        events = events[:top_n]
 
     payload = {
         "finding_id": finding_id,
@@ -230,7 +315,8 @@ def finding_drilldown(
     warnings = []
     if truncated:
         warnings.append(
-            f"Timeline truncated to top_n={top_n} of {total} events "
+            f"Timeline is a bounded subset: showing top_n={top_n} of "
+            f"{total} events at the user's explicit request "
             "(chronological order preserved)."
         )
     # Detail insufficiency: if the finding's evidence references point at data
@@ -246,6 +332,7 @@ def finding_drilldown(
     return ToolResult(
         outcome=ToolResultOutcome.SUCCESS,
         data=payload,
+        warnings=warnings,
         evidence_refs=[r for e in events for r in e.evidence_refs],
         citation_refs=list(finding.policy_refs),
     )

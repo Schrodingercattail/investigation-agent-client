@@ -25,12 +25,15 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.llm_provider import ClaudeProvider
-from app.models import InvestigationContext, Plan, PlanStep, PlanStepStatus
+from app.models import (InvestigationContext, Plan, PlanStep,
+                        PlanStepStatus, RequestIntent)
+from app.context_resolution import _classify_request_intent
 from app.skills import (
     SKILLS,
     STEP_TOOL_MAP,
     check_plan,
     planning_vocabulary,
+    skill_path_executable,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,6 +119,15 @@ OUTPUT SCHEMA (exactly):
 CONTEXT INTERPRETATION:
 - A focused finding means questions like "why was this flagged?" refer to it.
 - With no focus, case-level guidance requests are served by the case-level skill.
+
+INTENT → STEP GUIDANCE (when a listed step serves the intent, plan exactly that step — no other investigation steps):
+- "why was this flagged" / detection-basis questions → explain_signal ONLY. Never combine it with inspect_timeline or inspect_evidence.
+- Vague explanatory language ("what's behind this", "tell me more", "what stands out", "walk me through") is AMBIGUOUS: plan explain_signal (the explanation level) — never inspect_evidence for these. inspect_evidence is reserved for requests that clearly ask for records ("show all withdrawals", "list every transaction", "show the evidence records").
+- timeline/chronology requests ("show related timeline", "show the timeline") → inspect_timeline. Without an explicit count, the result is the complete timeline — do not pass any count.
+- concrete-record requests ("show the withdrawals", "list all supporting transactions") → inspect_evidence. It returns the COMPLETE record set by contract — plan it alone.
+- policy/requirement questions → retrieve_policy.
+- EXPLICIT subset requests ("show me 5 examples", "show 5 recent events") → inspect_timeline with top_n set to the requested number. Never invent a count the user did not state.
+- artifact/export requests ("generate a Markdown investigation bundle", "export the investigation") → generate_artifact ONLY. Never prepend fetch_case for these: bundle composition uses already-executed results from this investigation. Only plan fetch_case when NO case context exists yet at all.
 """
 
 
@@ -185,6 +197,27 @@ class PlannerV2:
                 detail={"requested": list(eligible_skills)},
             )
 
+        # 0a) Executable-path guard (P19, internal side): a skill must not
+        # enter the planner's candidate set when its PRIMARY investigation
+        # step binds to a non-executable path — even if registry metadata
+        # and domain capabilities describe it. Single semantic answer to
+        # "can this path execute?": the bound tool must exist AND the tool
+        # itself must actually implement the step's view (tools expose
+        # which parameterizations they support via ALLOWED_* constants).
+        known_eligible = [
+            sid for sid in known_eligible
+            if skill_path_executable(sid)
+        ]
+        if not known_eligible:
+            return PlanningFailure(
+                code="NO_ELIGIBLE_SKILL",
+                message=(
+                    "No executable investigation path is available in the "
+                    "current runtime."
+                ),
+                detail={"requested": list(eligible_skills)},
+            )
+
         # Case-level convenience: if no finding focus exists, keep only skills
         # whose capability gates don't require one (they were pre-filtered by
         # the caller, but enforce defensively).
@@ -204,6 +237,60 @@ class PlannerV2:
                     detail={"case_id": context.case_id},
                 )
 
+        # 1a) Deterministic artifact planning: an EXPLICIT artifact request
+        # is a target-independent supported request (P5/P12). When the
+        # focused skill offers generate_artifact, plan it directly — no LLM
+        # round-trip, so such requests can never fail at the LLM boundary.
+        if _classify_request_intent(user_request) in (
+                RequestIntent.ARTIFACT_CASE, RequestIntent.ARTIFACT_FINDING):
+            artifact_skill = next(
+                (sid for sid in known_eligible
+                 if "generate_artifact" in SKILLS[sid].planning_steps),
+                None)
+            if artifact_skill:
+                # fetch_case + generate_artifact: the fetch supplies the
+                # authoritative findings the bundle composes from — it is
+                # required when this turn has no earlier fetch, and its
+                # empty/success semantics stay distinct for the composer.
+                # (The fetch never re-targets another case: the executor
+                # injects the investigation's own case_id.)
+                # The deterministic artifact plan is exactly these two steps
+                # — an artifact request never drags other skill steps (e.g.
+                # case_intake's policy continuation) into the bundle turn.
+                art_steps = []
+                for i, st in enumerate(
+                        (st for st in SKILLS[artifact_skill].planning_steps
+                         if st in ("fetch_case", "generate_artifact")), 1):
+                    binding = STEP_TOOL_MAP[st]
+                    art_steps.append(PlanStep(
+                        step_id=f"S{i}", type=st,
+                        reason="explicit artifact request",
+                        status=PlanStepStatus.PENDING,
+                        tool_name=binding.tool_name,
+                        arguments=dict(binding.parameter_locks),
+                    ))
+                plan = Plan(
+                    plan_id=f"PLAN-{uuid.uuid4().hex[:12]}",
+                    investigation_id=_investigation_ref(context),
+                    goal="Generate the investigation bundle.",
+                    steps=art_steps,
+                    created_at=None,
+                )
+                # Same authoritative gate as the LLM path (never weaker).
+                contract = check_plan(
+                    artifact_skill, [s.model_copy() for s in art_steps],
+                    capabilities=finding_capabilities,
+                )
+                if not contract.valid:
+                    return PlanningFailure(
+                        code="PLAN_CONTRACT_VIOLATION",
+                        message="Deterministic artifact plan failed contract "
+                                "validation.",
+                        detail={"errors": [e.model_dump()
+                                           for e in contract.errors]},
+                    )
+                return plan
+
         # 1) Ask the LLM within the closed vocabulary.
         try:
             llm = self._llm()
@@ -219,7 +306,13 @@ class PlannerV2:
                         user_request, context, known_eligible,
                     )},
                 ],
-                max_tokens=512,
+                # Thinking-style models emit a reasoning block before the
+                # JSON text; a small budget truncates the plan mid-JSON
+                # (captured live: stop_reason=max_tokens, 5/6 failures at
+                # 512 tokens, 6/6 success at 2048). The budget bounds output
+                # size, not plan complexity — the contract checker still
+                # validates every step.
+                max_tokens=2048,
                 temperature=0.1,
             )
         except Exception as e:   # LLMError family per provider conventions
@@ -274,6 +367,14 @@ class PlannerV2:
                     detail={"skill_id": chosen_skill},
                 )
             arguments: dict[str, Any] = dict(binding.parameter_locks)
+            # Explicit user-stated subset ("show me 5 recent events") is the
+            # ONLY source of top_n: the count is echoed from the user's own
+            # words onto the timeline step — never planner-invented, never a
+            # default cap (P4).
+            if ls.type == "inspect_timeline" and "top_n" not in arguments:
+                subset = _explicit_subset_count(user_request)
+                if subset is not None:
+                    arguments["top_n"] = subset
             steps.append(PlanStep(
                 step_id=f"S{i}",
                 type=ls.type,
@@ -317,18 +418,65 @@ def _investigation_ref(context: InvestigationContext) -> str:
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
 
+def _extract_json_object(text: str) -> str | None:
+    """Extract the first balanced JSON object from raw text.
+
+    Tolerates ONLY harmless formatting: surrounding prose, markdown fences,
+    and leading/trailing whitespace around a single object. Structural
+    decisions (skill, steps) are never inferred and unsupported fields are
+    never accepted — the caller still validates the payload against the
+    schema and the contract checker validates the plan.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def _parse_llm_output(text: str) -> LLMOutput | PlanningFailure:
     """Parse raw LLM text into LLMOutput, tolerating harmless formatting
-    (whitespace / json code fence) but nothing else."""
+    (whitespace / json code fence / surrounding prose around one JSON
+    object) but nothing else. Genuinely malformed or truncated JSON remains
+    a bounded PlanningFailure."""
     cleaned = _FENCE_RE.sub("", text.strip()).strip()
+    candidate = cleaned
     try:
-        payload = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        return PlanningFailure(
-            code="LLM_OUTPUT_INVALID",
-            message="LLM returned invalid JSON.",
-            detail={"parse_error": str(e), "raw_preview": text[:200]},
-        )
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        # fenced/prose-wrapped single object → extract and re-parse
+        extracted = _extract_json_object(cleaned)
+        try:
+            payload = json.loads(extracted) if extracted else None
+        except json.JSONDecodeError:
+            payload = None
+        if payload is None:
+            return PlanningFailure(
+                code="LLM_OUTPUT_INVALID",
+                message="LLM returned invalid JSON.",
+                detail={"parse_error": "no balanced JSON object",
+                        "raw_preview": text[:200]},
+            )
     if not isinstance(payload, dict):
         return PlanningFailure(
             code="LLM_OUTPUT_INVALID",
@@ -350,6 +498,21 @@ def _parse_llm_output(text: str) -> LLMOutput | PlanningFailure:
 # ---------------------------------------------------------------------------
 # Convenience wrapper for callers (task layer, future executor)
 # ---------------------------------------------------------------------------
+
+_EXPLICIT_SUBSET_RE = __import__("re").compile(
+    r"\b(\d{1,3})\s+(recent\s+)?"
+    r"(events?|examples?|records?|withdrawals?|transactions?|trades?)\b",
+    __import__("re").IGNORECASE,
+)
+
+
+def _explicit_subset_count(user_request: str) -> int | None:
+    """Deterministically extract an EXPLICIT subset count from the user's
+    own words ("show me 5 recent events"). Never invents a number: returns
+    a value only when the user stated one next to a record/event noun."""
+    m = _EXPLICIT_SUBSET_RE.search(user_request or "")
+    return int(m.group(1)) if m else None
+
 
 def plan_turn(
     user_request: str,

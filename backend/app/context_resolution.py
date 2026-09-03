@@ -26,6 +26,7 @@ from app.models import (
     Finding,
     FocusSource,
     InvestigationContext,
+    RequestIntent,
     TimelineEvent,
 )
 
@@ -41,6 +42,9 @@ class ResolutionStatus:
     UNCHANGED_CASE_LEVEL = "unchanged_case_level"
     AMBIGUOUS = "ambiguous"
     UNRESOLVED = "unresolved"
+    # Target-independent guidance (capability questions): the turn resolves
+    # to documentation, not to an investigation target (P12/P14).
+    CAPABILITY_GUIDANCE = "capability_guidance"
 
 
 class Candidate(BaseModel):
@@ -78,6 +82,7 @@ _CASE_LEVEL_MARKERS = (
     "what does this case show",
     "investigate case",
     "investigate u",        # "Investigate U00299" — case-id intake requests
+    "调查",                  # "调查U00033" / "调查 00033" (CJK case requests)
 )
 
 _EVENT_REFERENCE_MARKERS = ("this event", "that event", "the event")
@@ -89,6 +94,37 @@ _THOSE_ACCOUNTS_MARKERS = ("those accounts", "these accounts")
 
 def _looks_case_level(request_lower: str) -> bool:
     return any(m in request_lower for m in _CASE_LEVEL_MARKERS)
+
+
+# Case references embedded in a request. Uses the SHARED case-resolution
+# normalization (same boundary intelligence as Case Reference Resolution —
+# CJK/intent-word concatenation is a boundary, whitespace is not required)
+# so this resolver can never disagree with the canonical parser.
+from app.case_resolution import _CASE_REF_PATTERN as _SHARED_CASE_REF_PATTERN
+
+_CASE_REF_RE = _SHARED_CASE_REF_PATTERN
+
+
+def _mentioned_case_ids(request: str) -> list[str]:
+    """Canonical case IDs explicitly named in the request text (shared
+    normalization with Case Reference Resolution)."""
+    text = request or ""
+    # apply the same intent-word boundary normalization as the shared parser
+    import re as _re
+    text = _re.sub(
+        r"(?<![A-Za-z0-9])"
+        r"(investigation|investigate|check|review|show|open|start|case|调查|检查|审查)"
+        r"(?=[Uu]?\d{3,6})",
+        lambda m: m.group(1) + " ",
+        text,
+        flags=_re.IGNORECASE,
+    )
+    seen: list[str] = []
+    for m in _CASE_REF_RE.finditer(text):
+        cid = "U" + m.group(1)
+        if cid not in seen:
+            seen.append(cid)
+    return seen
 
 
 def _mentions_event(request_lower: str) -> bool:
@@ -136,6 +172,56 @@ def _events_of(events_arg: list[TimelineEvent]) -> list[TimelineEvent]:
 
 
 # ---------------------------------------------------------------------------
+# Request intent routing (P12/P14: routing precedes target resolution)
+# ---------------------------------------------------------------------------
+
+# General capability/product questions: NOT unresolved case references.
+_CAPABILITY_QUESTION_RE = __import__("re").compile(
+    r"(能(做|干什么|做什么|做些什麼)|有什么功?能|哪些功?能|都能做|什么功能|"
+    r"what (can|does) (this|the) (assistant|agent|system|platform)|"
+    r"what can (i|you) (do|investigate)|capabilities|help me understand what)",
+    __import__("re").IGNORECASE,
+)
+
+# Explicit artifact requests. "generate/create/export/make an artifact/
+# bundle/report/export" — with optional finding qualifier.
+_ARTIFACT_REQUEST_RE = __import__("re").compile(
+    r"(生成|导出|创建|给我|produce|generate|create|export|make|build)[^\n]{0,64}?"
+    r"(artifact|artifacts|bundle|report|报告|包)",
+    __import__("re").IGNORECASE | __import__("re").DOTALL,
+)
+_FINDING_SCOPED_RE = __import__("re").compile(
+    r"for (this|the) (focused )?finding\b|for f\d+\b|这个发现的|针对.{0,6}发现的"
+    r"|该发现的",
+    __import__("re").IGNORECASE,
+)
+_CASE_SCOPED_RE = __import__("re").compile(
+    r"for (this|the) (whole |entire )?case\b|case[- ]level (bundle|artifact|report)"
+    r"|这个案例的|整个案例|案例级别",
+    __import__("re").IGNORECASE,
+)
+
+
+def _classify_request_intent(user_request: str) -> RequestIntent:
+    """Deterministic first-pass intent classification (P12/P14). Runs BEFORE
+    target resolution so capability questions and artifact requests are never
+    misclassified as unresolved case references."""
+    q = user_request or ""
+    if _CAPABILITY_QUESTION_RE.search(q):
+        return RequestIntent.CAPABILITY_QUESTION
+    if _ARTIFACT_REQUEST_RE.search(q):
+        if _FINDING_SCOPED_RE.search(q):
+            return RequestIntent.ARTIFACT_FINDING
+        if _CASE_SCOPED_RE.search(q):
+            return RequestIntent.ARTIFACT_CASE
+        # explicit artifact request without qualifier: case scope when no
+        # finding is focused is decided by the caller using context; the
+        # intent here records the request kind only
+        return RequestIntent.ARTIFACT_CASE
+    return RequestIntent.INVESTIGATION
+
+
+# ---------------------------------------------------------------------------
 # Resolver
 # ---------------------------------------------------------------------------
 
@@ -165,6 +251,81 @@ class ContextResolver:
         ctx = current_context.model_copy(deep=True)
         request_lower = user_request.strip().lower()
 
+        # --- Cross-case boundary (P12: ONE investigation = ONE case) ---------
+        # THE earliest shared semantic boundary where both current_case_id
+        # and any explicitly referenced case are known. EVERY in-progress
+        # request naming a DIFFERENT case is a cross-case request — it must
+        # terminate here with guidance, before intent routing, before the
+        # focus short-circuit, before planning, before any tool can run and
+        # before any artifact can be composed. The check is independent of
+        # the eventual action (intake / artifact / timeline / evidence /
+        # policy / signal — anything): cross-case is a conversation-boundary
+        # condition, not a skill rule. It runs BEFORE existence checking, so
+        # no fetch and no information about the other case can occur. With
+        # no current case (initial identification) this guard does not
+        # apply — Case Reference Resolution owns that path.
+        if (ctx.case_id or "").strip():
+            mentioned = _mentioned_case_ids(user_request)
+            other_cases = [c for c in mentioned
+                           if c.upper() != ctx.case_id.upper()]
+            if other_cases:
+                return ResolutionOutcome(
+                    status=ResolutionStatus.UNRESOLVED,
+                    updated_context=ctx,          # unchanged — no re-targeting
+                    context_changed=False,
+                    clarification_message=(
+                        f"This conversation is investigating case "
+                        f"{ctx.case_id}. To investigate case {other_cases[0]}"
+                        ", start a new investigation and select that case."
+                    ),
+                )
+
+        # --- Priority 0: request intent routing (P12/P14) --------------------
+        # WHAT the user is trying to do is determined BEFORE any target
+        # resolution. Capability questions and explicit artifact requests
+        # are target-independent (case scope) or focus-dependent (finding
+        # scope); they must never be classified as unresolved references.
+        intent = _classify_request_intent(user_request)
+        if intent == RequestIntent.CAPABILITY_QUESTION:
+            return ResolutionOutcome(
+                status=ResolutionStatus.CAPABILITY_GUIDANCE,
+                updated_context=ctx,          # unchanged
+                context_changed=False,
+                clarification_message=(
+                    "I can help investigate a Risk Platform case. You can:\n"
+                    "- investigate a case (case intake)\n"
+                    "- select a finding and ask why it was flagged\n"
+                    "- view a finding's timeline\n"
+                    "- list all concrete evidence behind a finding\n"
+                    "- see which policy requirements apply to a finding\n"
+                    "- generate a Markdown investigation bundle\n\n"
+                    "Not yet available: network/relationship drilldown and "
+                    "opposite-trade investigation."
+                ),
+            )
+        if intent in (RequestIntent.ARTIFACT_CASE, RequestIntent.ARTIFACT_FINDING):
+            if intent == RequestIntent.ARTIFACT_FINDING \
+                    and not ctx.focused_finding_id:
+                # finding-scoped request with nothing focused → guidance
+                return ResolutionOutcome(
+                    status=ResolutionStatus.UNRESOLVED,
+                    updated_context=ctx,
+                    context_changed=False,
+                    clarification_message=(
+                        "A finding-scoped bundle needs a focused finding. "
+                        "Select a finding from the Findings panel on the "
+                        "left, or ask for a case-level bundle."
+                    ),
+                )
+            # Target-independent supported request: case scope (or the
+            # focused finding for ARTIFACT_FINDING). The planner will plan
+            # generate_artifact; scope is resolved by the executor.
+            return ResolutionOutcome(
+                status=ResolutionStatus.UNCHANGED_CASE_LEVEL,
+                updated_context=ctx,
+                context_changed=False,
+            )
+
         # --- Priority 1/2: explicit selection & existing context -------------
         # A live explicit focus is authoritative; nothing weaker overrides it.
         if ctx.focused_finding_id is not None and self._existing_focus_explicit(ctx):
@@ -172,6 +333,9 @@ class ContextResolver:
 
         # --- Case-level requests need no target -------------------------------
         if _looks_case_level(request_lower):
+            # Cross-case references were already rejected at the shared
+            # boundary above; a case-level request reaching this point names
+            # only the current case (or no case at all).
             return ResolutionOutcome(
                 status=ResolutionStatus.UNCHANGED_CASE_LEVEL,
                 updated_context=self._cleared_focus_if_no_source(ctx),
@@ -278,6 +442,8 @@ class ContextResolver:
                 return outcome
 
         # --- Priority 5: unresolved → stay safe -------------------------------
+        # Cross-case references were already rejected at the shared boundary
+        # before any priority route; nothing here can name another case.
         return ResolutionOutcome(
             status=ResolutionStatus.UNRESOLVED,
             updated_context=self._cleared_focus_if_no_source(ctx),

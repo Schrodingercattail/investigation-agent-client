@@ -271,10 +271,13 @@ class TestToolResults:
         s = step()
         res = ex.execute(plan([s]), task(), CTX)
         assert res.tool_calls[0].result.outcome == ToolResultOutcome.EMPTY
-        assert res.task.status == TaskStatusV2.FAILED   # required step w/ no data
-        assert s.status == PlanStepStatus.FAILED
-        # ...and the outcome stays EMPTY in the audit record, not converted:
-        assert "empty" in s.error
+        # P20: EMPTY is a valid step answer — task completes; the outcome
+        # stays EMPTY on the recorded call (auditable, distinct)
+        assert res.task.status == TaskStatusV2.COMPLETED
+        assert s.status == PlanStepStatus.SUCCESS
+        # outcome preserved verbatim in the audit record (not converted):
+        assert res.tool_calls[0].result.outcome == ToolResultOutcome.EMPTY
+        assert s.error is None
 
     def test_evidence_missing_remains_success_payload_state(self):
         insuff = ToolResult(

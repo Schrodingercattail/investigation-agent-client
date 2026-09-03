@@ -59,6 +59,10 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
         tool_name="finding_drilldown",
         parameter_locks={"view": "timeline"},
     ),
+    "inspect_evidence": StepToolBinding(
+        tool_name="finding_drilldown",
+        parameter_locks={"view": "evidence"},
+    ),
     "inspect_opposite_trades": StepToolBinding(
         tool_name="finding_drilldown",
         parameter_locks={"view": "opposite_trades"},
@@ -66,6 +70,53 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
     "explain_signal": StepToolBinding(tool_name="signal_explain"),
     "retrieve_policy": StepToolBinding(tool_name="policy_lookup"),
 }
+
+
+# Parameterizations each registered tool actually implements. Registry truth
+# for "can this bound path execute in the current runtime?" — a step whose
+# locked parameters are absent here is registered-but-not-executable (P19).
+# Keys: (tool_name, locked-parameter key/value pairs that must ALL be
+# supported; a step with no locks always passes).
+_TOOL_SUPPORTED_PARAMETERIZATIONS: dict[str, set[tuple[tuple[str, Any], ...]]] = {
+    # finding_drilldown implements timeline + evidence views only;
+    # opposite_trades is registered but not implemented (Week 1).
+    "finding_drilldown": {
+        (("view", "timeline"),),
+        (("view", "evidence"),),
+        (),                       # default view (no view argument)
+    },
+}
+
+
+def step_path_executable(step_type: str) -> bool:
+    """Whether this planning step's bound path can execute in the current
+    runtime: the tool must be registered AND its locked parameterization
+    must be one the tool actually implements. The single semantic answer
+    shared by planner eligibility and follow-up executability."""
+    binding = STEP_TOOL_MAP.get(step_type)
+    if binding is None:
+        return False
+    locks = tuple(sorted(binding.parameter_locks.items()))
+    supported = _TOOL_SUPPORTED_PARAMETERIZATIONS.get(
+        binding.tool_name)
+    if supported is None:
+        return True               # tool declares no restrictions
+    return locks in supported
+
+
+def skill_path_executable(skill_id: str) -> bool:
+    """Whether a skill's PRIMARY investigation step (its first non-artifact
+    planning step) is executable. Artifact generation is a continuation, not
+    the investigation itself; a skill whose core path cannot execute must not
+    be offered to the planner (P19)."""
+    skill = SKILLS.get(skill_id)
+    if skill is None:
+        return False
+    for step_type in skill.planning_steps:
+        if step_type == "generate_artifact":
+            continue
+        return step_path_executable(step_type)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -93,14 +144,24 @@ SKILLS: dict[str, SkillDefinition] = {
             "intake summary."
         ),
         required_capabilities=[],
-        allowed_tools=["risk_case_fetch", "artifact_bundle"],
-        planning_steps=["fetch_case", "generate_artifact"],
+        allowed_tools=["risk_case_fetch", "artifact_bundle", "policy_lookup"],
+        planning_steps=["fetch_case", "retrieve_policy", "generate_artifact"],
         constraints=[
             "Runs at case level; ignores focused_finding_id.",
             "If no cached case context exists for the session, fetch_case "
             "must precede generate_artifact.",
             "generate_artifact may compose only from steps executed in "
             "this plan.",
+            # Policy retrieval is CASE-WIDE (the skill-registry expression of
+            # the capability/data-semantics correction): it needs no finding
+            # capability and is plannable for every finding via this always-
+            # eligible skill. The planner resolves retrieve_policy's
+            # finding_id from the focused finding (executor runtime
+            # injection), so a check_policy continuation can never become a
+            # dead button on a timeline-ineligible finding (P13/P19).
+            "retrieve_policy is a policy-context continuation: it never "
+            "substitutes for timeline investigation and its result reports "
+            "finding_policy_status (associated | no_finding_level_basis).",
         ],
     ),
     "timeline_investigation": SkillDefinition(
@@ -119,6 +180,7 @@ SKILLS: dict[str, SkillDefinition] = {
         ],
         planning_steps=[
             "inspect_timeline",
+            "inspect_evidence",
             "explain_signal",
             "retrieve_policy",
             "generate_artifact",
@@ -127,8 +189,11 @@ SKILLS: dict[str, SkillDefinition] = {
             "Requires InvestigationContext.focused_finding_id.",
             "Executable only if the focused finding declares capability "
             "'timeline'.",
-            "finding_drilldown is locked to view='timeline'; any other "
-            "view is invalid under this skill.",
+            "finding_drilldown is locked to view='timeline' for "
+            "inspect_timeline and view='evidence' for inspect_evidence; "
+            "any other view is invalid under this skill.",
+            "inspect_evidence (concrete evidence) retrieves the COMPLETE "
+            "record set; inspect_timeline stays a bounded navigation view.",
         ],
     ),
     "trade_investigation": SkillDefinition(

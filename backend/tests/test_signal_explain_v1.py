@@ -256,9 +256,14 @@ class TestIntegrationFailures:
         from app.adapters.risk_platform import RiskPlatformError
         case, cc = make_case()
         cc.pop("_raw_evidence", None)
+        # hermetic: patch both touch points (see malformed-response test)
         with patch(
+            "app.domain_tools.risk_case_fetch.RiskPlatformAdapter.fetch_case",
+            new=lambda self, uid: (
+                fx.rp_evidence_payload(uid), fx.rp_explanation_payload()),
+        ), patch(
             "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-            new=lambda self, uid: (_ for _ in ()).throw(
+            new=lambda self, uid, expose_complete_records=False: (_ for _ in ()).throw(
                 RiskPlatformError("unavailable", "Risk Platform timed out")),
         ):
             f = finding_by_title(case, "Coordinated Trading")
@@ -270,9 +275,16 @@ class TestIntegrationFailures:
     def test_malformed_rp_response_is_bounded_integration_error(self):
         case, cc = make_case()
         cc.pop("_raw_evidence", None)
+        # hermetic: patch BOTH RP touch points (case fetch for canonical
+        # finding resolution + evidence fetch for the malformed payload) so
+        # the test never requires a live Risk Platform.
         with patch(
+            "app.domain_tools.risk_case_fetch.RiskPlatformAdapter.fetch_case",
+            new=lambda self, uid: (
+                fx.rp_evidence_payload(uid), fx.rp_explanation_payload()),
+        ), patch(
             "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-            new=lambda self, uid: {"garbage": True},
+            new=lambda self, uid, expose_complete_records=False: {"garbage": True},
         ):
             f = finding_by_title(case, "ML Pattern")
             r = signal_explain(finding_id=f.finding_id, signal_type="ML",
@@ -329,7 +341,7 @@ class TestExecutorAndFollowUpIntegration:
             new=lambda self, uid: (evidence, fx.rp_explanation_payload()),
         ), patch(
             "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-            new=lambda self, uid: evidence,
+            new=lambda self, uid, expose_complete_records=False: evidence,
         ):
             provider = default_tool_provider()
             assert provider.has("signal_explain")
@@ -348,7 +360,7 @@ class TestExecutorAndFollowUpIntegration:
             new=lambda self, uid: (evidence, fx.rp_explanation_payload()),
         ), patch(
             "app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
-            new=lambda self, uid: evidence,
+            new=lambda self, uid, expose_complete_records=False: evidence,
         ):
             class FakeLLM:
                 def generate(self, messages, max_tokens=0, temperature=0.1):

@@ -942,10 +942,93 @@ real.
 
 ---
 
+## 13a. HTTP API Boundary (implementation)
+
+**Implemented** (`backend/app/api/investigations.py` + `schemas.py`;
+contract: `API_CONTRACT_V1.md`). Product-oriented HTTP boundary over the
+runtime — mounted from `main.py` via `include_router` under `/api/v2`;
+legacy `/api/tasks` endpoints remain untouched.
+
+- **Endpoints**: `POST /api/v2/investigations`,
+  `POST /api/v2/investigations/{id}/turn`,
+  `GET /api/v2/investigations/{id}`, `GET /api/v2/tasks/{task_id}`,
+  `GET /api/v2/tasks/{task_id}/artifacts`.
+- **InvestigationService is the execution boundary**: the API never calls
+  tools, PlannerV2, or ExecutorV2 directly.
+- **Multi-turn continuity**: server-generated stable `INV-…`
+  investigation_ids; the Investigation record and tasks persist in
+  TaskStoreV2 (`investigations` table added to the same SQLite store — no
+  second database); the evolved context and per-task plans/executions live
+  in a documented in-process session map (Week 1 gap, restart-lossy; the
+  HTTP contract is unaffected by later persistence).
+- **Context handling**: the only client-writable surface is an explicit
+  `context_action` (`focus_finding` / `focus_event` / `clear_focus`) which
+  sets `focus_source=user_selected`; clients cannot mutate capabilities,
+  findings, plans, tool calls, or task status, and cannot submit a raw
+  context object.
+- **Follow-up semantics**: `follow_up_id` is validated against the
+  server-side registry and reconstructed into the canonical intent — the
+  client never supplies tool/skill/argument names, and no direct
+  follow-up-execution endpoint exists.
+- **Bounded exposure**: task/turn responses carry plan step statuses and
+  outcome-level tool-call summaries — no internal class names, no stack
+  traces, no raw Risk Platform payloads. Errors use
+  `{"detail": {"code", "message"}}` envelopes (404 not-found, 422 invalid
+  input/follow-up, turn-level bounded failures in-body).
+- **DI/testability**: `InvestigationAPI` instances own their
+  service/store/findings-provider; tests inject fakes and reset the session
+  map — no order-dependent global state.
+- **Persistent investigation sessions** (Session persistence is a
+  session-management feature, not long-term semantic memory):
+  Browser UI → V2 API → TaskStoreV2 / SQLite → persistent investigation
+  state. The Investigation record, current InvestigationContext, per-task
+  plans, executed ToolCall records, and artifacts all persist in TaskStoreV2
+  (`investigations` / `tasks_v2` / `investigation_sessions` tables, one DB
+  file). The Week 1 process-local session map is gone. Conversation
+  reconstruction is a read-model projection: reopening an investigation
+  replays persisted tasks (task user_request as the user side, per-task
+  plan/tool-calls as the agent side) — nothing is re-executed.
+  **Refresh ≠ new investigation** (the client persists only the current
+  `investigation_id` as navigation state and reloads from the API);
+  **New Investigation is an explicit user action** that resets the
+  workspace without deleting the previous session; history list and
+  explicit confirmed deletion (`DELETE`) are provided. No search/ranking,
+  summarization, accounts, or sync — that is future scope.
+- **Frontend as API client** (`frontend/src/api/` + `components/investigation/` +
+  `pages/InvestigationPage.tsx`): the V2 Investigation Workspace renders
+  only the structured state returned by `/api/v2` — it never duplicates
+  backend intelligence (skill selection, capability derivation, planning,
+  tool selection, parameter locks, context resolution, follow-up
+  eligibility, citation validation, provenance are all backend-owned).
+  Findings/event selection submits supported `context_action`s; follow-up
+  chips submit `follow_up_id`s; both re-enter the normal pipeline. UI built
+  with the existing shadcn/ui + Tailwind setup (Card/Badge/Button/Tabs/
+  ScrollArea/Sheet/Accordion/Skeleton composition — no new component
+  library, no custom primitives).
+- **Case Reference Resolution** (`app/case_resolution.py`) — the
+  initial-request counterpart of Context Resolution, and deliberately
+  distinct from it:
+
+    INITIAL REQUEST → Case Reference Resolution → Investigation creation
+    → Investigation Context → Context Resolution → Skill Selection
+    → Planner → Executor
+
+  It resolves the canonical `case_id` for a *new* investigation from raw
+  input (`"00299"`, `"investigate case 00299"` → `"U00299"`) before the
+  investigation exists; Context Resolution resolves finding/event
+  references *after* investigation context exists. Deterministic regex
+  only (no LLM, no fuzzy matching); bounded outcomes
+  resolved/missing/ambiguous/invalid surfaced as 200/422/409 with
+  clarification messages. Subsequent turns remain
+  ContextResolver's responsibility — case parsing never enters it.
+
+---
+
 ## 14. Related Documents
 
 - **Skills contract (normative companion)**: `docs/architecture/SKILL_MODEL_V1.md`
 - **Domain model contract**: `docs/architecture/DOMAIN_MODELS_V1.md`
 - **Suggested Follow-ups contract**: `docs/architecture/FOLLOW_UP_MODEL_V1.md`
+- **HTTP API contract**: `docs/architecture/API_CONTRACT_V1.md`
 - Archived historical design material (non-authoritative): `docs/archive/README.md`
 - Operational run instructions: `backend/README.md`

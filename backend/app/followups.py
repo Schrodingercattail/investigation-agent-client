@@ -21,8 +21,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.models import FocusSource, InvestigationContext
-from app.skills import SKILLS, STEP_TOOL_MAP
+from app.models import FindingCapability, FocusSource, InvestigationContext
+from app.skills import SKILLS, STEP_TOOL_MAP, check_skill_eligibility
 
 logger = logging.getLogger(__name__)
 
@@ -50,19 +50,38 @@ class TriggerReason(str, Enum):
     SUCCESSFUL_TOOL_RESULT = "successful_tool_result"
 
 
+class FollowUpActionKind(str, Enum):
+    """Semantic kind of a suggested follow-up (P13): the UI must never
+    submit a navigation chip as an Agent request.
+
+    - AGENT_INTENT  : clicking submits the canonical intent as the next
+                      user turn (normal investigation entry point).
+    - UI_NAVIGATION : clicking performs a pure UI action (open/focus a
+                      panel); no turn, no Task, no Planner involvement.
+    """
+    AGENT_INTENT = "agent_intent"
+    UI_NAVIGATION = "ui_navigation"
+
+
 class FollowUp(BaseModel):
-    """One suggested next-turn investigation entry point. No execution
-    behavior — the `intent` is submitted as the next user request and flows
-    through the standard pipeline (planner/executor decide the real work)."""
+    """One suggested next-step entry point (FOLLOW_UP_MODEL_V1).
+
+    `action_kind` keeps display guidance, Agent actions, and UI navigation
+    semantically distinct:
+    - agent_intent  → the UI submits `intent` as the next user request.
+    - ui_navigation → the UI performs the navigation and sends NOTHING to
+      the Agent; `intent` is documentation for humans/tests only.
+    """
 
     follow_up_id: str
     label: str
-    intent: str                        # structured intent text for the next turn
+    intent: str                        # canonical intent text for the next turn
     required_capabilities: list[str] = Field(default_factory=list)
     applicable_context: FollowUpApplicableContext
     target_skill: str | None = None    # hint only; planner stays authoritative
     target_step: str | None = None     # hint only
     reason: str | None = None
+    action_kind: FollowUpActionKind = FollowUpActionKind.AGENT_INTENT
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +103,7 @@ class CandidateTemplate(BaseModel):
     target_step: str
     rank: int                          # lower = offered first
     reason: str
+    action_kind: FollowUpActionKind = FollowUpActionKind.AGENT_INTENT
 
 
 FINDING_TEMPLATES: list[CandidateTemplate] = [
@@ -113,9 +133,16 @@ FINDING_TEMPLATES: list[CandidateTemplate] = [
         follow_up_id="check_policy",
         label="Which policy requirements apply?",
         intent="Which policy requirements apply to this finding?",
-        required_capabilities=["policy_lookup"],
+        # No capability gate: policy retrieval is case-wide, so this
+        # follow-up is executable for every focused finding. It routes
+        # through case_intake (always eligible — no required capabilities),
+        # whose retrieve_policy step is the registry's case-wide policy
+        # continuation; whether the finding carries a finding-level policy
+        # basis is answered by the result itself (finding_policy_status) —
+        # a data answer, never a dead button (P13/P19).
+        required_capabilities=[],
         applicable_context=FollowUpApplicableContext.FINDING,
-        target_skill="timeline_investigation",
+        target_skill="case_intake",
         target_step="retrieve_policy",
         rank=3,                        # policy continuation
         reason="Ground the finding in applicable policy requirements.",
@@ -132,15 +159,20 @@ FINDING_TEMPLATES: list[CandidateTemplate] = [
 # Case-level follow-ups require no finding focus and no capabilities.
 CASE_TEMPLATES: list[CandidateTemplate] = [
     CandidateTemplate(
-        follow_up_id="export_artifact",
-        label="Export investigation bundle",
-        intent="Generate a Markdown investigation bundle for this case.",
+        follow_up_id="check_artifact",
+        # §10 + P13: this is a UI NAVIGATION action — it opens/focuses the
+        # Artifacts panel to show the existing bundle. It is never submitted
+        # to the Agent as a natural-language request. (If no bundle exists
+        # yet the panel says so; the user can then ask for one explicitly.)
+        label="Check investigation bundle in the Artifacts",
+        intent="(navigates to the Artifacts panel — not an Agent request)",
         required_capabilities=[],
         applicable_context=FollowUpApplicableContext.CASE,
         target_skill="case_intake",
         target_step="generate_artifact",
         rank=4,                        # artifact continuation (last preference)
-        reason="Package the investigation into a shareable Markdown bundle.",
+        reason="Inspect the investigation bundle in the Artifacts panel.",
+        action_kind=FollowUpActionKind.UI_NAVIGATION,
     ),
 ]
 
@@ -193,23 +225,39 @@ def _implemented_tools() -> set[str]:
         return set()
 
 
-def _is_executable(template: CandidateTemplate, implemented: set[str]) -> bool:
-    """Executable-only rule (FOLLOW_UP_MODEL_V1 §3):
+def _is_executable(
+    template: CandidateTemplate,
+    implemented: set[str],
+    finding_capabilities: set[str] | None = None,
+) -> bool:
+    """Executable-only rule (FOLLOW_UP_MODEL_V1 §3) — SINGLE eligibility
+    truth:
       1. target skill exists,
-      2. target step exists in that skill's planning vocabulary,
-      3. step resolves to a registered tool binding,
-      4. for templates targeting tools without a live execution path this
+      2. target skill is ELIGIBLE for the current finding — the SAME
+         registry check the planner's candidate list uses
+         (SKILLS' required_capabilities via check_skill_eligibility). A
+         chip whose skill cannot be planned for this finding is a dead
+         button (P13) that would fail SKILL_NOT_ELIGIBLE, so it must not
+         be offered (P19).
+      3. target step exists in that skill's planning vocabulary,
+      4. step resolves to a registered tool binding,
+      5. for templates targeting tools without a live execution path this
          build, the candidate is omitted (no dead buttons).
 
-    Core Week 1 candidates (explain/show_timeline/check_policy) point at
-    registry-locked steps of the timeline_investigation skill — they are the
-    product surface. The stricter live-tool requirement applies to the
-    optional candidates (show_evidence/next_actions/verify_next/
-    export_artifact), which are simply not defined while their tools are
-    unimplemented (see template notes above).
+    Case-level templates (target_skill = case_intake, no required
+    capabilities) are eligible for every finding, so check_policy — whose
+    own required_capabilities are empty and whose skill-eligibility now
+    depends only on the target skill's gates — follows the same rule with
+    no per-chip special cases.
     """
     skill = SKILLS.get(template.target_skill)
     if skill is None:
+        return False
+    # Skill eligibility: the planner's own registry truth (one owner).
+    caps = (FindingCapability.model_validate(sorted(finding_capabilities))
+            if finding_capabilities is not None else None)
+    if not check_skill_eligibility(
+            template.target_skill, caps).valid:
         return False
     if template.target_step not in skill.planning_steps:
         return False
@@ -270,8 +318,9 @@ def select_followups(selection: SelectionInput) -> list[FollowUp]:
         # in as plain ids to keep this module decoupled from Finding storage)
         if not all(c in caps for c in t.required_capabilities):
             continue
-        # executable-only rule
-        if not _is_executable(t, implemented):
+        # executable-only rule — includes target-skill eligibility against
+        # the same finding capabilities the planner will use (one truth)
+        if not _is_executable(t, implemented, caps):
             continue
 
         # intent text: event-level intents reference the focused event id so
@@ -290,6 +339,7 @@ def select_followups(selection: SelectionInput) -> list[FollowUp]:
             target_skill=t.target_skill,
             target_step=t.target_step,
             reason=t.reason,
+            action_kind=t.action_kind,
         ))
 
     # stable ordering: contract preference rank, then declaration order

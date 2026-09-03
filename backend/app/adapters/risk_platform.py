@@ -132,9 +132,19 @@ class RiskPlatformAdapter:
 
     # --- public API -----------------------------------------------------------
 
-    async def get_case_evidence_raw(self, user_id: str) -> dict[str, Any]:
-        """GET /api/risk/cases/{user_id}/evidence → raw dict."""
-        return await self._request("GET", f"/api/risk/cases/{user_id}/evidence")
+    async def get_case_evidence_raw(
+        self, user_id: str, expose_complete_records: bool = False,
+    ) -> dict[str, Any]:
+        """GET /api/risk/cases/{user_id}/evidence → raw dict.
+
+        `expose_complete_records` opts into ALL stored transaction/withdrawal
+        records instead of RP's default top-5 representative subset — only
+        for concrete-evidence-level investigation, never as the default."""
+        return await self._request(
+            "GET",
+            f"/api/risk/cases/{user_id}/evidence"
+            + ("?expose_complete_records=true" if expose_complete_records else ""),
+        )
 
     async def get_case_explanation_raw(self, user_id: str) -> dict[str, Any]:
         """POST /api/risk/explain → raw dict."""
@@ -152,9 +162,13 @@ class RiskPlatformAdapter:
         explanation = self._run(self.get_case_explanation_raw(user_id))
         return evidence, explanation
 
-    def fetch_case_evidence(self, user_id: str) -> dict[str, Any]:
+    def fetch_case_evidence(
+        self, user_id: str, expose_complete_records: bool = False,
+    ) -> dict[str, Any]:
         """Sync wrapper: GET /api/risk/cases/{user_id}/evidence only."""
-        return self._run(self.get_case_evidence_raw(user_id))
+        return self._run(self.get_case_evidence_raw(
+            user_id, expose_complete_records=expose_complete_records,
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +195,6 @@ def derive_capabilities(
     withdrawal_evidence_count: int = 0,
     opposite_trade_ratio: float | None = None,
     has_rule_trigger: bool,
-    citations_for_finding: bool,
 ) -> FindingCapability:
     """Deterministic, testable capability derivation from ACTUAL available
     evidence. Never type-based blanket grants.
@@ -195,8 +208,12 @@ def derive_capabilities(
                          ratio finding).
     - signal_explain   : there is a real detection signal behind the finding
                          (triggered rule), OR ML detector signal exists.
-    - policy_lookup    : RP actually returned a citation usable for the
-                         finding's policy grounding.
+
+    Deliberately NOT derived here: policy_lookup. Policy retrieval is a
+    case-wide capability (RP exposes its single validated-citation surface
+    to every finding); whether a finding carries an authoritative
+    FINDING-LEVEL policy basis is a DATA question, answered by
+    finding.policy_refs presence — never conflated with retrieval support.
     """
     caps: set[str] = set()
 
@@ -226,9 +243,6 @@ def derive_capabilities(
     ))
     if has_rule_trigger or detector_named:
         caps.add("signal_explain")
-
-    if citations_for_finding:
-        caps.add("policy_lookup")
 
     return FindingCapability.model_validate(sorted(caps))
 
@@ -309,10 +323,6 @@ def normalize_case(
     key_findings: list[str] = explanation.get("key_findings") or []
     rule_names = {r.get("rule_name", "") for r in rules}
 
-    cited_chunks = {c.get("chunk_id") for c in (explanation.get("citations") or [])}
-    cite_docs = {c.get("doc") for c in (explanation.get("citations") or [])}
-    has_any_citation = bool(policy_refs)
-
     transaction_count = len(transactions)
     withdrawal_count = len(withdrawals)
     opp_ratio = features.get("opposite_trade_ratio")
@@ -323,7 +333,7 @@ def normalize_case(
     def build_finding(
         name: str, summary: str, *, finding_id: str,
         severity_hint: str = "unknown",
-        rule_triggered: bool, cited: bool,
+        rule_triggered: bool, finding_policy_refs: list[PolicyRef],
     ) -> Finding:
         finding_specific_refs = [
             r for r in signal_refs
@@ -339,8 +349,6 @@ def normalize_case(
             withdrawal_evidence_count=withdrawal_count,
             opposite_trade_ratio=opp_ratio if related_evidence else None,
             has_rule_trigger=rule_triggered or bool(finding_specific_refs),
-            citations_for_finding=cited or (cited_chunks and has_any_citation
-                                            and bool(related_evidence)),
         )
         return Finding(
             finding_id=finding_id,
@@ -351,13 +359,23 @@ def normalize_case(
             summary=summary,
             evidence_refs=related_evidence,
             signal_refs=finding_specific_refs,
-            policy_refs=policy_refs if cited else [],
+            policy_refs=finding_policy_refs,
             capabilities=capabilities,
             ext={},
         )
 
     # 1) Ordered canonical findings from explanation.key_findings (F1..Fn).
     #    The text embeds optional [n] markers; names are the leading phrase.
+    #    Citation association is MARKER-ONLY: a finding's policy_refs mirror
+    #    exactly the citations its own authoritative text marks with [n].
+    #    Case-level citations that appear elsewhere in the explanation are
+    #    exposed via the case-level policy_refs list — never copied onto
+    #    unmarked findings (no heuristic text matching; RP marker ids only).
+    #
+    #    Cross-section identity: rule_evidence names are matched against
+    #    explanation names through _normalize_finding_name so the SAME
+    #    authoritative finding is never appended twice merely because RP
+    #    renders the name with/without sentence punctuation.
     n_tx = len(transactions)
     n_wd = len(withdrawals)
     index = 1
@@ -365,51 +383,44 @@ def normalize_case(
     for kf_text in key_findings:
         name, summary = _split_key_finding(kf_text)
         name_l = name.lower()
-        cited = any(doc and any(tok in (name + " " + summary).lower()
-                                for tok in _citation_tokens(doc))
-                    for doc in cite_docs)
-        # Deterministic citation association: first `index` markers "[n]".
-        marker_match = None
-        for m in _CITATION_MARKER_RE.finditer(kf_text):
-            marker_match = m.group(1)
-            break
-        if marker_match is not None:
-            matched = [p for p in policy_refs if p.citation_id is not None
-                       and str(p.citation_id) == marker_match]
-            if matched:
-                policy_for_finding = matched
-                cited = True
-            else:
-                policy_for_finding = []
-        else:
-            policy_for_finding = []
+        seen_names.add(_normalize_finding_name(name))
+        marked_ids = list(dict.fromkeys(
+            m.group(1) for m in _CITATION_MARKER_RE.finditer(kf_text)
+        ))
+        by_id = {
+            str(p.citation_id): p for p in policy_refs
+            if p.citation_id is not None
+        }
+        policy_for_finding = [
+            by_id[mid] for mid in marked_ids if mid in by_id
+        ]
 
         rule_triggered = any(rn and rn.lower() in name_l for rn in rule_names)
         severity = _severity_from_rules(rules, name)
         f = build_finding(
             name, summary, finding_id=f"F{index}", severity_hint=severity,
-            rule_triggered=rule_triggered, cited=bool(policy_for_finding) or cited,
+            rule_triggered=rule_triggered,
+            finding_policy_refs=policy_for_finding,
         )
-        if policy_for_finding:
-            f.policy_refs = policy_for_finding
         findings.append(f)
-        seen_names.add(name)
         index += 1
 
     # 2) Structured rule findings the explanation did not mention (appended,
     #    preserving RP rule_evidence order) — still never invented content.
+    #    Identity uses the normalized name: a rule already covered by the
+    #    explanation is NOT a separate finding (no duplicate F10–F12).
     for rule in rules:
         rname = rule.get("rule_name", "")
-        if rname and rname not in seen_names:
+        if rname and _normalize_finding_name(rname) not in seen_names:
             f = build_finding(
                 rname, rule.get("description", ""),
                 finding_id=f"F{index}",
                 severity_hint=(rule.get("severity") or "unknown").lower(),
                 rule_triggered=True,
-                cited=False,
+                finding_policy_refs=[],
             )
             findings.append(f)
-            seen_names.add(rname)
+            seen_names.add(_normalize_finding_name(rname))
             index += 1
 
     return {
@@ -434,10 +445,17 @@ def normalize_case(
 _CITATION_MARKER_RE = __import__("re").compile(r"\[(\d+)\]")
 
 
-def _citation_tokens(doc: str) -> list[str]:
-    stem = doc.rsplit(".", 1)[0] if doc and "." in doc else (doc or "")
-    tokens = [tok.lower() for tok in __import__("re").split(r"[_\s]+", stem) if tok]
-    return tokens or [""]
+def _normalize_finding_name(name: str) -> str:
+    """Canonical form for cross-section finding-name identity.
+
+    RP's explanation text renders finding names with sentence punctuation
+    ('High withdrawal frequency.') while rule_evidence.rule_name carries the
+    same canonical name without it ('High withdrawal frequency'). Comparing
+    raw strings would treat the same authoritative finding as two distinct
+    ones and duplicate it. Normalization is punctuation/case-folding only —
+    it never merges genuinely different RP findings.
+    """
+    return " ".join(name.replace(".", " ").replace("—", " ").split()).lower().strip()
 
 
 def _split_key_finding(text: str) -> tuple[str, str]:
@@ -680,6 +698,108 @@ def _matching_rule(finding: Any, rules: list[dict[str, Any]]) -> dict[str, Any] 
                    or any(w in fl for w in rn.split() if len(w) > 3)):
             return rule
     return None
+
+
+# ---------------------------------------------------------------------------
+# Concrete evidence normalization (finding_drilldown view="evidence")
+#
+# Purpose: the COMPLETE authoritative record set (all RP-stored withdrawals /
+# transactions for the case), fetched via RP's opt-in expose_complete_records
+# surface — never the default top-5 representative subset. Records are
+# mirrored verbatim; nothing is filtered to a preview and nothing is
+# fabricated when a stream is empty.
+# ---------------------------------------------------------------------------
+
+def normalize_evidence_records(
+    *,
+    case_id: str,
+    evidence: dict[str, Any],
+    finding: Any,
+) -> dict[str, Any]:
+    """Build the complete concrete-evidence payload for one finding.
+
+    Returns {records: [...], streams} where each record mirrors an actual RP
+    withdrawal/transaction row (id, core fields, timestamp, risk_reason).
+    Stream relevance mirrors the case normalizer's conservative name-keyword
+    rule: withdrawal findings carry all withdrawal records; trading/pattern
+    findings carry all transaction records. Nothing is truncated here —
+    completeness is the contract of this view.
+    """
+    finding_lower = finding.title.lower()
+
+    # Same conservative stream selection as the timeline normalizer.
+    wants_transactions = any(
+        kw in finding_lower for kw in ("trade", "trading", "transaction", "pattern detection")
+    )
+    wants_withdrawals = "withdrawal" in finding_lower
+
+    withdrawals = evidence.get("withdrawal_evidence") or []
+    transactions = evidence.get("transaction_evidence") or []
+
+    records: list[dict[str, Any]] = []
+
+    if wants_withdrawals:
+        for wd in withdrawals:
+            new_addr = wd.get("is_new_address")
+            records.append({
+                "record_kind": "withdrawal",
+                "record_id": wd.get("withdrawal_id", ""),
+                "summary": (
+                    f"Withdrawal of {wd.get('amount', 0)} {wd.get('asset', '')}"
+                    + (" to a newly encountered address" if new_addr else "")
+                ),
+                "amount": wd.get("amount"),
+                "asset": wd.get("asset"),
+                "address": wd.get("address"),
+                "is_new_address": new_addr,
+                "timestamp": wd.get("timestamp"),
+                "risk_reason": wd.get("risk_reason"),
+            })
+
+    if wants_transactions:
+        for tx in transactions:
+            records.append({
+                "record_kind": "transaction",
+                "record_id": tx.get("transaction_id", ""),
+                "summary": (
+                    f"{tx.get('side', 'Trade').upper()} trade of "
+                    f"{tx.get('quantity', 0)} {tx.get('symbol', '')} "
+                    f"({tx.get('value', 0):,.2f} value)"
+                ),
+                "symbol": tx.get("symbol"),
+                "side": tx.get("side"),
+                "quantity": tx.get("quantity"),
+                "value": tx.get("value"),
+                "timestamp": tx.get("timestamp"),
+                "risk_reason": tx.get("risk_reason"),
+            })
+
+    # Deterministic order: timestamp, then id — stable across calls.
+    records.sort(key=lambda r: (r.get("timestamp") or "", r.get("record_id", "")))
+
+    # Feature-level facts are NOT records — they are carried separately so
+    # aggregate counts ("7 withdrawals in 24h") are never conflated with the
+    # concrete record list.
+    features = evidence.get("feature_evidence") or {}
+    relevant_features = {
+        k: features[k] for k in (
+            "withdrawal_frequency_24h", "withdrawal_volume_24h",
+            "withdrawal_risk_score", "trade_frequency_24h",
+            "trade_frequency_7d", "trade_volume_24h",
+            "opposite_trade_ratio", "shared_device_count",
+            "linked_account_count", "account_age_days",
+        ) if features.get(k) is not None
+    }
+
+    return {
+        "records": records,
+        "record_count": len(records),
+        "risk_features": relevant_features,
+        "streams": {
+            "withdrawals_included": wants_withdrawals,
+            "transactions_included": wants_transactions,
+        },
+    }
 
 
 def _finding_signal_refs(finding: Any) -> list[dict[str, Any]]:
