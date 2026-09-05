@@ -45,6 +45,7 @@ from app.models import (
     ToolResultOutcome,
 )
 from app.skills import SKILLS, check_plan
+from app import telemetry as _telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +103,17 @@ def default_tool_provider() -> ToolProvider:
         # no top_n injection: an ordinary timeline request is COMPLETE;
         # only an explicit user-requested subset passes top_n (P4)
         **({"top_n": args["top_n"]} if "top_n" in args else {}),
+        # explicit evidence-stream scope (withdrawals/transactions): when
+        # supplied it governs which RP stream is returned — never the
+        # finding-title heuristic
+        stream=args.get("stream"),
         case_id=args.get("case_id"),
     ))
     provider.register("signal_explain", lambda args: signal_explain(
         finding_id=args.get("finding_id", ""),
-        signal_type=args.get("signal_type", "Rule"),
+        # None (not "Rule"): the tool derives the detector identity from the
+        # focused finding's authoritative signal_refs when not explicit.
+        signal_type=args.get("signal_type"),
         case_id=args.get("case_id"),
     ))
     provider.register("policy_lookup", lambda args: policy_lookup(
@@ -178,7 +185,11 @@ class ExecutorV2:
         self.task_store = task_store
 
     @staticmethod
-    def _runtime_arguments(step: PlanStep, context: InvestigationContext) -> dict[str, Any]:
+    def _runtime_arguments(
+        step: PlanStep,
+        context: InvestigationContext,
+        focused_finding: Any | None = None,
+    ) -> dict[str, Any]:
         """Inject structural arguments derived from the investigation context
         at execution time (planner-provided locked args are never overridden).
 
@@ -190,7 +201,8 @@ class ExecutorV2:
         if step.type == "fetch_case" and "case_id" not in args:
             args["case_id"] = context.case_id
         if step.type in ("inspect_timeline", "inspect_evidence",
-                         "inspect_opposite_trades") \
+                         "inspect_opposite_trades",
+                         "inspect_withdrawals", "inspect_transactions") \
                 and "finding_id" not in args:
             # Focus Mode: the focused finding is the canonical drilldown
             # target; the planner never picks entity ids.
@@ -198,13 +210,29 @@ class ExecutorV2:
         if step.type == "explain_signal" and "finding_id" not in args:
             args["finding_id"] = context.focused_finding_id
         if step.type in ("inspect_timeline", "inspect_evidence",
-                         "inspect_opposite_trades",
+                         "inspect_opposite_trades", "inspect_withdrawals",
+                         "inspect_transactions",
                          "explain_signal") and "case_id" not in args:
             args["case_id"] = context.case_id
         if step.type == "explain_signal" and "signal_type" not in args:
-            # Week 1 default: explain the rule signal (the most common
-            # investigator question); the finding's own signals govern.
-            args["signal_type"] = "Rule"
+            # Detector identity derives from the focused finding's
+            # AUTHORITATIVE structured signal_refs — never a hard-coded
+            # detector default (an ML finding must be explained by ML).
+            # Precedence when several detector types back one finding:
+            # Rule > ML > Graph (registry primary-detector semantics).
+            detector_types: list[str] = []
+            if focused_finding is not None:
+                for ref in (getattr(focused_finding, "signal_refs", None)
+                            or []):
+                    st = (ref.get("signal_type")
+                          if isinstance(ref, dict)
+                          else getattr(ref, "signal_type", None))
+                    if st in ("ML", "Rule", "Graph") and st not in detector_types:
+                        detector_types.append(st)
+            precedence = {"Rule": 0, "ML": 1, "Graph": 2}
+            detector_types.sort(key=lambda t: precedence.get(t, 99))
+            args["signal_type"] = detector_types[0] if detector_types \
+                else None
         if step.type == "retrieve_policy":
             if "finding_id" not in args:
                 args["finding_id"] = context.focused_finding_id
@@ -281,6 +309,55 @@ class ExecutorV2:
         context: InvestigationContext,
         finding_capabilities: FindingCapability | None = None,
         prior_tool_calls: list[ToolCallV2] | None = None,
+        focused_finding: Any | None = None,
+    ) -> ExecutionResult:
+        """Thin telemetry envelope around the execution body. Captures
+        executed step types, tool names, status, and latency only —
+        reusing Task/Plan/ToolCall structures; best-effort, never
+        authoritative, never fails execution."""
+        started = _telemetry.now_ms()
+        try:
+            result = self._execute_inner(
+                plan, task, context,
+                finding_capabilities=finding_capabilities,
+                prior_tool_calls=prior_tool_calls,
+                focused_finding=focused_finding)
+        except Exception as e:
+            _telemetry.emit(_telemetry.AgentTelemetryEvent(
+                event_type="execution.failed",
+                request_id=(task.user_request or "")[:200] or None,
+                investigation_id=task.investigation_id,
+                case_id=context.case_id,
+                focused_finding_id=context.focused_finding_id,
+                execution_status="failed",
+                executed_step_types=[s.type for s in plan.steps],
+                tool_names=[],
+                execution_latency_ms=_telemetry.elapsed_ms(started),
+            ))
+            raise
+        failed = result.status.value != "completed"
+        _telemetry.emit(_telemetry.AgentTelemetryEvent(
+            event_type=("execution.failed" if failed
+                        else "execution.completed"),
+            request_id=(task.user_request or "")[:200] or None,
+            investigation_id=task.investigation_id,
+            case_id=context.case_id,
+            focused_finding_id=context.focused_finding_id,
+            execution_status=result.status.value,
+            executed_step_types=[s.type for s in plan.steps],
+            tool_names=[tc.tool_name for tc in result.tool_calls],
+            execution_latency_ms=_telemetry.elapsed_ms(started),
+        ))
+        return result
+
+    def _execute_inner(
+        self,
+        plan: Plan,
+        task: TaskV2,
+        context: InvestigationContext,
+        finding_capabilities: FindingCapability | None = None,
+        prior_tool_calls: list[ToolCallV2] | None = None,
+        focused_finding: Any | None = None,
     ) -> ExecutionResult:
         """Execute one validated plan. Never generates a plan, never retries.
 
@@ -288,6 +365,12 @@ class ExecutorV2:
         the same investigation (supplied by the orchestration layer). They are
         available as artifact provenance sources but are never re-executed
         and never counted as this task's own tool_call_ids.
+
+        `focused_finding`: the authoritative Finding model for the focused
+        finding, when one is focused (supplied by the orchestration layer).
+        Runtime argument injection reads its structured signal_refs to
+        derive the detector identity for explain_signal — never a
+        hard-coded detector default.
         """
         # 1) Runtime contract re-validation BEFORE anything executes.
         selected_skill = task.selected_skill
@@ -350,6 +433,7 @@ class ExecutorV2:
                 collected_artifact_ids=artifact_ids,
                 collected_artifacts=collected_artifacts,
                 provenance_pool=provenance_pool,
+                focused_finding=focused_finding,
             )
             if step_error is not None:
                 fatal_error = step_error
@@ -391,6 +475,7 @@ class ExecutorV2:
         collected_artifacts: list[dict[str, Any]],
         provenance_pool: list[ToolCallV2] | None = None,
         user_request: str = "",
+        focused_finding: Any | None = None,
     ) -> ExecutorError | None:
         """Execute one plan step. Returns an ExecutorError when it is fatal
         (unimplemented tool / raised exception), else None."""
@@ -437,7 +522,8 @@ class ExecutorV2:
                                          + collected_calls,
                                          user_request=user_request)
                 if step.type == "generate_artifact"
-                else self._runtime_arguments(step, context)
+                else self._runtime_arguments(step, context,
+                                             focused_finding=focused_finding)
             ),
             status=ToolCallStatusV2.RUNNING,
             started_at=_now(),

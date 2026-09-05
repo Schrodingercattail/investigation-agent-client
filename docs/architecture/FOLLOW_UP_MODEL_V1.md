@@ -114,7 +114,7 @@ a target step has no implemented tool, the follow-up must not be displayed).
 | `show_supporting_evidence` | Show supporting evidence | `timeline` | timeline_investigation / inspect_timeline | ✅ via finding_drilldown (timeline view) |
 | `check_policy_requirements` | Which policy requirements apply? | — (none; policy retrieval is case-wide) | case_intake / retrieve_policy | ✅ `policy_lookup` tool implemented (executes for every focused finding; result reports `finding_policy_status`) |
 | `show_related_timeline` | Show related timeline | `timeline` | timeline_investigation / inspect_timeline | ✅ via finding_drilldown (timeline view) |
-| `generate_next_step_checklist` | Generate next-step investigation checklist | — | case_intake / generate_artifact | — future (`artifact_bundle` unimplemented) |
+| `generate_next_step_checklist` | Generate next-step investigation checklist | — | case_intake / generate_artifact | — `artifact_bundle` implemented; checklist candidate deliberately not defined |
 
 ### Timeline Event-level candidates
 

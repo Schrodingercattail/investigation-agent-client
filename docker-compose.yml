@@ -1,0 +1,39 @@
+# Week 1 release packaging — Investigation Agent Client.
+#
+# The Risk Platform is an EXTERNAL dependency (separate repository). It must
+# already be running and reachable at RISK_PLATFORM_BASE_URL before the Agent
+# backend is used — this Compose file does not include or start it.
+#
+#   browser → frontend (nginx, static + /api proxy) → backend (FastAPI) → Risk Platform
+
+services:
+  backend:
+    build: ./backend
+    container_name: agent-backend
+    environment:
+      # External Risk Platform — set to a host-reachable URL.
+      # From the host's perspective Docker Desktop provides host.docker.internal.
+      - RISK_PLATFORM_BASE_URL=${RISK_PLATFORM_BASE_URL:-http://host.docker.internal:8000}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-glm-5.3}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    build: ./frontend
+    container_name: agent-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3001:80"

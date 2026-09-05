@@ -715,23 +715,35 @@ def normalize_evidence_records(
     case_id: str,
     evidence: dict[str, Any],
     finding: Any,
+    stream: str | None = None,
 ) -> dict[str, Any]:
     """Build the complete concrete-evidence payload for one finding.
 
+    `stream` ("withdrawals" | "transactions" | None): an EXPLICIT
+    evidence-stream scope supplied by the caller (derived from the user's
+    request). When set it GOVERNS stream selection and overrides the
+    finding-title heuristic — a withdrawal request can never silently
+    return transaction records. None keeps the conservative title-keyword
+    rule for unscoped evidence requests.
+
     Returns {records: [...], streams} where each record mirrors an actual RP
     withdrawal/transaction row (id, core fields, timestamp, risk_reason).
-    Stream relevance mirrors the case normalizer's conservative name-keyword
-    rule: withdrawal findings carry all withdrawal records; trading/pattern
-    findings carry all transaction records. Nothing is truncated here —
-    completeness is the contract of this view.
+    Nothing is truncated here — completeness is the contract of this view.
     """
     finding_lower = finding.title.lower()
 
-    # Same conservative stream selection as the timeline normalizer.
-    wants_transactions = any(
-        kw in finding_lower for kw in ("trade", "trading", "transaction", "pattern detection")
-    )
-    wants_withdrawals = "withdrawal" in finding_lower
+    # Stream selection: an explicit stream scope governs; otherwise the
+    # conservative title-keyword rule applies (unscoped evidence requests).
+    if stream == "withdrawals":
+        wants_transactions, wants_withdrawals = False, True
+    elif stream == "transactions":
+        wants_transactions, wants_withdrawals = True, False
+    else:
+        # Same conservative stream selection as the timeline normalizer.
+        wants_transactions = any(
+            kw in finding_lower for kw in ("trade", "trading", "transaction", "pattern detection")
+        )
+        wants_withdrawals = "withdrawal" in finding_lower
 
     withdrawals = evidence.get("withdrawal_evidence") or []
     transactions = evidence.get("transaction_evidence") or []

@@ -52,6 +52,12 @@ from app.task_store_v2 import TaskStoreV2
 
 logger = logging.getLogger(__name__)
 
+from app.composition import (
+    detection_mechanism_sentence,
+    gap_confirmation_clause,
+    gap_statement,
+)
+
 _CITATION_MARKER_RE = __import__("re").compile(r"\s*\[\d+\]")
 
 # Human-readable names for RP ML risk-feature fields (semantics verified in
@@ -236,6 +242,25 @@ def compose_response(
     prose: list[str] = []
     lines: list[str] = []
 
+    # P5 response-ownership rule, keyed on what the user ASKED for:
+    # - ARTIFACT request turn: fetch_case may run as an internal
+    #   prerequisite (supplying the findings the bundle composes from),
+    #   but its payload must NOT replay the intake summary — the artifact
+    #   confirmation owns the conversational answer.
+    # - CASE INTAKE turn (accepted product behavior): intake generates the
+    #   case-scoped artifact AND the intake summary owns the conversational
+    #   answer; the artifact confirmation is a valid additional output.
+    from app.context_resolution import _classify_request_intent
+    from app.models import RequestIntent
+    artifact_requested = _classify_request_intent(user_request) in (
+        RequestIntent.ARTIFACT_CASE, RequestIntent.ARTIFACT_FINDING)
+    artifact_generated = any(
+        tc.result is not None
+        and isinstance((tc.result.data or {}).get("artifact"), dict)
+        for tc in tool_calls
+        if tc.result is not None and isinstance(tc.result.data, dict)
+    )
+
     for tc in tool_calls:
         result = tc.result
         if result is None:
@@ -245,6 +270,11 @@ def compose_response(
             data = result.data if isinstance(result.data, dict) else {}
 
             # ---- human-readable prose per payload kind ------------------
+            if artifact_requested and artifact_generated \
+                    and data.get("findings") is not None:
+                # internal prerequisite fetch for artifact generation:
+                # no intake prose, no finding list below (P5).
+                continue
             if data.get("findings") is not None and not prose:
                 findings = data.get("findings") or []
                 case_id = data.get("case_id") or ""
@@ -289,7 +319,19 @@ def compose_response(
                         + ", shown below in chronological order."
                     )
             elif data.get("signal_type") == "Rule" and "rule" in data:
+                # 1) detection mechanism (deterministic, from the payload).
+                # When the confirmed-fact sentence below already names the
+                # rule, use the mechanism sentence WITHOUT the rule name —
+                # never a duplicated restatement (P7).
                 rule = data["rule"]
+                _fact_names_rule = bool(rule.get("name")) and bool(
+                    rule.get("description") or rule.get("trigger_values"))
+                mechanism = detection_mechanism_sentence(data)
+                if _fact_names_rule and mechanism and rule.get("name"):
+                    mechanism = mechanism.replace(
+                        f" (the {rule['name']} rule)", "")
+                prose.append(mechanism)
+                # 2) confirmed finding fact — RP's own structured rule data
                 name = rule.get("name") or "the rule"
                 trigger = rule.get("trigger_values") or {}
                 threshold = rule.get("threshold")
@@ -322,13 +364,33 @@ def compose_response(
                         f"The finding was flagged by the rule {name}."
                     )
             elif data.get("signal_type") == "ML" and "explanation" in data:
+                # 1) detection mechanism (deterministic, from the payload)
+                prose.append(detection_mechanism_sentence(data))
+                # 2) confirmed fact: the model score
                 ex = data["explanation"]
                 if "ml_score" in ex:
                     prose.append(
-                        "The finding was flagged by the ML pattern "
-                        f"detector: score {ex['ml_score']}/100 "
+                        f"The model score is {ex['ml_score']}/100 "
                         f"({ex.get('score_interpretation', 'a system signal')})."
                     )
+            elif data.get("signal_type") == "Graph" and "explanation" in data:
+                prose.append(detection_mechanism_sentence(data))
+            elif data.get("signal_type") == "Rule" \
+                    and "explanation" in data:
+                # rule requested but NO backing rule exists in RP data —
+                # still identify the detection mechanism deterministically
+                prose.append(detection_mechanism_sentence(data))
+            if data.get("evidence_missing") and not data.get("records") \
+                    and data.get("signal_type") in ("ML", "Rule", "Graph") \
+                    and prose:
+                # 3) missing explanatory evidence for a signal explanation —
+                # appended AFTER the mechanism/confirmed-fact sentences as
+                # the grammatical continuation of the LAST signal sentence
+                # (never a widened claim; P14). Ordered: mechanism →
+                # confirmed fact → missing evidence.
+                clause = gap_confirmation_clause(data)
+                if clause:
+                    prose[-1] = prose[-1].rstrip(".") + clause + "."
             if data.get("evidence_missing") and not data.get("records"):
                 # P14: the gap sentence must NAME the actual gap — a
                 # subsystem-specific flag must never become a generic
@@ -343,12 +405,22 @@ def compose_response(
                     # that transaction records are missing (the inherited
                     # flag may reflect an unrelated policy-metadata gap).
                     pass
+                elif data.get("signal_type") in ("ML", "Rule", "Graph"):
+                    pass          # signal branch above appended the
+                    # producer-specific gap as the continuation of the
+                    # detection-mechanism/confirmed-fact sentence
                 else:
-                    prose.append(
-                        "The Risk Platform confirms the finding, but "
-                        "complete transaction-level evidence is not "
-                        "available through the current data surface."
-                    )
+                    # Producer-specific gap semantics (shared with the
+                    # artifact gap renderer): the sentence names exactly the
+                    # missing item(s) from next_data_needed — never widened
+                    # into "transaction-level evidence unavailable" unless
+                    # transaction records are actually the missing item.
+                    statement = gap_statement(data)
+                    if statement:
+                        prose.append(
+                            "The Risk Platform confirms the finding, but "
+                            f"{statement[0].lower() + statement[1:]}"
+                        )
 
             # ---- structured supporting detail ---------------------------
             if data.get("evidence_missing") \
@@ -424,7 +496,11 @@ def compose_response(
                 if parts:
                     lines.append(_strip_citation_markers(
                         "Details: " + " — ".join(parts) + "."))
-            if data.get("signal_type") == "ML" and "explanation" in data:
+            if data.get("signal_type") == "ML" and "explanation" in data \
+                    and not any(
+                        "The model score is" in p for p in prose):
+                # suppressed when the prose already carries the score
+                # (P7: no duplicated sentences)
                 ex = data["explanation"]
                 if "ml_score" in ex:
                     lines.append(
@@ -452,12 +528,17 @@ def compose_response(
                 # already sorts by relevance; associated first)
                 has_finding_basis = bool(associated)
                 if has_finding_basis:
-                    # finding-level contract (§12): max 2, associated first
-                    top = (associated + others)[:2]
+                    # finding-level contract (§12): the ASSOCIATED citations
+                    # are what "applies to this finding" — canonical with the
+                    # artifact's "Policy citations: [n]" (Finding.policy_refs).
+                    # Block 1 (finding-level): count includes ONLY associated
+                    # references.
+                    top = list(associated)
                     prose.append(
-                        f"{len(top)} policy reference"
-                        f"{'s apply' if len(top) != 1 else ' applies'} to "
-                        "this finding:"
+                        f"For this finding, {len(associated)} policy "
+                        f"reference"
+                        f"{'s apply' if len(associated) != 1 else ' applies'}"
+                        " directly:"
                     )
                 else:
                     # case-level contract: the complete authoritative set —
@@ -478,6 +559,24 @@ def compose_response(
                         f"{i}. {m.get('document', '')} — "
                         f"{m.get('section', '')}{cite}"
                     )
+                if has_finding_basis and others:
+                    # Block 2 (explicit scope transition, own count, labeled
+                    # case-level): never counted as finding support
+                    # (P9/anti-pattern G). Emitted AFTER the finding-level
+                    # list so the two scopes read as separate blocks.
+                    lines.append(
+                        f"Additionally, {len(others)} case-level policy "
+                        f"reference"
+                        f"{'s apply' if len(others) != 1 else ' applies'}"
+                        " to the overall investigation:"
+                    )
+                    for i, m in enumerate(others, 1):
+                        cite = (f" [{m['citation_id']}]"
+                                if m.get("citation_id") is not None else "")
+                        lines.append(
+                            f"{i}. {m.get('document', '')} — "
+                            f"{m.get('section', '')}{cite}"
+                        )
                 if not matches or (data.get("evidence_missing") and not top):
                     lines.append(
                         "No directly relevant policy references are "
@@ -776,6 +875,7 @@ class InvestigationService:
         execution = self.executor.execute(
             plan, task, resolved_ctx, finding_capabilities=finding_caps,
             prior_tool_calls=prior_tool_calls,
+            focused_finding=focused_finding,
         )
         # executor mutates/persists the task itself when a store is attached
         # to it; keep our task object in sync for the result payload.

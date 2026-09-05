@@ -290,6 +290,8 @@ data without the bounded turn summary carrying raw payloads:
     {
       "tool_call_id": "TC-…",
       "tool_name": "signal_explain",
+      // signal_type may be derived from the focused finding's signal_refs
+      // when not explicitly requested
       "signal_explanation": { "signal_type": "Rule", "rule": {…},
                                "evidence_missing": false,
                                "next_data_needed": [] }
@@ -298,6 +300,8 @@ data without the bounded turn summary carrying raw payloads:
       "tool_call_id": "TC-…",
       "tool_name": "policy_lookup",
       "policy_context": { "topic": "…", "matches": [...],
+                          "finding_policy_status": "associated",
+                          // "associated" | "no_finding_level_basis"
                           "evidence_missing": false }
     },
     {
@@ -311,7 +315,10 @@ data without the bounded turn summary carrying raw payloads:
 
 Only sections actually present in the result payload appear; empty results,
 integration failures, and unsupported results are omitted (their bounded
-state is visible in the turn/task views).
+state is visible in the turn/task views). `evidence_missing` /
+`next_data_needed` remain on the ToolResult as internal runtime metadata
+(bounded honesty, conversation semantics, logging) but are **not rendered**
+as a user-facing artifact section.
 
 ---
 

@@ -92,7 +92,6 @@ export function InvestigationPage() {
   /** Backend-provided follow-ups for the CURRENT context (previewed via the
    * read-only followups endpoint once a finding is selected). Never
    * generated client-side; superseded by each turn response's own set. */
-  const [previewFollowUps, setPreviewFollowUps] = useState<FollowUp[]>([])
   /** Controlled value for the right-side Context/Artifacts tabs so UI
    * navigation follow-ups can focus the Artifacts panel. */
   const [rightTab, setRightTab] = useState<'context' | 'artifacts'>('context')
@@ -106,7 +105,6 @@ export function InvestigationPage() {
     persistInvestigationId(response.investigation_id)
     void refreshHistory()
     // the turn's own backend follow-ups supersede any previewed set
-    setPreviewFollowUps(response.follow_ups)
     setState((s) => ({
       ...s,
       phase: 'idle',
@@ -212,6 +210,24 @@ export function InvestigationPage() {
           conversation.push(t)
         }
 
+        // Restore the CURRENT-focus confirmation when the persisted context
+        // has a focused finding: focus is persisted investigation state, so
+        // the restored conversation opens by reflecting it (the historical
+        // per-selection confirmations were UI events around tasks and are
+        // represented by the tasks themselves).
+        const focusedId = restoredContext?.focused_finding_id ?? null
+        if (focusedId) {
+          const title = findings.find((f) => f.finding_id === focusedId)?.title
+          const label = title
+            ? `${focusedId} — ${title.replace(/\.$/, '')}`
+            : focusedId
+          conversation.push({
+            id: `ack-restored-${focusedId}`,
+            role: 'agent',
+            text: `You're now investigating ${label}.`,
+          })
+        }
+
         setState({
           investigationId: investigationId,
           context: restoredContext,
@@ -223,7 +239,6 @@ export function InvestigationPage() {
         })
         void timelineEvents
         setPendingFocus(null)
-        setPreviewFollowUps([])
         persistInvestigationId(investigationId)
         // preview follow-ups for the restored (possibly focused) context
         void refreshPreviewFollowUps(investigationId)
@@ -251,7 +266,6 @@ export function InvestigationPage() {
   const newInvestigation = useCallback(() => {
     setState(initialState)
     setPendingFocus(null)
-    setPreviewFollowUps([])
     setInput('')
     persistInvestigationId(null)
     void refreshHistory()
@@ -279,15 +293,18 @@ export function InvestigationPage() {
   /** Refresh findings from the task results API (read-only view of the
    * fetch_case result owned by the backend). */
   const refreshPreviewFollowUps = useCallback(
-    async (investigationId: string, contextAction?: FocusAction) => {
+    async (
+      investigationId: string,
+      contextAction?: FocusAction,
+    ): Promise<FollowUp[] | null> => {
       try {
         const payload = await investigationApi.listFollowups(
           investigationId, contextAction,
         )
-        setPreviewFollowUps(payload.follow_ups)
+        return payload.follow_ups
       } catch {
         // preview is best-effort; free-form chat is always available
-        setPreviewFollowUps([])
+        return null
       }
     },
     [],
@@ -407,17 +424,73 @@ export function InvestigationPage() {
     [state.investigationId, input, pendingFocus, startInvestigation, refreshFindings],
   )
 
+  /** Append a focus-confirmation as a normal conversation turn (a real
+   * historical event — never removed by later turns or refresh). Its
+   * Suggested Follow-ups are the backend-previewed set for the new
+   * selection. */
+  const appendFocusConfirmation = (
+    action: Exclude<FocusAction, { type: 'clear_focus' }>,
+    followUps: FollowUp[],
+  ) => {
+    const findingLabel = state.findings.find(
+      (f) => f.finding_id === action.finding_id,
+    )?.title
+    const label = findingLabel
+      ? `${action.finding_id} — ${findingLabel.replace(/\.$/, '')}`
+      : action.finding_id
+    setState((s) => ({
+      ...s,
+      turns: [
+        ...s.turns,
+        {
+          id: `ack-${action.type}-${action.finding_id}-${Date.now()}`,
+          role: 'agent' as const,
+          text:
+            action.type === 'focus_event'
+              ? `You're now investigating event ${action.event_id} of ${label}.`
+              : `You're now investigating ${label}.`,
+          followUps,
+        },
+      ],
+    }))
+  }
+
   /** Finding selection: pending context action for the NEXT turn (the
    * backend applies it; the frontend never mutates server context). The
    * backend's read-only followups endpoint previews what it will offer for
-   * this selection — displayed immediately, still executed via the next
-   * turn. */
+   * this selection; the confirmation turn renders immediately. */
   const selectFinding = (findingId: string) => {
     const action = { type: 'focus_finding' as const, finding_id: findingId }
     setPendingFocus(action)
+    appendFocusConfirmation(action, [])
     if (state.investigationId) {
-      void refreshPreviewFollowUps(state.investigationId, action)
+      void refreshPreviewFollowUps(state.investigationId, action).then(
+        (followUps) => {
+          if (followUps) {
+            appendPreviewFollowUpsToLastConfirmation(followUps)
+          }
+        },
+      )
     }
+  }
+
+  /** Attach the previewed follow-ups to the most recent focus confirmation
+   * turn (the async preview resolves after the confirmation is appended). */
+  const appendPreviewFollowUpsToLastConfirmation = (followUps: FollowUp[]) => {
+    setState((s) => {
+      const idx = [...s.turns].reverse().findIndex((t) => t.id.startsWith('ack-'))
+      if (idx === -1) return s
+      const realIdx = s.turns.length - 1 - idx
+      const turn = s.turns[realIdx]
+      return {
+        ...s,
+        turns: [
+          ...s.turns.slice(0, realIdx),
+          { ...turn, followUps },
+          ...s.turns.slice(realIdx + 1),
+        ],
+      }
+    })
   }
 
   const selectEvent = (eventId: string) => {
@@ -433,14 +506,20 @@ export function InvestigationPage() {
       event_id: eventId,
     }
     setPendingFocus(action)
+    appendFocusConfirmation(action, [])
     if (state.investigationId) {
-      void refreshPreviewFollowUps(state.investigationId, action)
+      void refreshPreviewFollowUps(state.investigationId, action).then(
+        (followUps) => {
+          if (followUps) {
+            appendPreviewFollowUpsToLastConfirmation(followUps)
+          }
+        },
+      )
     }
   }
 
   const clearFocus = () => {
     setPendingFocus({ type: 'clear_focus' })
-    setPreviewFollowUps([])
   }
 
   /** Pure UI navigation (P13): open/focus a panel. No Agent turn, no Task,
@@ -454,34 +533,13 @@ export function InvestigationPage() {
   const latestTurn = [...state.turns].reverse().find((t) => t.role === 'agent')
   const timelineEvents = useMemo(() => latestTurn?.timelineEvents ?? [], [latestTurn])
 
-  // Selection acknowledgment (presentation-only): when a finding/event is
-  // selected, the Agent message confirms the focus and carries the
-  // backend-previewed Suggested Follow-ups at its bottom. Superseded by the
-  // next real turn.
-  const focusedFindingTitle = state.findings.find(
-    (f) =>
-      f.finding_id ===
-      (pendingFocus && pendingFocus.type !== 'clear_focus'
-        ? pendingFocus.finding_id
-        : null),
-  )?.title
-  const acknowledgment: ConversationTurn | null = useMemo(() => {
-    if (!pendingFocus || !state.investigationId) return null
-    if (pendingFocus.type === 'clear_focus') return null
-    if (state.phase !== 'idle') return null
-    const findingLabel = focusedFindingTitle
-      ? `${pendingFocus.finding_id} — ${focusedFindingTitle.replace(/\.$/, '')}`
-      : pendingFocus.finding_id
-    return {
-      id: 'ack-selection',
-      role: 'agent',
-      text:
-        pendingFocus.type === 'focus_event'
-          ? `You're now investigating event ${pendingFocus.event_id} of ${findingLabel}.`
-          : `You're now investigating ${findingLabel}.`,
-      followUps: previewFollowUps,
-    }
-  }, [pendingFocus, state.investigationId, state.phase, focusedFindingTitle, previewFollowUps])
+  // Selection acknowledgment: a focus confirmation is a REAL conversation
+  // turn. When the user selects a finding/event, it is appended to
+  // `state.turns` immediately (see selectFinding/selectEvent) carrying the
+  // backend-previewed Suggested Follow-ups; later turns append after it and
+  // NEVER remove it. The conversation is a chronological record — historical
+  // confirmations survive focus switching, follow-up clicks, refresh, and
+  // restore because they are ordinary turns, not derived UI state.
 
   const findingsPanel = (
     <FindingsPanel
@@ -637,7 +695,7 @@ export function InvestigationPage() {
               onSelectFollowUp={(f) => void submitTurn({ followUp: f })}
               onNavigate={navigateTo}
               followUpsDisabled={state.phase !== 'idle'}
-              acknowledgment={acknowledgment}
+              focusedFindingId={effectiveContext?.focused_finding_id ?? null}
             />
           </div>
           <form

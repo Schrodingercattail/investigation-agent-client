@@ -208,8 +208,12 @@ class TestResolutionAndSemantics:
     def test_unknown_view_cannot_execute(self, case_U00299):
         f = withdrawal_finding(case_U00299)
         res = run_drilldown(case_U00299, f.finding_id, view="opposite_trades")
-        assert res.outcome == ToolResultOutcome.VALIDATION_ERROR
-        assert "opposite_trades" in res.error.message
+        # opposite_trades is a DISTINCT bounded semantic request
+        # (FIX E15): unsupported with capability context, never a generic
+        # validation error and never a silent evidence-stream fallback
+        assert res.outcome == ToolResultOutcome.UNSUPPORTED
+        assert res.error.code == "OPPOSITE_TRADES_NOT_SUPPORTED"
+        assert "opposite-trades" in res.error.message
         assert res.data is None                       # nothing executed
 
     def test_no_case_context_and_no_case_id(self):

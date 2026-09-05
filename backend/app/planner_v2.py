@@ -35,6 +35,7 @@ from app.skills import (
     planning_vocabulary,
     skill_path_executable,
 )
+from app import telemetry as _telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ INTENT → STEP GUIDANCE (when a listed step serves the intent, plan exactly tha
 - "why was this flagged" / detection-basis questions → explain_signal ONLY. Never combine it with inspect_timeline or inspect_evidence.
 - Vague explanatory language ("what's behind this", "tell me more", "what stands out", "walk me through") is AMBIGUOUS: plan explain_signal (the explanation level) — never inspect_evidence for these. inspect_evidence is reserved for requests that clearly ask for records ("show all withdrawals", "list every transaction", "show the evidence records").
 - timeline/chronology requests ("show related timeline", "show the timeline") → inspect_timeline. Without an explicit count, the result is the complete timeline — do not pass any count.
-- concrete-record requests ("show the withdrawals", "list all supporting transactions") → inspect_evidence. It returns the COMPLETE record set by contract — plan it alone.
+- concrete-record requests ("show the withdrawals", "list all supporting transactions") → inspect_evidence. It returns the COMPLETE record set by contract — plan it alone. When the request names a SPECIFIC evidence stream, plan the matching scoped step instead: withdrawal records ("show me all the withdrawals") → inspect_withdrawals; transaction/trade records ("show me all the transactions") → inspect_transactions. Never substitute one stream for another. Opposite-trade requests ("show me the opposite trade") are a DISTINCT semantic request: plan inspect_opposite_trades EXACTLY (it is a valid step — the runtime bounds it as unsupported when the focused finding lacks the opposite_trades capability). Never plan inspect_evidence (or any other step) for an opposite-trade request, and never substitute another stream for it.
 - policy/requirement questions → retrieve_policy.
 - EXPLICIT subset requests ("show me 5 examples", "show 5 recent events") → inspect_timeline with top_n set to the requested number. Never invent a count the user did not state.
 - artifact/export requests ("generate a Markdown investigation bundle", "export the investigation") → generate_artifact ONLY. Never prepend fetch_case for these: bundle composition uses already-executed results from this investigation. Only plan fetch_case when NO case context exists yet at all.
@@ -171,6 +172,63 @@ class PlannerV2:
     # --- public interface ---------------------------------------------------
 
     def plan(
+        self,
+        user_request: str,
+        context: InvestigationContext,
+        eligible_skills: list[str],
+        finding_capabilities: Any = None,
+    ) -> PlanResult:
+        """Thin telemetry envelope around the planning body. Captures
+        structured plan output and metadata only — no prompts, no model
+        reasoning. Best-effort: telemetry can never fail planning."""
+        started = _telemetry.now_ms()
+        _telemetry.emit(_telemetry.AgentTelemetryEvent(
+            event_type="planner.started",
+            request_id=(user_request or "")[:200] or None,
+            investigation_id=(f"CASE:{context.case_id}"
+                              if context.case_id else None),
+            case_id=context.case_id,
+            focused_finding_id=context.focused_finding_id,
+            model=(_telemetry.DEFAULT_MODEL),
+        ))
+        try:
+            result = self._plan_inner(user_request, context, eligible_skills,
+                                      finding_capabilities)
+        except Exception as e:
+            _telemetry.emit(_telemetry.AgentTelemetryEvent(
+                event_type="planner.failed",
+                request_id=(user_request or "")[:200] or None,
+                investigation_id=(f"CASE:{context.case_id}"
+                                  if context.case_id else None),
+                case_id=context.case_id,
+                focused_finding_id=context.focused_finding_id,
+                planner_status="failed",
+                planner_error=f"{type(e).__name__}",
+                planner_latency_ms=_telemetry.elapsed_ms(started),
+            ))
+            raise
+        failure_code = getattr(result, "code", None)
+        step_types = ([s.type for s in result.steps]
+                      if hasattr(result, "steps") else [])
+        step_args = ([s.arguments or {} for s in result.steps]
+                     if hasattr(result, "steps") else [])
+        _telemetry.emit(_telemetry.AgentTelemetryEvent(
+            event_type=("planner.failed" if failure_code
+                        else "planner.completed"),
+            request_id=(user_request or "")[:200] or None,
+            investigation_id=(f"CASE:{context.case_id}"
+                              if context.case_id else None),
+            case_id=context.case_id,
+            focused_finding_id=context.focused_finding_id,
+            planner_status=("failed" if failure_code else "completed"),
+            plan_step_types=step_types,
+            plan_arguments=step_args,
+            planner_error=(f"{failure_code}" if failure_code else None),
+            planner_latency_ms=_telemetry.elapsed_ms(started),
+        ))
+        return result
+
+    def _plan_inner(
         self,
         user_request: str,
         context: InvestigationContext,
@@ -241,7 +299,59 @@ class PlannerV2:
         # is a target-independent supported request (P5/P12). When the
         # focused skill offers generate_artifact, plan it directly — no LLM
         # round-trip, so such requests can never fail at the LLM boundary.
-        if _classify_request_intent(user_request) in (
+        request_intent = _classify_request_intent(user_request)
+
+        # 1a-0) Deterministic case-intake planning: a plain case-reference
+        # request ("Investigate U00299" / "调查U00299") IS the Case Intake
+        # operation — plan it deterministically as exactly:
+        #   fetch_case (authoritative case context + the intake summary)
+        #   generate_artifact (ACCEPTED product behavior: intake produces
+        #     the case-scoped investigation bundle immediately, so the UI's
+        #     "Check investigation bundle in the Artifacts" action always
+        #     has an artifact to show).
+        # Intake planning never consults the LLM; artifact generation is
+        # PART of the accepted intake behavior, not an optional extra.
+        if request_intent == RequestIntent.INVESTIGATION \
+                and _is_plain_case_intake(user_request):
+            intake_skill = next(
+                (sid for sid in known_eligible
+                 if "fetch_case" in SKILLS[sid].planning_steps),
+                None)
+            if intake_skill is not None:
+                art_steps = []
+                for i, st in enumerate(
+                        (st for st in SKILLS[intake_skill].planning_steps
+                         if st in ("fetch_case", "generate_artifact")), 1):
+                    binding = STEP_TOOL_MAP[st]
+                    art_steps.append(PlanStep(
+                        step_id=f"S{i}", type=st,
+                        reason="case intake request",
+                        status=PlanStepStatus.PENDING,
+                        tool_name=binding.tool_name,
+                        arguments=dict(binding.parameter_locks),
+                    ))
+                plan = Plan(
+                    plan_id=f"PLAN-{uuid.uuid4().hex[:12]}",
+                    investigation_id=_investigation_ref(context),
+                    goal="Establish the authoritative picture of the case.",
+                    steps=art_steps,
+                    created_at=None,
+                )
+                contract = check_plan(
+                    intake_skill, [s.model_copy() for s in art_steps],
+                    capabilities=finding_capabilities,
+                )
+                if not contract.valid:
+                    return PlanningFailure(
+                        code="PLAN_CONTRACT_VIOLATION",
+                        message="Deterministic intake plan failed contract "
+                                "validation.",
+                        detail={"errors": [e.model_dump()
+                                           for e in contract.errors]},
+                    )
+                return plan
+
+        if request_intent in (
                 RequestIntent.ARTIFACT_CASE, RequestIntent.ARTIFACT_FINDING):
             artifact_skill = next(
                 (sid for sid in known_eligible
@@ -375,9 +485,30 @@ class PlannerV2:
                 subset = _explicit_subset_count(user_request)
                 if subset is not None:
                     arguments["top_n"] = subset
+            # Evidence-stream specialization: when the user's own words name
+            # a concrete evidence stream, the generic evidence step becomes
+            # the explicitly-scoped step — so the requested stream governs
+            # tool behavior and can never be silently replaced by the
+            # finding-title heuristic (P5: the response answers the request).
+            # Opposite-trade wording specializes to inspect_opposite_trades
+            # (a DISTINCT semantic request): it must never be transformed
+            # into generic evidence — the tool bounds it as unsupported when
+            # the focused finding lacks the opposite_trades capability.
+            emitted_type = ls.type
+            if ls.type == "inspect_evidence":
+                if _is_opposite_trade_request(user_request):
+                    emitted_type = "inspect_opposite_trades"
+                    binding = STEP_TOOL_MAP["inspect_opposite_trades"]
+                    arguments = dict(binding.parameter_locks)
+                else:
+                    stream_step = _explicit_stream_step(user_request)
+                    if stream_step is not None:
+                        emitted_type = stream_step      # registry-valid type
+                        binding = STEP_TOOL_MAP[stream_step]
+                        arguments = dict(binding.parameter_locks)
             steps.append(PlanStep(
                 step_id=f"S{i}",
-                type=ls.type,
+                type=emitted_type,
                 reason=ls.reason,
                 status=PlanStepStatus.PENDING,
                 tool_name=binding.tool_name,
@@ -413,6 +544,74 @@ def _investigation_ref(context: InvestigationContext) -> str:
     # Week 1: the plan references its investigation session by case until the
     # task layer creates full Investigations (existing model keeps fields).
     return f"CASE:{context.case_id}"
+
+
+# Evidence-stream keywords: when the user's OWN words name a stream, the
+# evidence step is specialized to the explicitly-scoped registry step —
+# the stream can then never be silently replaced by the finding-title
+# heuristic (P5/P14). Purely deterministic echo of the user's vocabulary.
+_WITHDRAWAL_RE = __import__("re").compile(
+    r"withdrawal|提现|取款", __import__("re").IGNORECASE)
+# "opposite trade(s)" names the opposite-trade investigation (a separate,
+# explicitly unsupported capability) — never specialized to transactions.
+_TRANSACTION_RE = __import__("re").compile(
+    r"(?<!opposite )transactions?\b|trading|交易", __import__("re").IGNORECASE)
+# Opposite-trade wording names a DISTINCT semantic request (the
+# opposite-trades investigation) — never generic evidence, never another
+# stream. Matched before transaction wording precisely because "trade"
+# inside "opposite trade" would otherwise mis-specialize the request.
+_OPPOSITE_TRADE_RE = __import__("re").compile(
+    r"opposite[\s-]*trades?|反向交易|对向交易", __import__("re").IGNORECASE)
+
+
+def _is_opposite_trade_request(user_request: str) -> bool:
+    """True when the user's own words name the opposite-trade investigation.
+    Such requests specialize to inspect_opposite_trades — a distinct
+    semantic request that is bounded (unsupported without the
+    opposite_trades capability), never transformed into generic evidence."""
+    return bool(_OPPOSITE_TRADE_RE.search(user_request or ""))
+
+
+def _explicit_stream_step(user_request: str) -> str | None:
+    """The explicitly-scoped evidence step for the user's request, or None
+    when no concrete stream is named (generic inspect_evidence applies).
+    Withdrawal wording wins over transaction wording when both appear,
+    because the narrower noun is the specific ask."""
+    text = user_request or ""
+    if _WITHDRAWAL_RE.search(text):
+        return "inspect_withdrawals"
+    if _TRANSACTION_RE.search(text):
+        return "inspect_transactions"
+    return None
+
+
+# Case-reference pattern shared with Case/Context Resolution (same boundary
+# intelligence — CJK neighbours and intent words act as boundaries).
+_PLAIN_INTAKE_RE = __import__("re").compile(
+    r"(?<![A-Za-z0-9])[Uu]?\d{3,6}(?![0-9A-Za-z])")
+# Any deeper investigation ask disqualifies the plain-intake shortcut: such
+# requests are planned through the LLM (reasoning is useful there). This
+# includes artifact/export language — a compound request ("investigate X and
+# export the results") must NEVER be silently narrowed to intake-only.
+_DEEPER_ASK_RE = __import__("re").compile(
+    r"(artifact|bundle|export|report|导出|报告|policy|policies|政策|timeline|"
+    r"时间线|evidence|证据|signal|信号|why|为什么|finding|发现|withdrawal|"
+    r"交易|policy support|summar|总结|prepare)",
+    __import__("re").IGNORECASE,
+)
+
+
+def _is_plain_case_intake(user_request: str) -> bool:
+    """True for a PLAIN case-reference request ('Investigate U00299',
+    '调查90001', 'investigate case 00299'): the request names a case and
+    nothing else — the Case Intake operation itself. Conservative by
+    construction: any deeper investigation vocabulary (artifact, policy,
+    timeline, evidence, signals, findings, 'why') disqualifies it, and a
+    request without a case reference is never classified as intake here."""
+    text = (user_request or "").strip()
+    if not text or not _PLAIN_INTAKE_RE.search(text):
+        return False
+    return not _DEEPER_ASK_RE.search(text)
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$")

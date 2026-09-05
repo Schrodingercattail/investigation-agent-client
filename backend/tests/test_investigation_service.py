@@ -111,7 +111,10 @@ class TestHappyPaths:
         loaded = store.get(r.task.task_id)
         assert loaded is not None
         assert loaded.status == TaskStatusV2.COMPLETED
-        assert loaded.tool_call_ids == [r.execution.tool_calls[0].tool_call_id]
+        # deterministic intake plans fetch_case + generate_artifact — both
+        # calls are recorded on the task
+        assert loaded.tool_call_ids == \
+            [tc.tool_call_id for tc in r.execution.tool_calls]
         assert loaded.selected_skill == "case_intake"
         assert loaded.started_at and loaded.completed_at
 
@@ -167,9 +170,12 @@ class TestResponseComposition:
         )]
         text = compose_response(user_request="q", skill_id="timeline_investigation",
                                 plan=None, tool_calls=calls, execution_errors=[])
-        # human-readable gap statement, no raw flag names
-        assert "complete transaction-level evidence is not available" in text
+        # human-readable gap statement naming the ACTUAL missing item —
+        # the gap scope is never widened beyond next_data_needed (P14)
+        assert "not currently available from the Risk Platform" in text
         assert "per-trade attribution" in text
+        assert "complete transaction-level evidence is not available" \
+            not in text
 
     def test_empty_remains_distinct(self):
         calls = [ToolCallV2(

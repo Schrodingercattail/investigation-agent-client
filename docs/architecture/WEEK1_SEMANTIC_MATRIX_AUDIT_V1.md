@@ -287,3 +287,22 @@ Fix is shared (one check of each chip's `target_skill` against finding caps) —
 # Verdict
 
 **NOT READY TO FREEZE** — one P0 remains: follow-up chips can violate P13/P19 by submitting turns that are guaranteed to fail on any finding that lacks the `timeline` capability required by `timeline_investigation`. The fix is a single-ownership correction (followups must consult skill eligibility) plus the combination test class that previously missed the cross-case defect. Once that fix lands — with live verification that a signal_explain-only finding either suppresses the dead chips or their clicks succeed — every P0 is resolved and all other surfaces above show **No defect found** or documented trade-offs.
+
+---
+
+## SUPPLEMENT (post-audit resolution)
+
+The follow-up-chip P0 identified above has since been **resolved**:
+
+- Follow-up displayability now consults the Skill Registry's actual skill
+  eligibility (`check_skill_eligibility`) — the same eligibility truth the
+  planner uses — instead of only checking tool implementation
+  (`backend/app/followups.py`).
+- Skill eligibility and follow-up displayability therefore share a single
+  runtime eligibility truth; dead chips are excluded by construction and
+  pinned by `backend/tests/test_followup_eligibility_parity_v1.py`.
+- The current runtime has been revalidated after subsequent Week 1 fixes
+  (detector identity, explicit evidence streams, policy-scope clarity,
+  Evidence Gaps removal).
+
+The historical audit body above is preserved unchanged.

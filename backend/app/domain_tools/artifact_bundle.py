@@ -88,33 +88,20 @@ def _render_policy(policy_payload: dict[str, Any]) -> list[str]:
 
 
 def _render_gaps(payload: dict[str, Any]) -> list[str]:
-    """Precise per-payload gap statements (P14 bounded honesty): the gap
+    """Precise per-payload gap statements (P14 bounded honesty), from the
+    SHARED per-producer semantics (app.composition.gap_statement): the gap
     names the ACTUAL missing item — never a generic "evidence is
     insufficient" claim that would read as if the finding's investigated
-    evidence (timeline/records) were incomplete. A finding-level policy
-    association gap is a policy-metadata absence, not an evidence shortfall."""
+    evidence (timeline/records) were incomplete."""
+    from app.composition import gap_statement
     gaps: list[str] = []
-    if not payload.get("evidence_missing"):
+    statement = gap_statement(payload)
+    if statement is None:
         return gaps
-    needed = [str(nd) for nd in (payload.get("next_data_needed") or [])]
-    if payload.get("finding_policy_status") is not None:
-        # policy payload: the gap IS the missing finding-level association
-        gaps.append(
-            "No finding-level policy association is attached to this "
-            "finding."
-        )
-    elif needed:
-        # non-policy payload: state each concrete missing item directly
-        for nd in needed:
-            gaps.append(f"- {nd} is not available from the Risk Platform.")
-    else:
-        # evidence_missing with no named item: bounded generic fallback
-        gaps.append(
-            "Some supporting data for this result is not available from "
-            "the Risk Platform."
-        )
-    for nd in needed:
+    gaps.append(statement)
+    for nd in (str(x) for x in (payload.get("next_data_needed") or [])):
         gaps.append(f"- Next data needed: {nd}")
+    return gaps
     return gaps
 
 
@@ -478,11 +465,26 @@ def artifact_bundle(
             if data.get("finding_id") not in (None, finding_id):
                 continue          # another finding's policy result
             if data.get("associated_policy_refs"):
-                # finding-associated citations: rendered via the Finding
-                # block (authoritative) — the table would duplicate them.
-                policy_lines.append(f"### {tc.tool_call_id}")
-                policy_lines.extend(_render_policy(data))
-                contributing_calls.append(tc)
+                # finding-associated citations: render ONLY the matches that
+                # are actually associated with THIS finding. data["matches"]
+                # is the ranked case-level list and may include citations
+                # belonging to other findings — those are case-scope
+                # presentation and must never appear here (P11: rendered
+                # policy citation IDs ⊆ associated_policy_refs).
+                associated_ids = {
+                    p.get("citation_id") if isinstance(p, dict)
+                    else getattr(p, "citation_id", None)
+                    for p in data["associated_policy_refs"]
+                }
+                scoped = dict(data)
+                scoped["matches"] = [
+                    m for m in data["matches"]
+                    if m.get("citation_id") in associated_ids
+                ]
+                if scoped["matches"]:
+                    policy_lines.append(f"### {tc.tool_call_id}")
+                    policy_lines.extend(_render_policy(scoped))
+                    contributing_calls.append(tc)
             elif not no_basis_statement_rendered:
                 # no finding-level basis: state it precisely; do NOT render
                 # the case-level fallback list as the finding's policy basis
@@ -558,20 +560,16 @@ def artifact_bundle(
                     and (data.get("records") or data.get("risk_features")):
                 contributing_calls.append(tc)
 
-    # --- evidence gaps (only explicitly reported ones) ---------------------------------
-    # Per-call attribution: a call is a gap contributor only when one of ITS
-    # gap lines actually rendered (first occurrence wins, executed order).
-    gaps = _gather_gaps(executed)
-    if gaps:
-        lines.append("")
-        lines.append("## Evidence Gaps")
-        lines.extend(gaps)
-    for tc in executed:
-        data = tc.result.data if isinstance(tc.result.data, dict) else {}
-        if data.get("evidence_missing") and any(
-                g in gaps for g in _render_gaps(data)):
-            if tc not in contributing_calls:
-                contributing_calls.append(tc)
+    # --- evidence gaps: NOT rendered in user-facing artifacts ---------------
+    # Product decision: "Evidence Gaps" (e.g. missing transaction-level
+    # feature attribution) exposes internal explanation limitations without
+    # investigation value, and can read as a false "evidence missing" claim
+    # beside complete Timeline/Evidence sections. The underlying
+    # evidence_missing / next_data_needed fields remain on the ToolResults
+    # (bounded honesty, conversation semantics, logging, future use) — only
+    # the artifact rendering is removed.
+    gaps = _gather_gaps(executed)          # still computed for the result
+    # metadata (evidence_missing / next_data_needed on the ToolResult payload)
 
     # --- provenance -----------------------------------------------------------------------
     # Provenance-correctness rule (§18/P10): contributing_calls accumulated

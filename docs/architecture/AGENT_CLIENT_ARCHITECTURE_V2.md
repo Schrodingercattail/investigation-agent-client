@@ -214,8 +214,15 @@ Hard rules:
   skill (§4.1a).
 - Produces a **structured plan**: an ordered list of steps drawn from the
   **selected skill's** `planning_steps` vocabulary, itself drawn from the
-  predefined step registry (e.g. `fetch_case`, `timeline`,
-  `signal_explain`, `policy_lookup`, `artifact`).
+  predefined step registry (current executable step types include
+  `fetch_case`, `inspect_timeline`, `inspect_evidence`,
+  `inspect_withdrawals`, `inspect_transactions`, `inspect_opposite_trades`
+  (capability-gated, non-executable without the `opposite_trades`
+  capability), `explain_signal`, `retrieve_policy`, `generate_artifact`).
+  Evidence requests naming a specific stream are specialized
+  deterministically to the scoped step (`inspect_withdrawals` /
+  `inspect_transactions`), so the requested stream governs tool behavior
+  and is never silently replaced via the finding-title heuristic.
 - Uses constrained prompting; the allowed step vocabulary comes from the
   selected skill and the registries, never invented by the LLM.
 
@@ -525,11 +532,20 @@ capability.
 - Findings and citations are reproduced **as-is** — no renaming, re-scoring,
   re-validation, or policy-ID re-mapping.
 
-### 6.2 `finding_drilldown(finding_id, view, top_n)`
+### 6.2 `finding_drilldown(finding_id, view, top_n, stream=None)`
 - **Solves**: "Show me the detail behind this specific finding."
 - **Week 1 views**:
   - `timeline` — chronological composition of relevant evidence events
-  - `opposite_trades` — trades composing an opposite-trade signal
+  - `evidence` — the COMPLETE concrete record set (withdrawals and/or
+    transactions), with an explicit optional **stream** scope:
+    `stream="withdrawals"` or `stream="transactions"` governs which Risk
+    Platform evidence stream is returned and **overrides** the
+    finding-title heuristic; a requested stream the finding does not have
+    is a bounded `unsupported` result — records are never silently
+    substituted across streams
+  - `opposite_trades` — registered but **non-executable** unless the
+    focused finding exposes the `opposite_trades` capability; never falls
+    back to ordinary transaction evidence
 - **top_n** bounds result size.
 - Views are **compositions** (filtering / ordering / bounding) of Risk
   Platform evidence data. They never recompute signals or thresholds.
@@ -568,9 +584,14 @@ future work. Implementation notes:
   → `empty`; RP failure → `integration_error`. `top_n` defaults 20, bounded
   to 100.
 
-### 6.3 `signal_explain(finding_id, signal_type)`
+### 6.3 `signal_explain(finding_id, signal_type=None)`
 - **Solves**: "Why did this finding get flagged?" for signal_type ∈
-  `{ML, Rule, Graph}`.
+  `{ML, Rule, Graph}`, or `signal_type=None` to DERIVE the detector
+  identity from the focused finding's authoritative `signal_refs`
+  (deterministic precedence Rule > ML > Graph; never a hard-coded default).
+- An explicitly requested detector type the finding does not back is a
+  bounded `unsupported` result (`SIGNAL_TYPE_NOT_SUPPORTED`) — a finding is
+  never silently explained as another detector type.
 - Explains **only from evidence actually available** from Risk Platform
   (triggered-rule data, feature values, scores, detection sources, narrative).
 - **Never fabricates** unavailable attribution (e.g. SHAP-style feature
@@ -674,11 +695,12 @@ executable. Implementation notes:
   `validation_error`.
 - **Deterministic rendering**: fixed section order (Case → Findings →
   Timeline → Signal Explanation → Policy References → Investigation
-  Evidence → Evidence Gaps → Source Tool Calls); Markdown tables for
-  timeline/policy; sha256 content-derived `artifact_id` (stable across
-  processes); no UUIDs or execution timestamps inside content. Sections with
-  no available data are omitted; `evidence_missing`/`next_data_needed` are
-  rendered as explicit **Evidence Gaps** — never converted to success prose.
+  Evidence → Source Tool Calls); Markdown tables for timeline/policy;
+  sha256 content-derived `artifact_id` (stable across processes); no UUIDs
+  or execution timestamps inside content. Sections with no available data
+  are omitted. `evidence_missing`/`next_data_needed` remain on the
+  ToolResult/execution state (bounded honesty, conversation semantics,
+  logging) but are **not rendered as a user-facing artifact section**.
 - **Provenance closure** (mandatory): `source_tool_calls` must be non-empty
   and reference actually-executed ToolCallV2 records; ArtifactV2 validation
   rejects empty provenance.
@@ -828,6 +850,33 @@ be replayed from the task log.
 own Task / Plan / ToolCall / Artifact records. There is no special logging
 path for follow-up-originated turns — they are indistinguishable in the log
 from free-form requests, which is what keeps follow-ups auditable.
+
+### 9.1 Telemetry Extension Point (thin, optional, non-authoritative)
+
+`backend/app/telemetry.py` defines a minimal **observational** telemetry
+contract: a typed `AgentTelemetryEvent` (event_type, timestamp,
+request/investigation/case/focus identifiers, agent/planner/prompt/model
+versions, planner status/step-types/arguments/latency, execution
+status/step-types/tool-names/latency, semantic_success/failure_category
+for evaluation runs) and a pluggable `TelemetrySink` protocol with a
+**no-op default** (plus an in-memory sink for tests).
+
+- PlannerV2 and ExecutorV2 emit `planner.started/completed/failed`,
+  `execution.started/completed/failed` events through a thin envelope;
+  they return exactly what they returned before, and telemetry can never
+  alter their results. A sink failure is isolated at the telemetry
+  boundary and logged — it can never break investigation execution.
+- Only structured plan OUTPUT and execution metadata are captured
+  (step types, arguments, tool names, status, latency). **No
+  chain-of-thought, no hidden reasoning, no raw prompts/model output** is
+  persisted.
+- Telemetry is **not authoritative**: it never becomes part of finding
+  truth, risk score, evidence truth, policy truth, capability truth, or
+  any execution decision. The same event contract supports
+  `semantic.evaluated` events from the offline evaluation runners
+  (semantic_success / failure_category / scenario_id), so future
+  production-derived evaluation cases can reuse it without coupling
+  production execution to evaluation infrastructure.
 
 ---
 

@@ -102,11 +102,18 @@ class TestRuleSignal:
                {ref["id"] for ref in r.data["evidence_refs"]}
 
     def test_rule_signal_without_backing_rule_is_success_plus_evidence_missing(self):
-        # finding exists, supports signal_explain, but no rule_evidence entry
-        # matches → available evidence insufficient, NOT empty, NOT error.
+        # finding exists, supports signal_explain, has NO detector refs at
+        # all (nothing to bound against) and no rule_evidence entry matches
+        # → available evidence insufficient, NOT empty, NOT error.
+        # (An EXPLICIT type mismatch against existing refs is bounded —
+        # covered in test_p0_composition_fixes_v1::TestFixA.)
         case, cc = make_case()
+        from app.models import Finding as FindingModel
         f = finding_by_title(case, "ML Pattern")
-        r = run(cc, f.finding_id, "Rule")
+        bare = FindingModel.model_validate(f.model_dump() | {"signal_refs": []})
+        cc2 = dict(cc)
+        cc2["findings"] = [bare]
+        r = run(cc2, bare.finding_id, "Rule")
         assert r.outcome == ToolResultOutcome.SUCCESS
         assert r.data["evidence_missing"] is True
         assert r.data["next_data_needed"]
@@ -180,9 +187,19 @@ class TestGraphSignal:
         assert r.data["explanation"]["relationship_paths_available"] is False
 
     def test_graph_without_network_evidence_reports_missing(self):
-        case, cc = make_case()   # fixture network_evidence is None
+        # graph gap wording on a finding whose signal_refs back Graph —
+        # (the ML finding + explicit Graph request is bounded per FIX A,
+        # tested in test_p0_composition_fixes_v1)
+        case, cc = make_case()
+        from app.models import Finding as FindingModel
         f = finding_by_title(case, "ML Pattern")
-        r = run(cc, f.finding_id, "Graph")
+        g = FindingModel.model_validate(f.model_dump() | {
+            "title": "Shared Device Relationships",
+            "signal_refs": [{"signal_type": "Graph",
+                             "name": "shared_device_count"}]})
+        cc2 = dict(cc)
+        cc2["findings"] = [g]
+        r = run(cc2, g.finding_id, "Graph")
         assert r.outcome == ToolResultOutcome.SUCCESS
         assert r.data["evidence_missing"] is True
         assert "network/cluster evidence" in " ".join(r.data["next_data_needed"])

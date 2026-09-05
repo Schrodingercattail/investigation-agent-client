@@ -47,7 +47,7 @@ def _validation_error(message: str) -> ToolResult:
 
 def signal_explain(
     finding_id: str,
-    signal_type: Literal["ML", "Rule", "Graph"],
+    signal_type: Literal["ML", "Rule", "Graph"] | None = None,
     case_id: str | None = None,
     case_context: dict[str, Any] | None = None,
 ) -> ToolResult:
@@ -55,7 +55,9 @@ def signal_explain(
 
     Args:
         finding_id: canonical Finding ID from the current case context.
-        signal_type: "ML" | "Rule" | "Graph".
+        signal_type: "ML" | "Rule" | "Graph", or None to DERIVE the
+            detector identity from the finding's authoritative signal_refs
+            (primary-detector precedence Rule > ML > Graph).
         case_id: case whose evidence is consulted (fallback when no
             case_context is supplied).
         case_context: canonical case payload from risk_case_fetch
@@ -70,10 +72,10 @@ def signal_explain(
         return _validation_error("finding_id is required (non-empty string).")
     finding_id = finding_id.strip()
 
-    if signal_type not in ALLOWED_SIGNAL_TYPES:
+    if signal_type is not None and signal_type not in ALLOWED_SIGNAL_TYPES:
         return _validation_error(
-            f"signal_type must be one of {list(ALLOWED_SIGNAL_TYPES)}, "
-            f"got {signal_type!r}."
+            f"signal_type must be one of {list(ALLOWED_SIGNAL_TYPES)} or "
+            f"None (derive from the finding), got {signal_type!r}."
         )
     if case_context is None and (not isinstance(case_id, str) or not case_id.strip()):
         return _validation_error(
@@ -104,6 +106,47 @@ def signal_explain(
             f"Finding {finding_id!r} does not exist in the current case context."
         )
     finding = matches[0]
+
+    # --- detector identity: authoritative signal_refs decide ------------------
+    # When signal_type is not explicitly supplied, derive it from the
+    # finding's own structured signal_refs (primary-detector precedence
+    # Rule > ML > Graph). An explicitly requested type the finding does not
+    # back is BOUNDED (unsupported) — never silently explained as another
+    # detector type.
+    finding_detector_types: list[str] = []
+    for ref in (finding.signal_refs or []):
+        st = ref.get("signal_type") if isinstance(ref, dict) \
+            else getattr(ref, "signal_type", None)
+        if st in ("ML", "Rule", "Graph") and st not in finding_detector_types:
+            finding_detector_types.append(st)
+    if signal_type is None:
+        precedence = {"Rule": 0, "ML": 1, "Graph": 2}
+        if finding_detector_types:
+            signal_type = sorted(
+                finding_detector_types,
+                key=lambda t: precedence.get(t, 99))[0]
+        else:
+            signal_type = "Rule"   # no structured signal: rule lookup below
+            # reports evidence_missing if nothing backs it (bounded)
+    elif finding_detector_types and signal_type not in finding_detector_types:
+        return ToolResult(
+            outcome=ToolResultOutcome.UNSUPPORTED,
+            error=ToolError(
+                code="SIGNAL_TYPE_NOT_SUPPORTED",
+                message=(
+                    f"Finding {finding_id} is not backed by a {signal_type} "
+                    f"signal (its detection signals: "
+                    f"{finding_detector_types})."
+                ),
+                detail={
+                    "capability": "signal_explain",
+                    "scope": "finding",
+                    "finding_id": finding_id,
+                    "requested_signal_type": signal_type,
+                    "finding_signal_types": finding_detector_types,
+                },
+            ),
+        )
 
     # --- capability gate (runtime re-check; never converted to empty) ---------
     if not finding.capabilities.supports("signal_explain"):

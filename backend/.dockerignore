@@ -1,0 +1,25 @@
+# Local environment and secrets — never enter the image
+.env
+.env.*
+
+# Virtual environments
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime databases
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Tests and debug artifacts
+tests/
+test_*.py
+*.log

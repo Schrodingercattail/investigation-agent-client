@@ -213,21 +213,23 @@ Notes:
 Defines what investigation actions are valid for a specific finding. This is
 the mechanism that prevents "every finding supports everything".
 
-Capability vocabulary (closed enum, Week 1):
+Capability vocabulary (extensible set, Week 1 vocabulary shown):
 
 ```
-timeline | opposite_trades | signal_explain | policy_lookup
+timeline | opposite_trades | signal_explain
 ```
 
-Representation on a Finding — explicit per-capability flags, not a bare list:
+(`policy_lookup` is deliberately absent: policy retrieval is a case-wide
+runtime capability, not finding-derived — see the rules below.)
+
+Representation on a Finding — a set of derived capability ids (serialized
+as a sorted list), not per-capability boolean flags:
 
 ```jsonc
-// Example from the brief — Finding F3:
+// Example — Finding F3 (a withdrawal finding):
 {
-  "timeline":        true,
-  "opposite_trades": false,     // unsupported for this finding
-  "signal_explain":  true,
-  "policy_lookup":   true
+  "capabilities": ["timeline", "signal_explain"]
+  // opposite_trades absent → unsupported for this finding
 }
 ```
 
@@ -302,8 +304,9 @@ step/capability registry; the LLM selects and orders — it does not invent.
 - Versionable per turn via `plan_version` if a plan is regenerated within a
   task lifecycle.
 - Example (from the architecture doc): user asks "Investigate case U00299"
-  → `[fetch_case, timeline, signal_explain, policy_lookup, artifact]`;
-  "Why was F3 flagged?" → `[signal_explain, artifact]`.
+  → `[fetch_case, generate_artifact]` (deterministic intake: the accepted
+  intake behavior also produces the case-scoped bundle);
+  "Why was F3 flagged?" → `[explain_signal]`.
 
 ### 2.7 PlanStep
 
@@ -331,8 +334,17 @@ Allowed step types come from the **step registry**, never arbitrary strings
 invented by the model. Week 1 registry:
 
 ```
-fetch_case | timeline | opposite_trades | signal_explain | policy_lookup | artifact
+fetch_case | inspect_timeline | inspect_evidence | inspect_withdrawals |
+inspect_transactions | inspect_opposite_trades | explain_signal |
+retrieve_policy | generate_artifact
 ```
+
+(`inspect_withdrawals` / `inspect_transactions` carry an explicit
+evidence-stream scope — `view=evidence` + `stream=withdrawals|transactions`
+— so a requested stream governs tool behavior and is never silently
+replaced via the finding-title heuristic. `inspect_opposite_trades` is
+capability-gated and non-executable without the `opposite_trades`
+capability.)
 
 (The registry maps step types to tools and expected arguments; it lives next to
 the tool definitions and is the planner's allowed vocabulary.)
@@ -482,6 +494,22 @@ Status semantics:
 | `completed` | response/artifact produced |
 | `failed` | unrecoverable failure (typed error retained) |
 | `cancelled` | user/system cancellation mid-flight |
+
+### 2.x Telemetry Event (extension point — not a core domain object)
+
+An **observational** record emitted by Planner/Executor (and by evaluation
+runners as `semantic.evaluated`). Defined in `backend/app/telemetry.py`
+(`AgentTelemetryEvent` + `TelemetrySink`; no-op default). Telemetry is
+non-authoritative: it never contributes to findings, scores, evidence,
+policy truth, capabilities, or execution decisions. Only structured plan
+output and execution metadata are captured — no chain-of-thought.
+
+| Field group | Fields (all optional beyond the common ones) |
+|---|---|
+| common | `event_type`, `timestamp`, `request_id`, `investigation_id`, `case_id`, `focused_finding_id`, `agent_version`, `planner_version`, `prompt_version`, `model` |
+| planner | `planner_status`, `plan_step_types`, `plan_arguments`, `planner_error`, `planner_latency_ms` |
+| execution | `execution_status`, `executed_step_types`, `tool_names`, `execution_latency_ms` |
+| semantic eval | `semantic_success`, `failure_category`, `scenario_id` |
 
 ---
 

@@ -162,7 +162,7 @@ context*. Each investigation action has a natural scope:
 | "Why is this finding flagged?" | explanation; relevant rule/feature evidence | unrelated policies; full timeline; unrelated features |
 | "Show all withdrawals supporting this finding" | complete withdrawals | unrelated ML features; unrelated policies |
 | "Show the timeline" | complete timeline for the scope | unrelated feature dumps |
-| "Which policy requirements apply?" | finding-level basis: directly relevant references only (max 2); no finding-level basis: "no basis" statement + complete case-level set, labeled case-level | unrelated policies presented as finding support |
+| "Which policy requirements apply?" | two-block contract: "For this finding, N policy references apply directly:" (count = authoritative finding-level associations only); then, if any exist, "Additionally, N case-level policy references apply to the overall investigation:" with the complete case-level set | counting case-level references as finding support; truncating the case-level set |
 | "Generate the investigation bundle" | artifact creation + where to find it | re-running unrelated investigation steps |
 
 Scope discipline is enforced at composition, not by hoping the model
@@ -583,3 +583,31 @@ When a lower-level rule conflicts with these principles, document the
 reason for the exception explicitly rather than silently violating the
 principle. Principles change only through the failure-discovery loop
 (P18) — when real-system validation shows a generalizable lesson.
+
+---
+
+## Appendix — Evaluation Layers & Telemetry Extension Point (Week 1)
+
+Three evaluation dimensions are kept separate and are never merged into
+one score:
+
+| Layer | What it validates | Mode |
+|---|---|---|
+| Runtime Semantic Evaluation | fixed/scripted plans → downstream runtime correctness (streams, scope, containment, policy semantics, bounded failures) | deterministic (stubbed RP, scripted planner LLM) |
+| Planner Evaluation | real LLM → correct plan selection (skill/step/arguments) per natural-language scenario | real PlannerV2 + real configured LLM; run-level and scenario-level stability reported separately |
+| Live E2E Evaluation | real LLM + real Risk Platform → end-to-end behavior (incl. cold-start explanation generation) | fully live |
+
+Task completion is not semantic success: a scenario may complete with the
+wrong semantics (failure) or fail with a correct bounded rejection
+(success). The deterministic Runtime layer gates CI; the Planner and Live
+layers report stability against external services.
+
+**Telemetry extension point**: `backend/app/telemetry.py` provides a thin,
+observational event contract (`AgentTelemetryEvent`) and a pluggable sink
+(no-op default) emitted by Planner/Executor and usable by evaluation
+runners (`semantic.evaluated`). It is non-authoritative — it never affects
+findings, scores, evidence, policy truth, capabilities, or execution — and
+captures only structured plan output and execution metadata (no
+chain-of-thought). Future production evaluation attaches a different sink;
+production-derived, reviewed scenarios then feed the same deterministic
+evaluation layers above.

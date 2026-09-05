@@ -60,6 +60,10 @@ CTX_F3 = InvestigationContext(case_id="U00299", focused_finding_id="F3")
 
 class TestValidPlans:
     def test_valid_case_level_plan(self):
+        # A plain case reference is planned DETERMINISTICALLY (the LLM is
+        # not consulted): fetch_case + generate_artifact — the ACCEPTED
+        # intake behavior (the case bundle exists immediately after
+        # intake). Intake planning never goes through the LLM.
         llm = FakeLLM(json_response(
             "case_intake", "Overview of U00299",
             [{"type": "fetch_case", "reason": "need authoritative context"}],
@@ -67,9 +71,11 @@ class TestValidPlans:
         plan = PlannerV2(llm).plan("Investigate case U00299", CTX_CASE,
                                    ["case_intake"])
         assert isinstance(plan, Plan)
-        assert plan.goal == "Overview of U00299"
-        assert [s.type for s in plan.steps] == ["fetch_case"]
+        # ACCEPTED intake behavior: fetch_case + the case-scoped bundle.
+        assert [s.type for s in plan.steps] == ["fetch_case",
+                                                "generate_artifact"]
         assert all(s.status == PlanStepStatus.PENDING for s in plan.steps)
+        assert llm.calls == 0          # deterministic: no LLM round-trip
 
     def test_valid_finding_level_plan_minimal_steps(self):
         # "Why was this flagged?" → explain + policy; no padding with timeline.
@@ -325,7 +331,9 @@ class TestSafetyBoundaries:
         assert "case_intake" in system
         # …non-eligible skill hidden entirely.
         assert "trade_investigation" not in system
-        assert "inspect_opposite_trades" not in system
+        # inspect_opposite_trades appears only as part of the routing
+        # guidance for opposite-trade requests (a distinct bounded semantic
+        # request) — the non-eligible trade SKILL itself stays hidden
         # User content fenced as data inside the user message, untrusted:
         assert "UNTRUSTED" in user or "untrusted" in user.lower()
 
@@ -387,8 +395,10 @@ class TestSafetyBoundaries:
         truncated the JSON after the model's thinking block). The planner
         must request a budget large enough for thinking + JSON."""
         import inspect
-        from app.planner_v2 import PlannerV2
-        src = inspect.getsource(PlannerV2.plan)
+        from app import planner_v2 as pv
+        # the LLM call lives in the planning body (_plan_inner; plan() is
+        # the thin telemetry envelope)
+        src = inspect.getsource(pv.PlannerV2._plan_inner)
         assert "max_tokens=2048" in src
 
     def test_convenience_wrapper_passthrough(self):

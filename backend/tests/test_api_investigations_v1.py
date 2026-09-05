@@ -6,6 +6,7 @@ TaskStoreV2) with faked LLM + Risk Platform. No live LLM/RP/network.
 """
 
 import json
+import re
 from unittest.mock import patch
 
 import pytest
@@ -216,7 +217,9 @@ class TestTurnContract:
         # P20: honest empty (nothing to compose) is a valid completed turn
         assert r.json()["status"] in ("completed", "execution_failed")
         # with a fetch first, the second turn composes from real provenance
-        client2, _, _ = build_client([PLAN_CASE, PLAN_ARTIFACT])
+# Turn 1 is deterministic fetch_case; turn 2's compound export request
+        # is LLM-planned and consumes the artifact script.
+        client2, _, _ = build_client([PLAN_ARTIFACT])
         with rp_patches()[0], rp_patches()[1]:
             inv2 = client2.post("/api/v2/investigations",
                                 json={"case_id": "U00299"}).json()
@@ -237,8 +240,10 @@ class TestTurnContract:
 class TestMultiTurnContinuity:
     @pytest.fixture()
     def five_turns(self):
+        # Turn 1 ('Investigate U00299') is deterministic fetch_case — the script
+        # begins at turn 2.
         client, store, _ = build_client(
-            [PLAN_CASE, PLAN_TIMELINE, PLAN_SIGNAL, PLAN_POLICY, PLAN_ARTIFACT])
+            [PLAN_TIMELINE, PLAN_SIGNAL, PLAN_POLICY, PLAN_ARTIFACT])
         inv_id = client.post("/api/v2/investigations",
                              json={"case_id": "U00299"}).json()[
             "investigation"]["investigation_id"]
@@ -373,6 +378,10 @@ class TestBoundedFailures:
         assert "plan" in body["response"].lower()
 
     def test_planning_failure_produces_no_tool_execution(self):
+        # A non-intake request routes through the LLM planner; invalid
+        # planner output must fail the turn with ZERO tool execution.
+        # (A plain case reference is planned deterministically and can no
+        # longer exercise this path.)
         client, _, _ = build_client([
             '{"bad json'                       # planner gets invalid output
         ])
@@ -381,7 +390,7 @@ class TestBoundedFailures:
                                  json={"case_id": "U00299"}).json()[
                 "investigation"]["investigation_id"]
             r = client.post(f"/api/v2/investigations/{inv_id}/turn",
-                            json={"message": "Investigate U00299"})
+                            json={"message": "Show the timeline."})
         body = r.json()
         assert body["status"] == "failed"
         assert body["task"]["status"] == "failed"
@@ -651,7 +660,7 @@ class TestIsolationAndCoexistence:
             b = json.loads(json.dumps(b))
             task = b["task"]
             for k in ("task_id", "started_at", "completed_at", "plan_id",
-                      "tool_call_ids"):
+                      "tool_call_ids", "artifact_ids"):
                 task.pop(k, None)
             plan = b["plan"]
             plan.pop("plan_id", None)
@@ -660,6 +669,24 @@ class TestIsolationAndCoexistence:
             for tc in b["execution"]["tool_calls"]:
                 tc.pop("tool_call_id", None)
                 tc.pop("started_at", None); tc.pop("completed_at", None)
+                if tc.get("summary"):
+                    tc["summary"] = "<summary>"
+                tc["evidence_ref_count"] = 0
+                tc["citation_ref_count"] = 0
+            # artifact ids are content-derived (sha256 over content that
+            # includes execution timestamps) and legitimately differ per run
+            for a in b.get("artifacts", []):
+                a.pop("artifact_id", None)
+                a.pop("created_at", None)
+                a.pop("task_id", None)
+                # artifact content embeds execution timestamps/call ids
+                import re as _re
+                a["content"] = _re.sub(r"\d{4}-\d{2}-\d{2}T[\d:.+]+",
+                                       "<ts>", a.get("content", ""))
+                a["content"] = _re.sub(r"TC-S\d-[^ )]+", "<tc>",
+                                       a["content"])
+                a["source_tool_calls"] = ["<tc>"] * len(a["source_tool_calls"])
+            b["response"] = re.sub(r"ART-[0-9a-f]+", "<art>", b.get("response", ""))
             return b
         assert shape(r1) == shape(r2)
         # and the volatile fields exist and are unique per execution

@@ -63,6 +63,14 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
         tool_name="finding_drilldown",
         parameter_locks={"view": "evidence"},
     ),
+    "inspect_withdrawals": StepToolBinding(
+        tool_name="finding_drilldown",
+        parameter_locks={"view": "evidence", "stream": "withdrawals"},
+    ),
+    "inspect_transactions": StepToolBinding(
+        tool_name="finding_drilldown",
+        parameter_locks={"view": "evidence", "stream": "transactions"},
+    ),
     "inspect_opposite_trades": StepToolBinding(
         tool_name="finding_drilldown",
         parameter_locks={"view": "opposite_trades"},
@@ -80,9 +88,14 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
 _TOOL_SUPPORTED_PARAMETERIZATIONS: dict[str, set[tuple[tuple[str, Any], ...]]] = {
     # finding_drilldown implements timeline + evidence views only;
     # opposite_trades is registered but not implemented (Week 1).
+    # inspect_withdrawals / inspect_transactions carry an EXPLICIT
+    # evidence-stream scope so a record request can never silently select
+    # the wrong stream via the finding-title heuristic.
     "finding_drilldown": {
         (("view", "timeline"),),
         (("view", "evidence"),),
+        (("view", "evidence"), ("stream", "withdrawals")),
+        (("view", "evidence"), ("stream", "transactions")),
         (),                       # default view (no view argument)
     },
 }
@@ -181,6 +194,9 @@ SKILLS: dict[str, SkillDefinition] = {
         planning_steps=[
             "inspect_timeline",
             "inspect_evidence",
+            "inspect_withdrawals",
+            "inspect_transactions",
+            "inspect_opposite_trades",
             "explain_signal",
             "retrieve_policy",
             "generate_artifact",

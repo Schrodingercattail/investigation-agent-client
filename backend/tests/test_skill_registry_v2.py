@@ -77,7 +77,10 @@ class TestRegistryContents:
             "finding_drilldown", "signal_explain", "policy_lookup", "artifact_bundle",
         }
         assert s.planning_steps == [
-            "inspect_timeline", "inspect_evidence", "explain_signal",
+            "inspect_timeline", "inspect_evidence",
+            "inspect_withdrawals", "inspect_transactions",
+            "inspect_opposite_trades",
+            "explain_signal",
             "retrieve_policy", "generate_artifact",
         ]
 
@@ -202,15 +205,31 @@ class TestVocabularyAndMapping:
         assert result.errors[0].step_id == "S1"
 
     def test_step_from_another_skills_vocabulary_rejected(self):
-        # inspect_opposite_trades exists in the registry but not in this skill.
+        # fetch_case exists in the registry but only in case_intake's
+        # vocabulary — a timeline plan carrying it is rejected.
+        # (inspect_opposite_trades is now legitimately IN this skill's
+        # vocabulary: a distinct, capability-bounded semantic request —
+        # FIX E15.)
+        result = check_plan(
+            "timeline_investigation",
+            [step("S1", "fetch_case", "risk_case_fetch")],
+            capabilities=F3_CAPS,
+        )
+        assert not result.valid
+        assert error_codes(result) == ["STEP_NOT_ALLOWED"]
+
+    def test_opposite_trades_step_in_timeline_vocabulary(self):
+        # FIX E15: opposite-trade requests specialize to this step; it is a
+        # valid planning step of timeline_investigation and is bounded by
+        # the tool (OPPOSITE_TRADES_NOT_SUPPORTED) — never a generic
+        # evidence fallback.
         result = check_plan(
             "timeline_investigation",
             [step("S1", "inspect_opposite_trades", "finding_drilldown",
                   {"view": "opposite_trades"})],
             capabilities=F3_CAPS,
         )
-        assert not result.valid
-        assert error_codes(result) == ["STEP_NOT_ALLOWED"]
+        assert result.valid
 
     def test_wrong_tool_for_registered_step_rejected(self):
         result = check_plan(

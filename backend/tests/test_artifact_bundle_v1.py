@@ -223,7 +223,9 @@ class TestSectionRendering:
         assert "AML_Suspicious_Indicators.md" in content
         assert "2.2 Rapid Fund Movement" in content
 
-    def test_evidence_missing_rendered_explicitly(self):
+    def test_evidence_gaps_not_rendered_in_user_facing_artifact(self):
+        # Product decision: the Evidence Gaps section is removed from
+        # user-facing artifacts (internal fields remain on the ToolResult).
         gap_call = ToolCallV2(
             tool_call_id="TC-GAP", investigation_id="I", task_id="T-1",
             tool_name="signal_explain", arguments={},
@@ -236,8 +238,8 @@ class TestSectionRendering:
         )
         r = run(scope="case", sources=[tc_fetch(), gap_call])
         content = r.data["artifact"]["content"]
-        assert "## Evidence Gaps" in content
-        assert "transaction-level feature attribution" in content
+        assert "## Evidence Gaps" not in content
+        assert "Next data needed" not in content
         assert r.data["evidence_missing"] is True
 
     def test_next_data_needed_preserved(self):

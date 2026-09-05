@@ -125,6 +125,9 @@ class ScriptedLLM:
 
 PLAN_T1 = ('{"skill_id": "case_intake", "goal": "case overview", "steps": '
            '[{"type": "fetch_case", "reason": "need authoritative context"}]}')
+# Turn 1 ("Investigate U00299") is planned DETERMINISTICALLY (fetch_case
+# + the accepted case bundle) — the planner does not consult the LLM for a
+# plain case reference — so the script begins at turn 2.
 PLAN_T2 = ('{"skill_id": "timeline_investigation", "goal": "timeline", '
            '"steps": [{"type": "inspect_timeline", "reason": "chronology"}]}')
 PLAN_T3 = ('{"skill_id": "timeline_investigation", "goal": "explain", '
@@ -161,7 +164,7 @@ class TestPositivePath:
         """Runs all five turns; returns per-turn results + shared state."""
         findings = make_findings()
         svc, p1, p2 = make_service(
-            store, [PLAN_T1, PLAN_T2, PLAN_T3, PLAN_T4, PLAN_T5])
+            store, [PLAN_T2, PLAN_T3, PLAN_T4, PLAN_T5])  # turn 1 is deterministic
 
         turns = []
         prior_calls: list[Any] = []   # session provenance pool (turns 1..n-1)
@@ -262,7 +265,9 @@ class TestPositivePath:
         tc = r.execution.tool_calls[0]
         assert tc.tool_name == "signal_explain"
         assert tc.arguments["finding_id"] == "F3"          # from context
-        assert tc.arguments.get("signal_type") == "Rule"
+        # detector identity: injection may derive None (tool resolves from
+        # the finding's authoritative signal_refs — F3's rule lookup answers)
+        assert tc.arguments.get("signal_type") in (None, "Rule")
         data = tc.result.data
         assert data["signal_type"] == "Rule"
         assert data["evidence_missing"] is False

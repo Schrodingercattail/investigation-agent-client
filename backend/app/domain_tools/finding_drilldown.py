@@ -66,12 +66,19 @@ def finding_drilldown(
     top_n: int | None = None,
     case_context: dict[str, Any] | None = None,
     case_id: str | None = None,
+    stream: str | None = None,
 ) -> ToolResult:
     """Drill into one finding's timeline or concrete evidence.
 
     Args:
         finding_id: canonical Finding ID from the current case context.
         view: "timeline" or "evidence" — both are COMPLETE views.
+        stream: EXPLICIT evidence-stream scope for view="evidence"
+            ("withdrawals" | "transactions"). When supplied it governs
+            which RP stream is returned and OVERRIDES the finding-title
+            heuristic — a withdrawal request can never silently return
+            transactions. None keeps the title-based stream selection for
+            unscoped evidence requests.
         top_n: EXPLICIT user-requested subset only ("show 5 examples").
             None (default — an ordinary request) returns the complete
             available timeline; an explicit N bounds the returned events
@@ -96,8 +103,28 @@ def finding_drilldown(
     finding_id = finding_id.strip()
 
     if view not in ALLOWED_VIEWS:
-        # Locked view: other views (e.g. opposite_trades) are not executable
-        # in Week 1 — validation error against the current tool contract.
+        # Explicit specialized request that Week 1 does not implement
+        # (e.g. opposite_trades): a BOUNDED unsupported result — the
+        # request must never fall through to the generic evidence view
+        # or silently substitute another stream. When the finding lacks
+        # the opposite_trades capability the bound names that directly.
+        if view == "opposite_trades":
+            return ToolResult(
+                outcome=ToolResultOutcome.UNSUPPORTED,
+                error=ToolError(
+                    code="OPPOSITE_TRADES_NOT_SUPPORTED",
+                    message=(
+                        f"Finding {finding_id} does not support the "
+                        "opposite-trades investigation."
+                    ),
+                    detail={
+                        "capability": "opposite_trades",
+                        "scope": "finding",
+                        "finding_id": finding_id,
+                        "requested_view": view,
+                    },
+                ),
+            )
         return _validation_error(
             f"view {view!r} is not supported by finding_drilldown; "
             f"supported views: {sorted(ALLOWED_VIEWS)}."
@@ -203,11 +230,57 @@ def finding_drilldown(
 
     # --- evidence view: COMPLETE concrete records (top_n never applies) ---------
     if view == "evidence":
+        # Validate the explicit stream scope against what the finding can
+        # legitimately return (bounded unsupported, never silent fallback).
+        allowed_streams = {"withdrawals", "transactions"}
+        if stream is not None and stream not in allowed_streams:
+            return _validation_error(
+                f"stream must be one of {sorted(allowed_streams)} or None "
+                f"(derive from the finding), got {stream!r}."
+            )
+        if stream == "withdrawals" and "withdrawal" not in finding.title.lower():
+            return ToolResult(
+                outcome=ToolResultOutcome.UNSUPPORTED,
+                error=ToolError(
+                    code="EVIDENCE_STREAM_NOT_SUPPORTED",
+                    message=(
+                        f"Finding {finding_id} ({finding.title}) has no "
+                        "withdrawal evidence stream in the Risk Platform."
+                    ),
+                    detail={
+                        "capability": "evidence_withdrawals",
+                        "scope": "finding",
+                        "finding_id": finding_id,
+                        "requested_stream": stream,
+                    },
+                ),
+            )
+        if stream == "transactions" and "transaction" not in finding.title.lower() \
+                and not any(
+                    kw in finding.title.lower()
+                    for kw in ("trade", "trading", "pattern detection")):
+            return ToolResult(
+                outcome=ToolResultOutcome.UNSUPPORTED,
+                error=ToolError(
+                    code="EVIDENCE_STREAM_NOT_SUPPORTED",
+                    message=(
+                        f"Finding {finding_id} ({finding.title}) has no "
+                        "transaction evidence stream in the Risk Platform."
+                    ),
+                    detail={
+                        "capability": "evidence_transactions",
+                        "scope": "finding",
+                        "finding_id": finding_id,
+                        "requested_stream": stream,
+                    },
+                ),
+            )
         try:
             payload = normalize_evidence_records(
                 case_id=str(case_id or evidence.get("user_id", "")),
                 evidence=evidence,
                 finding=finding,
+                stream=stream,
             )
         except (KeyError, TypeError, ValueError) as e:
             logger.error("finding_drilldown evidence normalization failure: %s", e)

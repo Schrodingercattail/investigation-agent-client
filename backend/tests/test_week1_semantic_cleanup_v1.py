@@ -334,7 +334,8 @@ class TestPolicySemantics:
                 user_request="policy", skill_id=None, plan=None,
                 tool_calls=[tc_from("TC-P", "policy_lookup", r)],
                 execution_errors=[])
-            assert "apply" in text
+            n = len(r.data["associated_policy_refs"])
+            assert f"{n} policy reference appl" in text
 
     @staticmethod
     def _swap(case, f):
@@ -392,27 +393,37 @@ class TestPolicyPresentationScope:
     never silently truncated. A finding limit is not a case-level limit."""
 
     def test_one_finding_level_policy_plus_case_citations_max2(self):
-        # 1. one finding-level citation + several case-level ones →
-        # finding-level response: max 2 total, associated first.
+        # 1. one finding-level citation + several case-level ones → the
+        # finding-level count is the ASSOCIATED set only (canonical with the
+        # artifact), and the closest case-level reference appears as a
+        # clearly labeled supplement.
         p = _policy_payload(associated_ids=(7,), n_case_citations=3)
         text = _compose_policy(p)
-        assert "2 policy references apply to this finding:" in text
-        assert "FindingDoc_7.md" in text          # associated listed first
+        assert ("For this finding, 1 policy reference applies directly:") \
+            in text
+        assert "FindingDoc_7.md" in text
+        assert ("Additionally, 3 case-level policy references apply to "
+                "the overall investigation:") in text
         listed = [ln for ln in text.splitlines()
-                  if ln[:2] in ("1.", "2.", "3.")]
-        assert len(listed) == 2                   # max-2 cap holds
-        assert "102" not in text                  # third citation dropped
+                  if ln[:2] in ("1.", "2.", "3.", "4.")]
+        assert len(listed) == 4                   # 1 associated + 3 case
+        # the case-level block is COMPLETE (no truncation at all)
         assert "No finding-level policy basis" not in text
 
     def test_two_finding_level_policies_unchanged(self):
-        # 2. two finding-level citations → max-2 behavior unchanged.
+        # 2. two finding-level citations → "2 apply" unchanged.
         p = _policy_payload(associated_ids=(7, 8), n_case_citations=3)
         text = _compose_policy(p)
-        assert "2 policy references apply to this finding:" in text
-        listed = [ln for ln in text.splitlines()
-                  if ln[:2] in ("1.", "2.", "3.")]
-        assert len(listed) == 2
+        assert ("For this finding, 2 policy references apply directly:") \
+            in text
         assert "FindingDoc_7.md" in text and "FindingDoc_8.md" in text
+        # an unassociated case-level reference appears only under the
+        # explicit case-level transition — never as finding support
+        assert ("Additionally, 3 case-level policy references apply to "
+                "the overall investigation:") in text
+        listed = [ln for ln in text.splitlines()
+                  if ln[:2] in ("1.", "2.", "3.", "4.")]
+        assert len(listed) == 5   # 2 associated + 3 case (complete)
 
     def test_no_basis_three_case_citations_all_shown(self):
         # 3. zero finding-level policies + THREE case-level citations →
@@ -791,7 +802,9 @@ class TestArtifactResponseScopeSemantics:
             user_request="why", skill_id=None, plan=None,
             tool_calls=[tc_from("TC-S", "signal_explain", r)],
             execution_errors=[])
-        assert "complete transaction-level evidence is not available" in text
+        # genuinely record-scoped gap → record-scoped wording, quoted
+        # verbatim from next_data_needed (never widened to a broader claim)
+        assert 'missing: "transaction records"' in text
 
     def test_policy_gap_never_becomes_generic_transaction_claim(self):
         # 3. policy-specific evidence_missing (no finding-level association)
@@ -895,13 +908,15 @@ class TestArtifactResponseScopeSemantics:
         assert "No finding-level policy basis is attached to this " \
             "finding." in content
 
-    def test_evidence_gaps_name_the_actual_missing_data(self):
-        # 8. the artifact's Evidence Gaps section names the policy-
-        # association gap precisely — never generic "insufficient evidence".
+    def test_evidence_gaps_section_not_rendered(self):
+        # 8. (product decision) the Evidence Gaps section is removed from
+        # user-facing finding artifacts; internal fields remain on the
+        # ToolResult (bounded honesty unchanged).
         case, _ = make_live_shape_case()
         fid = self._unmarked_finding_id(case)
         pol = policy_lookup(topic="t", finding_id=fid, case_id="U00299",
                             case_context=self._live_context())
+        assert pol.data["evidence_missing"] is True          # internal intact
         r = artifact_bundle(
             scope="finding", case_id="U00299", finding_id=fid, task_id="T-1",
             source_tool_calls=[
@@ -909,10 +924,8 @@ class TestArtifactResponseScopeSemantics:
                 tc_from("TC-POL", "policy_lookup", pol),
             ])
         content = r.data["artifact"]["content"]
-        assert "## Evidence Gaps" in content
-        assert "No finding-level policy association is attached to this " \
-            "finding." in content
-        assert "Evidence is insufficient" not in content
+        assert "## Evidence Gaps" not in content
+        assert "Next data needed" not in content
 
     def test_conversation_policy_answers_unchanged(self):
         # 9. conversation-level F2/F3 behavior is unaffected by the
@@ -940,6 +953,197 @@ class TestArtifactResponseScopeSemantics:
             user_request="policy", skill_id=None, plan=None,
             tool_calls=[tc_from("TC-P2", "policy_lookup", r2)],
             execution_errors=[])
-        assert "apply to this finding" in t2
+        assert ("For this finding, 1 policy reference applies "
+                "directly:") in t2
         listed = [ln for ln in t2.splitlines() if ln[:2] in ("1.", "2.", "3.")]
         assert len(listed) <= 2          # finding-level max-2 holds
+
+
+# ===========================================================================
+# G. Policy association consistency + Evidence Gaps removal
+# ===========================================================================
+
+class TestPolicyAssociationConsistency:
+    def test_associated_count_canonical_with_artifact(self):
+        # conversation "N policy references apply to this finding" counts
+        # ONLY associated citations — canonical with the artifact's
+        # "Policy citations: [n]" (Finding.policy_refs)
+        case, cc = make_case()
+        f = ct_finding(case)   # fixture F2 associated with [1]
+        r = policy_lookup(topic="transfers velocity spike",
+                          finding_id=f.finding_id, case_context=cc)
+        n_associated = len(r.data["associated_policy_refs"])
+        text = compose_response(
+            user_request="policy", skill_id=None, plan=None,
+            tool_calls=[tc_from("TC-P", "policy_lookup", r)],
+            execution_errors=[])
+        n_associated = len(r.data["associated_policy_refs"])
+        assert f"For this finding, {n_associated} policy reference" in text
+        assert "directly:" in text
+        # non-associated citations appear only under the explicit
+        # case-level transition — never as finding support
+        others = [m["citation_id"] for m in r.data["matches"]
+                  if m["citation_id"] not in
+                  {p["citation_id"] for p in r.data["associated_policy_refs"]}]
+        if others:
+            assert "Additionally," in text
+            assert "case-level policy reference" in text
+
+    def test_associated_plus_case_supplement_separately_labeled(self):
+        # one associated [1] + case-level [2] present:
+        # [1] applies to the finding; [2] appears under an explicit
+        # case-level label — never as finding support.
+        case, cc = make_case()
+        f = ct_finding(case)
+        r = policy_lookup(topic="t", finding_id=f.finding_id, case_context=cc)
+        text = compose_response(
+            user_request="policy", skill_id=None, plan=None,
+            tool_calls=[tc_from("TC-P", "policy_lookup", r)],
+            execution_errors=[])
+        assert "For this finding," in text and "applies directly" in text
+        if r.data["matches"] and len(r.data["matches"]) > 1:
+            assert "Additionally," in text
+            assert "case-level policy reference" in text
+            assert "overall investigation" in text
+
+    def test_artifact_policy_block_matches_conversation_association(self):
+        # the artifact's finding citation line and the conversation's
+        # associated set carry the same canonical association
+        case, cc = make_case()
+        f = ct_finding(case)
+        r = policy_lookup(topic="t", finding_id=f.finding_id, case_context=cc)
+        art = artifact_bundle(
+            scope="finding", case_id="U00299", finding_id=f.finding_id,
+            task_id="T-1",
+            source_tool_calls=[tc_from("TC-F", "risk_case_fetch", case),
+                               tc_from("TC-P", "policy_lookup", r)])
+        content = art.data["artifact"]["content"]
+        conv_ids = sorted(p["citation_id"]
+                          for p in r.data["associated_policy_refs"])
+        for cid in conv_ids:
+            assert f"Policy citations: [{cid}]" in content
+        # no case-level-only document tables leak into the finding artifact
+        if not conv_ids:
+            assert "Policy References" not in content or \
+                "No finding-level policy basis" in content
+
+
+class TestEvidenceGapsRemoval:
+    def test_finding_artifact_has_no_evidence_gaps_section(self):
+        case, _ = make_live_shape_case()
+        fid = TestArtifactResponseScopeSemantics._unmarked_finding_id(case)
+        pol = policy_lookup(topic="t", finding_id=fid, case_id="U00299",
+                            case_context=dict(case.data) |
+                            {"_explanation": live_shape_explanation()})
+        r = artifact_bundle(
+            scope="finding", case_id="U00299", finding_id=fid, task_id="T-1",
+            source_tool_calls=[
+                tc_from("TC-F", "risk_case_fetch", case),
+                tc_from("TC-P", "policy_lookup", pol),
+            ])
+        content = r.data["artifact"]["content"]
+        assert "## Evidence Gaps" not in content
+        assert "Next data needed" not in content
+        # other sections survive
+        assert "## Finding" in content
+        assert "## Policy References" in content
+
+    def test_timeline_and_evidence_content_not_removed_with_gaps(self):
+        case, _ = make_case()
+        r = artifact_bundle(
+            scope="case", case_id="U00299", task_id="T-1",
+            source_tool_calls=[tc_from("TC-F", "risk_case_fetch", case)])
+        content = r.data["artifact"]["content"]
+        assert "## Findings" in content
+        assert "## Policy References" in content
+
+    def test_internal_gap_metadata_still_available(self):
+        # evidence_missing / next_data_needed remain on the ToolResult
+        explanation = live_shape_explanation()
+        case, _ = make_case(explanation)
+        fid = TestArtifactResponseScopeSemantics._unmarked_finding_id(case)
+        pol = policy_lookup(topic="t", finding_id=fid, case_id="U00299",
+                            case_context=dict(case.data) |
+                            {"_explanation": explanation})
+        assert pol.data["evidence_missing"] is True
+        assert pol.data["next_data_needed"]
+
+
+# ===========================================================================
+# H. Policy scope clarity — explicit two-block conversation structure
+#    (targeted task: associated=[1], case-level=[4])
+# ===========================================================================
+
+class TestPolicyScopeClarity:
+    """The conversation explicitly separates finding-level and case-level
+    policy scopes: the finding-level count covers ONLY directly applicable
+    references; any case-level references are introduced by an explicit
+    'Additionally … case-level … overall investigation' transition."""
+
+    def _payload_assoc1_case4(self):
+        p = _policy_payload(associated_ids=(1,), n_case_citations=0)
+        # exact task shape: associated [1]; case-level [4]
+        p.data["matches"] = [
+            {"citation_id": 1, "chunk_id": "c1",
+             "document": "Risk_Scoring_Explainability_Guide.md",
+             "section": "2.1 ML Factors", "snippet": "s", "relevance": 9},
+            {"citation_id": 4, "chunk_id": "c4",
+             "document": "Investigation_and_Action_SOP.md",
+             "section": "2.1 Triage", "snippet": "s", "relevance": 5},
+        ]
+        p.data["policy_refs"] = [{"citation_id": 1, "chunk_id": "c1"}]
+        return p
+
+    def test_finding_level_answer_counts_only_direct(self):
+        p = self._payload_assoc1_case4()
+        text = _compose_policy(p)
+        assert ("For this finding, 1 policy reference applies "
+                "directly:") in text
+
+    def test_associated_reference_in_finding_level_block(self):
+        p = self._payload_assoc1_case4()
+        text = _compose_policy(p)
+        # [1] appears in the finding-level block (before the transition)
+        finding_block = text.split("Additionally")[0]
+        assert "Risk_Scoring_Explainability_Guide.md" in finding_block
+        assert "[1]" in finding_block
+
+    def test_case_reference_introduced_explicitly(self):
+        p = self._payload_assoc1_case4()
+        text = _compose_policy(p)
+        assert ("Additionally, 1 case-level policy reference applies to "
+                "the overall investigation:") in text
+        case_block = text.split("Additionally")[1]
+        assert "Investigation_and_Action_SOP.md" in case_block
+        assert "[4]" in case_block
+
+    def test_case_reference_not_counted_as_finding_level(self):
+        p = self._payload_assoc1_case4()
+        text = _compose_policy(p)
+        assert "2 policy reference" not in text
+        finding_block = text.split("Additionally")[0]
+        assert "Investigation_and_Action_SOP.md" not in finding_block
+
+    def test_no_basis_and_artifact_unchanged(self):
+        # no-basis behavior unchanged; finding artifact still only [1]
+        case, _ = make_live_shape_case()
+        fid = TestArtifactResponseScopeSemantics._unmarked_finding_id(case)
+        cc = dict(case.data)
+        cc["_explanation"] = live_shape_explanation()
+        r = policy_lookup(topic="t", finding_id=fid, case_id="U00299",
+                          case_context=cc)
+        assert r.data["finding_policy_status"] == "no_finding_level_basis"
+        art = artifact_bundle(
+            scope="finding", case_id="U00299", finding_id=fid, task_id="T-1",
+            source_tool_calls=[
+                tc_from("TC-F", "risk_case_fetch", case),
+                tc_from("TC-P", "policy_lookup", r),
+            ])
+        content = art.data["artifact"]["content"]
+        assert "No finding-level policy basis is attached to this " \
+            "finding." in content
+        # and a case-scoped artifact still shows the complete set
+        r_case = artifact_bundle(
+            scope="case", case_id="U00299", task_id="T-1",
+            source_tool_calls=[tc_from("TC-F", "risk_case_fetch", case)])
+        assert "[1]" in r_case.data["artifact"]["content"]

@@ -76,17 +76,21 @@ production skills in Week 1.
   "required_capabilities": [],              // case-level: no finding focus required
   "allowed_tools": [
     "risk_case_fetch",
+    "policy_lookup",
     "artifact_bundle"
   ],
   "planning_steps": [
     "fetch_case",
-    "artifact"
+    "retrieve_policy",
+    "generate_artifact"
   ],
   "constraints": [
     "Runs at case level; ignores focused_finding_id.",
     "If InvestigationContext has no cached case context for the session, "
-    "fetch_case must precede artifact.",
-    "artifact must compose only from steps executed in this plan."
+    "fetch_case must precede generate_artifact.",
+    "generate_artifact must compose only from steps executed in this plan.",
+    "retrieve_policy is the case-wide policy continuation (needs no "
+    "finding capability)."
   ]
 }
 ```
@@ -101,21 +105,29 @@ production skills in Week 1.
   "required_capabilities": ["timeline"],
   "allowed_tools": [
     "finding_drilldown(view=timeline)",
+    "finding_drilldown(view=evidence, stream=withdrawals)",
+    "finding_drilldown(view=evidence, stream=transactions)",
     "signal_explain",
     "policy_lookup",
     "artifact_bundle"
   ],
   "planning_steps": [
-    "timeline",
-    "signal_explain",
-    "policy_lookup",
-    "artifact"
+    "inspect_timeline",
+    "inspect_evidence",
+    "inspect_withdrawals",
+    "inspect_transactions",
+    "explain_signal",
+    "retrieve_policy",
+    "generate_artifact"
   ],
   "constraints": [
     "Requires InvestigationContext.focused_finding_id.",
     "Executable only if the focused finding declares capability 'timeline'.",
-    "finding_drilldown is locked to view='timeline'; requesting any other "
-    "view inside this skill is invalid."
+    "finding_drilldown is locked to view='timeline' for inspect_timeline "
+    "and view='evidence' for inspect_evidence; inspect_withdrawals / "
+    "inspect_transactions carry an explicit evidence-stream scope so the "
+    "requested stream governs tool behavior (never the finding-title "
+    "heuristic, never a substituted stream)."
   ]
 }
 ```
@@ -253,7 +265,7 @@ the canonical planning vocabulary is: `fetch_case`, `generate_artifact`,
 | skill_id | required_capabilities | allowed_tools | planning_steps |
 |---|---|---|---|
 | `case_intake` | — | risk_case_fetch, artifact_bundle, policy_lookup | fetch_case, retrieve_policy, generate_artifact |
-| `timeline_investigation` | timeline | finding_drilldown(view=timeline), signal_explain, policy_lookup, artifact_bundle | inspect_timeline, explain_signal, retrieve_policy, generate_artifact |
+| `timeline_investigation` | timeline | finding_drilldown(view=timeline / view=evidence / view=evidence,stream=withdrawals / view=evidence,stream=transactions), signal_explain, policy_lookup, artifact_bundle | inspect_timeline, inspect_evidence, inspect_withdrawals, inspect_transactions, explain_signal, retrieve_policy, generate_artifact |
 | `trade_investigation` | opposite_trades | finding_drilldown(view=opposite_trades), signal_explain, policy_lookup, artifact_bundle | inspect_opposite_trades, explain_signal, retrieve_policy, generate_artifact |
 
 `retrieve_policy` (→ `policy_lookup`) is a **case-wide policy continuation**:
