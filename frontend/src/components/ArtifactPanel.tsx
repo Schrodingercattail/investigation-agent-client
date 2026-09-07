@@ -1,4 +1,4 @@
-import { Artifact, ArtifactType, ProvenanceType } from '@/types/task'
+import { Artifact, ArtifactType, ProvenanceType, RiskSummary } from '@/types/task'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -254,72 +254,7 @@ export function ArtifactPanel({ artifacts, className }: ArtifactPanelProps) {
                 <div className="space-y-4 pr-4">
                   {typeof narrative.data === 'object' && narrative.data !== null &&
                     'risk_level' in narrative.data ? (
-                      <div className="space-y-4">
-                        {/* Case ID */}
-                        <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
-                          <span className="text-sm text-muted-foreground">Case ID</span>
-                          <span className="text-sm font-medium">{narrative.data.case_id || 'N/A'}</span>
-                        </div>
-
-                        {/* Risk Level */}
-                        <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
-                          <span className="text-sm text-muted-foreground">Risk Level</span>
-                          <Badge variant={
-                            narrative.data.risk_level === 'CRITICAL' ? 'destructive' :
-                            narrative.data.risk_level === 'HIGH' ? 'destructive' :
-                            narrative.data.risk_level === 'MEDIUM' ? 'secondary' : 'outline'
-                          } className="text-sm">
-                            {narrative.data.risk_level || 'Unknown'}
-                          </Badge>
-                        </div>
-
-                        {/* Risk Score */}
-                        <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
-                          <span className="text-sm text-muted-foreground">Risk Score</span>
-                          <span className="text-lg font-bold">
-                            {narrative.data.risk_score !== undefined ? Number(narrative.data.risk_score).toFixed(2) : 'N/A'}
-                          </span>
-                        </div>
-
-                        {/* Primary Reason */}
-                        <div className="p-3 border rounded-lg bg-card">
-                          <div className="text-sm text-muted-foreground mb-1">Primary Reason</div>
-                          <div className="text-sm font-medium">{narrative.data.primary_reason || 'Not specified'}</div>
-                        </div>
-
-                        {/* Recommended Action */}
-                        <div className="p-3 border rounded-lg bg-card">
-                          <div className="text-sm text-muted-foreground mb-1">Recommended Action</div>
-                          <div className="text-sm font-medium">{narrative.data.recommended_action || 'Not specified'}</div>
-                        </div>
-
-                        {/* Detection Signals */}
-                        {narrative.data.detection_signals && Object.keys(narrative.data.detection_signals).length > 0 && (
-                          <div className="p-3 border rounded-lg bg-card">
-                            <div className="text-sm text-muted-foreground mb-2">Detection Signals</div>
-                            <div className="grid grid-cols-3 gap-2">
-                              {narrative.data.detection_signals.ml_score !== undefined && (
-                                <div className="text-center p-2 bg-muted/50 rounded">
-                                  <div className="text-xs text-muted-foreground">ML</div>
-                                  <div className="text-sm font-bold">{Number(narrative.data.detection_signals.ml_score).toFixed(2)}</div>
-                                </div>
-                              )}
-                              {narrative.data.detection_signals.rule_score !== undefined && (
-                                <div className="text-center p-2 bg-muted/50 rounded">
-                                  <div className="text-xs text-muted-foreground">Rule</div>
-                                  <div className="text-sm font-bold">{Number(narrative.data.detection_signals.rule_score).toFixed(2)}</div>
-                                </div>
-                              )}
-                              {narrative.data.detection_signals.graph_score !== undefined && (
-                                <div className="text-center p-2 bg-muted/50 rounded">
-                                  <div className="text-xs text-muted-foreground">Graph</div>
-                                  <div className="text-sm font-bold">{Number(narrative.data.detection_signals.graph_score).toFixed(2)}</div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                      <NarrativeSummary data={narrative.data as RiskSummary} />
                     ) : (
                       <div className="rounded border bg-card">
                         <div
@@ -356,5 +291,83 @@ export function ArtifactPanel({ artifacts, className }: ArtifactPanelProps) {
         </Tabs>
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * Narrative (risk-summary) artifact body. The runtime guard above only
+ * proves `data` is an object with a `risk_level`; the `as RiskSummary`
+ * narrowing applies the project's existing RiskSummary shape so the rest
+ * of the render is type-safe without duplicating the type or using `any`.
+ */
+function NarrativeSummary({ data }: { data: RiskSummary }) {
+  const signals = data.detection_signals
+  return (
+    <div className="space-y-4">
+      {/* Case ID */}
+      <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
+        <span className="text-sm text-muted-foreground">Case ID</span>
+        <span className="text-sm font-medium">{data.case_id || 'N/A'}</span>
+      </div>
+
+      {/* Risk Level */}
+      <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
+        <span className="text-sm text-muted-foreground">Risk Level</span>
+        <Badge variant={
+          data.risk_level === 'CRITICAL' ? 'destructive' :
+          data.risk_level === 'HIGH' ? 'destructive' :
+          data.risk_level === 'MEDIUM' ? 'secondary' : 'outline'
+        } className="text-sm">
+          {data.risk_level || 'Unknown'}
+        </Badge>
+      </div>
+
+      {/* Risk Score */}
+      <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
+        <span className="text-sm text-muted-foreground">Risk Score</span>
+        <span className="text-lg font-bold">
+          {data.risk_score !== undefined ? Number(data.risk_score).toFixed(2) : 'N/A'}
+        </span>
+      </div>
+
+      {/* Primary Reason */}
+      <div className="p-3 border rounded-lg bg-card">
+        <div className="text-sm text-muted-foreground mb-1">Primary Reason</div>
+        <div className="text-sm font-medium">{data.primary_reason || 'Not specified'}</div>
+      </div>
+
+      {/* Recommended Action */}
+      <div className="p-3 border rounded-lg bg-card">
+        <div className="text-sm text-muted-foreground mb-1">Recommended Action</div>
+        <div className="text-sm font-medium">{data.recommended_action || 'Not specified'}</div>
+      </div>
+
+      {/* Detection Signals */}
+      {signals && Object.keys(signals).length > 0 && (
+        <div className="p-3 border rounded-lg bg-card">
+          <div className="text-sm text-muted-foreground mb-2">Detection Signals</div>
+          <div className="grid grid-cols-3 gap-2">
+            {signals.ml_score !== undefined && (
+              <div className="text-center p-2 bg-muted/50 rounded">
+                <div className="text-xs text-muted-foreground">ML</div>
+                <div className="text-sm font-bold">{Number(signals.ml_score).toFixed(2)}</div>
+              </div>
+            )}
+            {signals.rule_score !== undefined && (
+              <div className="text-center p-2 bg-muted/50 rounded">
+                <div className="text-xs text-muted-foreground">Rule</div>
+                <div className="text-sm font-bold">{Number(signals.rule_score).toFixed(2)}</div>
+              </div>
+            )}
+            {signals.graph_score !== undefined && (
+              <div className="text-center p-2 bg-muted/50 rounded">
+                <div className="text-xs text-muted-foreground">Graph</div>
+                <div className="text-sm font-bold">{Number(signals.graph_score).toFixed(2)}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

@@ -170,15 +170,3 @@ export const api = {
     return response.json()
   },
 }
-
-// Export error types for use in components
-export type {
-  ApiError,
-  NetworkError,
-  ServerError,
-  RateLimitError,
-  ServiceUnavailableError,
-  AuthenticationError,
-  NotFoundError,
-  ValidationError,
-}
