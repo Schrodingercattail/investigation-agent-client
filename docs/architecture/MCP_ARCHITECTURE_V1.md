@@ -1,8 +1,8 @@
 # MCP Architecture V1
 
-**Status**: ACTIVE — architecture record for the MCP access path (Level 1
-and Level 2 implemented and validated; Level 3 planned)
-**Date**: 2026-09-11 (updated after Level 2-B completion)
+**Status**: ACTIVE — architecture record for the MCP access path (Level 1,
+Level 2, and Level 3 implemented and validated)
+**Date**: 2026-09-13 (updated after Level 3 completion)
 **Related**: `AGENT_CLIENT_ARCHITECTURE_V2.md` (§6.1 `risk_case_fetch`),
 `DOMAIN_MODELS_V1.md` (§2.x Finding / ToolResult), `AGENT_EVALUATION_V1.md`
 
@@ -24,9 +24,11 @@ being added **alongside** that path:
 - MCP is used to learn and validate the protocol mechanics in this
   repository: server lifecycle, tool **discovery**, tool **invocation**,
   and client/server **communication** over a real transport.
-- It prepares the capability for **reuse by multiple future MCP Hosts**
+- It prepares the capability for **reuse by multiple MCP Hosts**
   (e.g. Claude Code or other MCP clients), instead of binding
-  `risk_case_fetch` to the current Agent Client only.
+  `risk_case_fetch` to the current Agent Client only. This reuse is now
+  validated: Claude Code consumed the same Server as an external MCP
+  Host (Level 3, see §7 / §8.2).
 
 At Week 1+ scope, exactly one capability is exposed: `risk_case_fetch`.
 This document describes the implemented state only.
@@ -51,6 +53,17 @@ is not a new implementation of the capability — it is an **adapter /
 access path**. Both paths coexist so the two capability-access
 mechanisms can be compared on equal footing.
 
+Key architectural conclusion (validated through Level 3):
+
+- The **MCP Server is an independently reusable capability endpoint**.
+- The **same MCP Server** is consumed by the project's own **Agent
+  Runtime** (Level 2) and by an **external MCP Host** such as Claude
+  Code (Level 3) — without any change to the server itself.
+- The model/provider used by the external Host is **not** the defining
+  part of MCP interoperability — the **Host-to-Server MCP protocol
+  boundary** is.
+- **Function Calling remains available** and is not replaced by MCP.
+
 ---
 
 ## 3. Current Architecture
@@ -62,22 +75,34 @@ mechanisms can be compared on equal footing.
         │   risk_case_fetch — domain capability       │
         │   backend/app/domain_tools/risk_case_fetch.py│
         └─────────────────────────────────────────────┘
-              ↓ (same capability, two access paths) ↓
- ┌──────────────────────────┐      ┌──────────────────────────────────┐
- │  Function Calling path   │      │  MCP access path                 │
- │  (DEFAULT)               │      │                                  │
- │  · planner_v2            │      │  Your Agent                      │
- │  · executor_v2           │      │    ↓ MCP Provider                │
- │  · skills registry       │      │    │  app/mcp_provider.py         │
- │  · tool provider         │      │    │  (McpToolProvider)           │
- ↓                          │      │    ↓ MCP Client                  │
- Agent Runtime —            │      │    │  app/mcp_client.py           │
- structured ToolResult,     │      │    ↓ MCP Server                  │
- artifacts, composition     │      │    │  mcp_server/server.py        │
-                            │      │    ↓                              │
-                            │      │  risk_case_fetch                  │
- └──────────────────────────┘      └──────────────────────────────────┘
+              ↓ (same capability, multiple access paths) ↓
+ ┌──────────────────────────┐      ┌───────────────────────────────────┐
+ │  Function Calling path   │      │  MCP access path                  │
+ │  (DEFAULT)               │      │  (three validated levels)         │
+ │  · planner_v2            │      │                                   │
+ │  · executor_v2           │      │  Level 1: MCP Test Client         │
+ │  · skills registry       │      │  Level 2: Your Agent              │
+ │  · tool provider         │      │    ↓ MCP Provider                 │
+ ↓                          │      │    │  app/mcp_provider.py         │
+ Agent Runtime —            │      │    │  (McpToolProvider)           │
+ structured ToolResult,     │      │    ↓ MCP Client                   │
+ artifacts, composition     │      │    │  app/mcp_client.py           │
+ │                          │      │  Level 3: Claude Code (MCP Host)  │
+ │                          │      │         ↓ (all levels)            │
+ │                          │      │  MCP Server (mcp_server/server.py)│
+ │                          │      │         ↓                         │
+ │                          │      │  risk_case_fetch                  │
+ └──────────────────────────┘      └───────────────────────────────────┘
 ```
+
+The three MCP access paths (Levels 1–3), explicitly:
+
+- **Level 1:** `MCP Test Client → MCP Server`
+- **Level 2:** `Agent Runtime → McpToolProvider → McpCapabilityClient → MCP Server`
+- **Level 3:** `Claude Code (MCP Host) → MCP Server`
+
+All three paths ultimately consume the **same** `risk_case_fetch`
+domain capability.
 
 Scope-boundary notes:
 
@@ -125,9 +150,9 @@ Agent request
 
 ---
 
-## 5. MCP Path (Level 1 and Level 2, implemented)
+## 5. MCP Path (Level 1, Level 2, and Level 3, implemented)
 
-Two validated variants of the MCP access path now exist:
+Three validated variants of the MCP access path now exist:
 
 **Level 1 — Test MCP Client → MCP Server** (standalone protocol
 validation):
@@ -158,9 +183,23 @@ Agent request
   → ToolResult → response / artifact composition
 ```
 
+**Level 3 — External MCP Host (Claude Code) → MCP Server** (an external
+MCP Host consumes the same Server directly):
+
+```
+Claude Code (external MCP Host)
+  → project-level .mcp.json registers the risk-investigation stdio server
+  → MCP tool discovery (tools/list) over stdio transport
+  → MCP tool invocation (tools/call): risk_case_fetch(case_id=...)
+  → MCP Server (mcp_server/server.py)
+  → risk_case_fetch (domain capability)
+  → Risk Platform
+  → ToolResult (serialized JSON) → MCP tool result → Host
+```
+
 Current transport is **local stdio** (`stdio_client` +
-`server.run("stdio")`) in both variants. HTTP-based transports are not
-implemented and are not claimed in this document.
+`server.run("stdio")`) in all three variants. HTTP-based transports are
+not implemented and are not claimed in this document.
 
 ---
 
@@ -274,7 +313,24 @@ This demonstrates that the capability does not depend on the current
 Agent Client: the server is a reusable capability endpoint for any
 compliant MCP Host.
 
-**Status:** 🔲 PLANNED — not implemented.
+**Validated scope** (Claude Code as the external MCP Host):
+
+- Claude Code 2.1.208 was used as an **external MCP Host**.
+- The project-level `.mcp.json` registered the existing
+  `risk-investigation` **stdio MCP Server**.
+- Claude Code successfully **discovered** the existing
+  `risk_case_fetch` MCP tool.
+- Claude Code successfully **invoked**
+  `risk_case_fetch(case_id="U00299")`.
+- The call reached the **existing MCP Server** and then the **existing
+  Risk Platform integration** — no new execution path was introduced
+  on the server side.
+- The returned payload **matched the raw MCP test-client result** for
+  `U00299`.
+- **No business logic and no Function Calling implementation was
+  replaced.**
+
+**Status:** ✅ COMPLETED / VALIDATED (see §8.2 for evidence).
 
 ---
 
@@ -346,6 +402,62 @@ identical planner output across modes).
 
 ---
 
+## 8.2 Validation Evidence (Level 3)
+
+Recorded from the executed Level 3 validation: **Claude Code 2.1.208**
+as an external MCP Host, connecting through the project-level
+`.mcp.json` registration of the existing `risk-investigation` stdio
+MCP Server.
+
+**End-to-end path validated:**
+
+```
+Claude Code (MCP Host, external)
+  → tool discovery (tools/list) — risk_case_fetch found
+  → tool invocation (tools/call): risk_case_fetch(case_id="U00299")
+  → MCP protocol over stdio transport
+  → MCP Server (mcp_server/server.py, unchanged)
+  → risk_case_fetch (domain capability, unchanged)
+  → Risk Platform (real requests, HTTP 200)
+  → ToolResult (serialized JSON) → MCP tool result → Host
+```
+
+Concrete result for `U00299`:
+
+| Item | Result |
+|---|---|
+| MCP Host | Claude Code 2.1.208 (external) |
+| Server registration | project-level `.mcp.json` (`risk-investigation`, stdio) |
+| Tool discovery | passed — `risk_case_fetch` discovered |
+| Tool invocation | passed — `risk_case_fetch(case_id="U00299")` |
+| Risk Platform | real requests returned HTTP 200 |
+| Tool outcome | `success` |
+| Risk level | HIGH |
+| risk_score | 72.12 |
+| ml_score | 96.24 |
+| rule_score | 80.0 |
+| Findings | 4 (F1–F4) |
+| Evidence refs | 10 |
+| Citation / policy refs | 3 |
+| explanation_source | LLM |
+| Payload parity | matched the raw MCP test-client result for `U00299` |
+| Business logic / Function Calling | not replaced — both unchanged |
+
+**Semantic note (not an MCP defect):** Level 3 validated MCP
+**transport/interoperability**; it does not assert that all downstream
+business-data semantics are necessarily perfect. Specifically, the
+`U00299` payload contains:
+
+- F3 ("High Withdrawal Frequency"): **14 withdrawals in 24 hours**
+- F3 `evidence_refs`: **5 withdrawal records**
+
+Whether this evidence-reference set fully represents the finding
+remains a separate **investigation / evidence-contract question**; it
+is not classified as an MCP defect and does not affect the Level 3
+transport/interoperability result.
+
+---
+
 ## 9. Non-Goals / Boundaries
 
 - MCP does **not** replace Function Calling; both paths remain.
@@ -360,8 +472,9 @@ identical planner output across modes).
   same `risk_case_fetch` capability regardless of execution mode.
 - There is **no silent fallback** from MCP to Function Calling (or vice
   versa); MCP-path failures are bounded as `integration_error`.
-- Level 3 (external MCP Hosts) is **planned, not implemented** — this
-  document does not describe it as a working capability.
+- Level 3 (external MCP Hosts) is **implemented and validated** (§8.2);
+  the MCP Server gained **no Host-specific logic** — external Hosts
+  connect through the standard MCP protocol boundary, unchanged.
 - Only `risk_case_fetch` is exposed through MCP today. No other
   investigation capability is currently an MCP tool.
 
