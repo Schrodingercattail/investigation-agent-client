@@ -6,7 +6,9 @@ conversation, and produces provenance-traceable investigation artifacts.
 It runs **on top of an existing Risk Platform**, which remains the
 authoritative source for risk signals, evidence, policy citations, and
 case explanations. The Agent Client adds the investigation layer:
-planning, orchestration, context, and scoped outputs.
+planning, orchestration, context, and scoped outputs. The project also
+exposes selected investigation capabilities through MCP for reuse by
+the Agent Runtime and external MCP Hosts.
 
 ## See It First
 
@@ -114,9 +116,54 @@ flowchart TD
     P -.-> T
 ```
 
+**Capability access paths.** The Executor consumes capabilities through
+a Provider boundary, which has two access paths:
+
+```text
+                    ┌── Function Calling (default)
+Planner → Executor → Provider
+                    └── MCP
+                         ↓
+                    MCP Client (McpCapabilityClient)
+                         ↓
+                    MCP Server
+                         ↓
+                    risk_case_fetch (domain capability)
+```
+
+Three MCP access paths are implemented and validated:
+
+- **Level 1:** `MCP Test Client → MCP Server`
+- **Level 2:** `Agent Runtime → McpToolProvider → McpCapabilityClient → MCP Server`
+- **Level 3:** `Claude Code (external MCP Host) → MCP Server`
+
+All three paths ultimately consume the **same** `risk_case_fetch`
+domain capability. See
+[MCP_ARCHITECTURE_V1.md](docs/architecture/MCP_ARCHITECTURE_V1.md).
+
 Telemetry is an **observational side channel** (dashed) — it never
 participates in findings, evidence, policy truth, or execution decisions.
 See [Telemetry](#telemetry).
+
+### MCP Capability Access
+
+- `risk_case_fetch` is exposed as an MCP capability
+  (`mcp_server/server.py`).
+- Current transport is **local stdio**.
+- The Agent Runtime consumes the capability through `McpToolProvider` /
+  `McpCapabilityClient` as an explicit execution mode.
+- Claude Code was validated as an **external MCP Host** consuming the
+  same MCP Server.
+- Function Calling remains available and is not replaced by MCP.
+- The MCP layer is an access path around the existing domain capability
+  (`backend/app/domain_tools/risk_case_fetch.py`) rather than a
+  duplicate implementation.
+
+**Level 3 validation** (external MCP Host): Claude Code 2.1.208, via the
+project-level `.mcp.json`, discovered `risk_case_fetch` and successfully
+invoked `risk_case_fetch(case_id="U00299")`; the call reached the
+existing MCP Server and the existing Risk Platform integration, and the
+returned payload matched the raw MCP test-client result.
 
 ## Key Engineering Principles
 
@@ -188,6 +235,7 @@ an extension point for future continuous evaluation and observability.
 | Backend | Python 3.12, FastAPI, Pydantic v2, Uvicorn, httpx |
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, Radix UI, nginx (prod) |
 | Agent / Evaluation | PlannerV2 (LLM planning), ExecutorV2, deterministic evaluation framework (`backend/eval/`), pytest |
+| MCP | MCP (Client / Server, stdio) |
 | Deployment | Docker, Docker Compose, nginx reverse proxy |
 
 ## Run
@@ -278,6 +326,7 @@ python -m pytest tests/ -q
 | Document | Content |
 |---|---|
 | [AGENT_CLIENT_ARCHITECTURE_V2.md](docs/architecture/AGENT_CLIENT_ARCHITECTURE_V2.md) | runtime architecture: resolution → planning → execution → composition |
+| [MCP_ARCHITECTURE_V1.md](docs/architecture/MCP_ARCHITECTURE_V1.md) | MCP access path: server, client, provider, three-level validation |
 | [AGENT_EVALUATION_V1.md](docs/architecture/AGENT_EVALUATION_V1.md) | canonical evaluation documentation (layers, scenarios, checkers, metrics) |
 | [DOMAIN_MODELS_V1.md](docs/architecture/DOMAIN_MODELS_V1.md) | domain model contract (Finding, capabilities, Plan, ToolResult, …) |
 | [SKILL_MODEL_V1.md](docs/architecture/SKILL_MODEL_V1.md) | skill registry, step vocabulary, step→tool bindings |
