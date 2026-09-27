@@ -63,7 +63,7 @@ def check_single_step(result, expected_type, *, stream=None, expect_view=None):
         generic_map = {
             "inspect_withdrawals": "inspect_evidence",
             "inspect_transactions": "inspect_evidence",
-            "inspect_opposite_trades": "inspect_evidence",
+            "inspect_self_opposite_trades": "inspect_evidence",
         }
         if generic_map.get(expected_type) == types[0]:
             return (False, "GENERIC_FALLBACK_FOR_SPECIFIC_INTENT",

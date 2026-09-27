@@ -51,12 +51,14 @@ class FakeLLM:
 
 
 def resolver(llm=None) -> ContextResolver:
-    r = ContextResolver()
+    """Deterministic-only resolver by default; pass a FakeLLM to exercise
+    the semantic assist path (never the real LLM in unit tests)."""
     if llm is not None:
-        # inject fake provider; bypass the config check
-        object.__setattr__(r, "_llm_override", llm)
+        r = ContextResolver(llm_provider=llm, llm_assist=True)
+        # bypass the config check — the fake provider IS the configured LLM
         r._llm_configured = lambda: True
-    return r
+        return r
+    return ContextResolver(llm_assist=False)
 
 
 # --- 1–3. explicit preservation + case level --------------------------------------
@@ -257,7 +259,8 @@ class TestFocusSource:
 
 class TestLLMAssist:
     def test_llm_restricted_to_known_candidates(self):
-        llm = FakeLLM('{"finding_id": "F2"}')
+        llm = FakeLLM('{"resolution": "RESOLVED", "finding_id": "F2", '
+                      '"confidence": "high", "reason": "money leaving"}')
         out = resolver(llm).resolve("explain the one about money leaving",
                                     InvestigationContext(case_id="U00299"),
                                     ALL_FINDINGS)
@@ -268,13 +271,15 @@ class TestLLMAssist:
         candidates_message = llm.messages[-1]["content"]
         for allowed in ("F1", "F2", "F3"):
             assert allowed in candidates_message
-            assert allowed in candidates_message  # id listed as a candidate
-        assert 'ONLY ids you may output' in candidates_message
+        assert "ONLY allowed targets" in candidates_message
         assert "untrusted" in candidates_message.lower()
-        assert "<id or NONE>" in system_prompt or "NONE" in system_prompt
+        assert "Never invent ids" in system_prompt
+        # the resolution contract is the structured three-state one
+        assert '"RESOLVED" | "AMBIGUOUS" | "UNRESOLVED"' in system_prompt
 
     def test_invalid_llm_selected_id_rejected(self):
-        llm = FakeLLM('{"finding_id": "INVENTED-99"}')
+        llm = FakeLLM('{"resolution": "RESOLVED", "finding_id": "INVENTED-99", '
+                      '"confidence": "high"}')
         out = resolver(llm).resolve("refer to that other thing please",
                                     InvestigationContext(case_id="U00299"),
                                     ALL_FINDINGS)
@@ -282,7 +287,8 @@ class TestLLMAssist:
         assert out.updated_context.focused_finding_id is None
 
     def test_llm_none_answer_gives_bounded_unresolved(self):
-        llm = FakeLLM('{"finding_id": "NONE"}')
+        llm = FakeLLM('{"resolution": "UNRESOLVED", "finding_id": null, '
+                      '"confidence": "high"}')
         out = resolver(llm).resolve("something vague happens",
                                     InvestigationContext(case_id="U00299"),
                                     ALL_FINDINGS)
@@ -296,6 +302,27 @@ class TestLLMAssist:
                                     ALL_FINDINGS)
         assert out.status == ResolutionStatus.UNRESOLVED
         assert out.updated_context.focused_finding_id is None
+
+    def test_ambiguous_llm_answer_lists_candidates(self):
+        llm = FakeLLM('{"resolution": "AMBIGUOUS", "finding_id": null, '
+                      '"candidate_finding_ids": ["F2", "F3"], '
+                      '"confidence": "high", "reason": "both plausible"}')
+        out = resolver(llm).resolve("the trading related finding",
+                                    InvestigationContext(case_id="U00299"),
+                                    ALL_FINDINGS)
+        assert out.status == ResolutionStatus.AMBIGUOUS
+        assert [c.id for c in out.candidates] == ["F2", "F3"]
+        assert out.updated_context.focused_finding_id is None
+
+    def test_low_confidence_match_does_not_resolve(self):
+        llm = FakeLLM('{"resolution": "RESOLVED", "finding_id": "F1", '
+                      '"confidence": "low", "reason": "maybe"}')
+        out = resolver(llm).resolve("something about devices",
+                                    InvestigationContext(case_id="U00299"),
+                                    ALL_FINDINGS)
+        # weak semantic similarity must not become a definitive target
+        assert out.status != ResolutionStatus.RESOLVED or \
+            out.resolution_kind != "inferred"
 
     def test_user_text_cannot_inject_new_finding_event_tool_skill(self):
         injection = (

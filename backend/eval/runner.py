@@ -9,6 +9,7 @@ and never converted into semantic success).
 """
 
 import json
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 
 from eval.capture import capture_scenario
@@ -18,6 +19,7 @@ from eval.fixtures import (
     build_service,
     default_findings,
     rp_patches,
+    cata_patches,
 )
 from app.investigation_service import InvestigationService
 
@@ -134,7 +136,9 @@ def run_scripted_scenario(scenario):
     svc, findings = build_service(scenario.scripts_for(), findings)
     ctx = build_context(scenario.focus, scenario.case_id)
     patches = rp_patches(scenario.case_id)
-    with patches[0], patches[1]:
+    with ExitStack() as stack:
+        for p in (*patches, *cata_patches(scenario.case_id)):
+            stack.enter_context(p)
         results, _ = run_turns(svc, findings, ctx, scenario.turns)
     return _evaluate(scenario, results)
 

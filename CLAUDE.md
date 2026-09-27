@@ -86,3 +86,135 @@ documentation — see `README.md` for the project overview.
 - Other docs in `docs/architecture/` (domain models, skill model, API
   contract, evaluation, evidence principles) — consult before changing
   the corresponding architecture.
+
+## Development / QA Quality Gate
+
+This project has repeatedly seen features ship with green isolated
+tests while the real browser journey was broken (lost context/focus
+between UI and backend, stale frontend state across investigations,
+new APIs ignoring pending UI state, wrong terminal plan rendering).
+Therefore:
+
+> **"Tests passing" and "feature accepted" are different states.**
+> A passing unit/integration suite is NOT evidence that a user-facing
+> feature is complete. Completion evidence must match the feature's
+> integration surface.
+
+### Required testing levels
+
+- **LEVEL 1 — Component correctness**: unit / component / deterministic
+  logic / schema-contract tests.
+- **LEVEL 2 — Integration/E2E**: real application boundaries where
+  applicable (UI → API → service → runtime → persistence → dependency
+  → response/state → UI). Mocks are fine for deterministic coverage but
+  do not constitute integration acceptance.
+- **LEVEL 3 — Real browser/user acceptance**: REQUIRED when a change
+  affects frontend behavior, conversation, Agent responses, planner
+  behavior visible to users, the Agent Loop, tool routing,
+  context/focus, state synchronization, polling, evidence/artifact
+  navigation, user-visible status, or any cross-module workflow. The
+  real browser journey must be exercised against the real running
+  stack. Backend-only changes with no user-visible impact may skip it,
+  but still need API/integration tests. When uncertain, prefer real E2E.
+
+### Feature-scoped Definition of Done
+
+Every non-trivial feature defines its acceptance surface up front and
+names at least one **Golden User Journey**: a repeatable scenario from
+the real user entry point that crosses all relevant boundaries and
+verifies both the visible outcome and the backend/state consequences.
+Re-run it after changes that affect its dependencies. Example shape
+(Finding-focused): Case → select finding → request → API → target
+resolution → Planner → Tool → Agent State → Activity → response.
+
+The implementation report MUST separate: unit-tested ·
+integration-tested · browser-validated · exploratory-tested, and
+explicitly list what remains unverified and any pre-existing
+failures (backend baseline: environment-dependent legacy failures —
+~43 with RP down, ~12 with RP up; compare like-for-like). Never
+summarize as "tested". Never use test counts as the primary evidence
+of product correctness.
+
+### Browser is the acceptance authority
+
+When automated tests and real browser behavior disagree, the browser
+result wins for product acceptance. Do not report "complete" while the
+primary browser journey is broken; a browser failure triggers
+reproduce → failing-boundary analysis → fix → browser re-test.
+
+### Test the system, not just the module
+
+For cross-module features, trace: user action → frontend state → API →
+route → service → runtime → tool/dependency → persistence → response →
+frontend → rendered result, and identify where semantic state can be
+lost. Pay special attention to: context/focus propagation, task and
+investigation identity, state ownership, terminal states, retries,
+polling, stale state, event ordering, API/frontend contracts. Then run
+lightweight exploratory testing (double-clicks, reload during/after
+execution, entity switching mid-run, empty/long/Unicode/CJK inputs,
+unknown IDs, RP/backend unavailable, unexpected-but-reasonable
+phrasings) — find what the plan did not predict. Semantic edge cases
+(no data, partial data, unsupported, blocked, error, retryable,
+terminal, loop limit, ambiguous, unresolved, stale context, empty
+result) are part of acceptance; do not collapse them into one
+success/failure check.
+
+### Agent-specific gate
+
+Agent features are evaluated AS A SYSTEM: Context → Target Resolution →
+Planning → Tool selection/execution → Observation → Decision → State →
+Loop bound → Retry → Provenance → user-facing response → Activity.
+Include natural-language, paraphrased, ambiguous, and unanticipated
+requests — not only exact command phrases. Always verify the boundary:
+LLM proposes, system enforces; state is authoritative; the UI does not
+infer backend decisions; the backend does not rely on frontend-only
+state; language never overclaims evidence; internal reasoning is never
+exposed.
+
+### Environment honesty
+
+Before declaring completion, verify the tested processes actually run
+the current implementation (stale long-running services are a real QA
+finding — restart and re-verify). Mocks/fault injection are encouraged
+for determinism, but when a real dependency (RP, LLM, browser) was
+unavailable, document the limitation and do not claim the real path
+was validated.
+
+### Defect handling
+
+On an E2E/browser failure: reproduce → identify the failing boundary
+(UI→API, API→service, service→runtime, runtime→tool, tool→dependency,
+state→UI, context→planner, finding/focus→execution, task→polling,
+plan→terminal) → root cause → smallest correct fix at that boundary →
+browser re-test. Do not patch symptoms. Preserve Developer
+Verification vs Acceptance QA separation where the project defines a
+QA phase.
+
+### Reporting and language
+
+End substantive tasks with: Changed · unit/component results ·
+integration/API E2E results · real browser results · exploratory
+results · known unverified areas · pre-existing failures · regressions
+· acceptance status. Use explicit statuses: NOT TESTED / TESTED /
+PASS / FAIL / BLOCKED — never turn "not tested" into "pass". Reserve
+**"Implemented"** for code passing developer verification,
+**"Validated"** for behavior exercised at the relevant integration
+level, and **"Accepted/Ready"** for features past the acceptance gate.
+Never say "feature complete" when the required browser/E2E gate has
+not run.
+
+### Pre-completion self-check
+
+1. Did I test the actual user entry point?
+2. Did I cross the real integration boundaries?
+3. Did I run the primary Golden User Journey?
+4. If frontend behavior changed, did I open the real browser?
+5. Did I test at least one meaningful edge case?
+6. Could stale state, wrong context, or races exist?
+7. Does the UI match backend/runtime truth?
+8. Did I distinguish tests from acceptance?
+9. Did I state what remains unverified?
+10. Could a real user complete the task I claim is complete?
+
+If an applicable answer is "no", do not report the feature as fully
+validated.

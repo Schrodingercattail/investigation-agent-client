@@ -280,7 +280,7 @@ class TestFindingNormalization:
 # --- capability derivation -----------------------------------------------------------
 
 class TestCapabilityDerivation:
-    def test_shared_device_finding_gets_no_opposite_trades(self):
+    def test_shared_device_finding_gets_no_self_opposite_trades(self):
         caps = derive_capabilities(
             finding_name="Shared Device Relationships",
             transaction_evidence_count=2,
@@ -292,9 +292,9 @@ class TestCapabilityDerivation:
         assert "signal_explain" in caps
         # policy retrieval is case-wide — never finding-derived
         assert "policy_lookup" not in caps
-        assert "opposite_trades" not in caps   # ...but this finding isn't about it
+        assert "self_opposite_trades" not in caps   # ...but this finding isn't about it
 
-    def test_coordinated_trading_finding_gets_opposite_trades(self):
+    def test_coordinated_trading_finding_gets_self_opposite_trades(self):
         caps = derive_capabilities(
             finding_name="Coordinated Trading Pattern",
             transaction_evidence_count=2,
@@ -302,7 +302,7 @@ class TestCapabilityDerivation:
             opposite_trade_ratio=0.4524,
             has_rule_trigger=True,
         )
-        assert caps.supports("opposite_trades")
+        assert caps.supports("self_opposite_trades")
         assert caps.supports("timeline")
         assert caps.supports("signal_explain")
 
@@ -338,9 +338,9 @@ class TestCapabilityDerivation:
         coordinated = by_title["Coordinated Trading Pattern"]
         ml = by_title["ML Pattern Detection"]
         # trade-composition data exists and this is the opposite-trade finding
-        assert coordinated.capabilities.supports("opposite_trades")
+        assert coordinated.capabilities.supports("self_opposite_trades")
         # ML detector-signal finding carries no fabricated composition access
-        assert not ml.capabilities.supports("opposite_trades")
+        assert not ml.capabilities.supports("self_opposite_trades")
 
 
 # --- no fabrication ------------------------------------------------------------------

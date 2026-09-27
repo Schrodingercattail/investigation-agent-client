@@ -26,6 +26,7 @@ import asyncio
 import concurrent.futures
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -152,6 +153,55 @@ class RiskPlatformAdapter:
             "POST", "/api/risk/explain", json_body={"user_id": user_id},
         )
 
+    async def get_network_signals_raw(
+        self, user_id: str, limit: int | None = None,
+    ) -> dict[str, Any]:
+        """GET /api/risk/cases/{user_id}/network-signals → raw dict.
+
+        The authoritative source of case-connected accounts (cluster
+        membership with relationship detail). `limit` bounds the returned
+        connected-account detail rows; `connected_account_count` reports
+        the full count so callers can detect a bounded view."""
+        path = f"/api/risk/cases/{user_id}/network-signals"
+        if limit is not None:
+            path += f"?limit={int(limit)}"
+        return await self._request("GET", path)
+
+    async def get_account_transactions_raw(
+        self,
+        user_id: str,
+        account_ids: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        symbols: list[str] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> dict[str, Any]:
+        """GET /api/risk/cases/{user_id}/transactions → raw dict.
+
+        Bounded, account-scoped transaction evidence with server-side
+        filtering (scope enforcement + time-window + symbol filters) and
+        explicit completeness semantics (total_matched / truncated /
+        has_more / next_offset). Accounts outside the case's cluster scope
+        are rejected by RP with 422 ACCOUNTS_OUT_OF_CASE_SCOPE."""
+        params: dict[str, str] = {}
+        if account_ids:
+            params["account_ids"] = ",".join(account_ids)
+        if start_time:
+            params["start_time"] = start_time
+        if end_time:
+            params["end_time"] = end_time
+        if symbols:
+            params["symbols"] = ",".join(symbols)
+        if limit is not None:
+            params["limit"] = str(int(limit))
+        if offset is not None:
+            params["offset"] = str(int(offset))
+        path = f"/api/risk/cases/{user_id}/transactions"
+        if params:
+            path += "?" + urlencode(params)
+        return await self._request("GET", path)
+
     def fetch_case(self, user_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Fetch both authoritative RP payloads for one case (sync wrapper).
 
@@ -168,6 +218,28 @@ class RiskPlatformAdapter:
         """Sync wrapper: GET /api/risk/cases/{user_id}/evidence only."""
         return self._run(self.get_case_evidence_raw(
             user_id, expose_complete_records=expose_complete_records,
+        ))
+
+    def fetch_network_signals(
+        self, user_id: str, limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Sync wrapper: GET /api/risk/cases/{user_id}/network-signals only."""
+        return self._run(self.get_network_signals_raw(user_id, limit=limit))
+
+    def fetch_account_transactions(
+        self,
+        user_id: str,
+        account_ids: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        symbols: list[str] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> dict[str, Any]:
+        """Sync wrapper: GET /api/risk/cases/{user_id}/transactions only."""
+        return self._run(self.get_account_transactions_raw(
+            user_id, account_ids=account_ids, start_time=start_time,
+            end_time=end_time, symbols=symbols, limit=limit, offset=offset,
         ))
 
 
@@ -200,14 +272,17 @@ def derive_capabilities(
     evidence. Never type-based blanket grants.
 
     Rules (Week 1):
-    - timeline         : more than one timestamped evidence item exists for the
-                         case (timeline needs multiple ordered events).
-    - opposite_trades  : actual trade-composition data exists — i.e. the case
-                         carries trade evidence AND this finding is about the
-                         opposite-trade composition (rule trigger or contextual
-                         ratio finding).
-    - signal_explain   : there is a real detection signal behind the finding
-                         (triggered rule), OR ML detector signal exists.
+    - timeline              : more than one timestamped evidence item exists
+                              for the case (timeline needs multiple ordered
+                              events).
+    - self_opposite_trades  : actual trade-composition data exists — i.e.
+                              the case carries trade evidence AND this
+                              finding is about the same-account
+                              opposite-trade composition (rule trigger or
+                              contextual ratio finding).
+    - signal_explain        : there is a real detection signal behind the
+                              finding (triggered rule), OR ML detector
+                              signal exists.
 
     Deliberately NOT derived here: policy_lookup. Policy retrieval is a
     case-wide capability (RP exposes its single validated-citation surface
@@ -229,7 +304,7 @@ def derive_capabilities(
         or "opposite trade" in finding_name.lower()
     )
     if is_opposite_trade_finding and opposite_trade_ratio is not None:
-        caps.add("opposite_trades")
+        caps.add("self_opposite_trades")
 
     # signal_explain: a real detection signal backs the finding — either an
     # explicit rule trigger, or the finding belongs to RP's detector-produced

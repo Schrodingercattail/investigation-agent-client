@@ -1,0 +1,220 @@
+{
+  "seed_version": 1,
+  "source_case": "U00010",
+  "provenance": {
+    "enacted_by": "PMO implementation baseline (rev. 3, WI-3)",
+    "evidence_sources": [
+      "docs/baselines/2026-09-24-sp-m2-1c-candidate-separability-v1.md",
+      "docs/baselines/2026-09-24-wp-m2-1-item2-evidence-validation-discovery-v1.md",
+      "docs/baselines/2026-09-24-wp-m2-1-item2a-sufficiency-non-equivalence-discovery-v1.md",
+      "docs/qa/2026-09-24-sp-m2-1-final-independent-qa-v1.md"
+    ],
+    "live_titles_verified_at": "2026-09-24"
+  },
+  "concept_registry": [
+    {
+      "concept_id": "SHARED_DEVICE_RELATIONSHIP",
+      "definition": "A relationship between the subject account and other accounts established by a device shared between them (the finding is centrally about this relationship).",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-wi3",
+      "evidence": "SP-M2-1C/Item 2A pre-registered core concept for F5; exercised in C1/C6 verdicts."
+    },
+    {
+      "concept_id": "SHARED_DEVICE",
+      "definition": "The shared-device signal that distinguishes a shared-device relationship finding from network-enumeration findings.",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-wi3",
+      "evidence": "Item 2A distinguishing-concept annotation for F5; C1 criterion analysis."
+    },
+    {
+      "concept_id": "LINKED_ACCOUNT_NETWORK",
+      "definition": "A network of connected accounts detected around the subject account (the finding is centrally about this network).",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-wi3",
+      "evidence": "SP-M2-1C/Item 2A pre-registered core concept for F6; exercised in C3/C8 verdicts."
+    },
+    {
+      "concept_id": "ACCOUNT_NETWORK_ENUMERATION",
+      "definition": "The enumeration of connected accounts that distinguishes a linked-account-network finding from mechanism-level shared-device findings.",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-wi3",
+      "evidence": "Item 2A distinguishing-concept annotation for F6; C1/C5 criterion analysis."
+    },
+    {
+      "concept_id": "OPPOSITE_TRADE_RATIO",
+      "definition": "An aggregate opposite-side trading ratio statistic for the subject account (the finding is centrally about this ratio).",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-wi3",
+      "evidence": "SP-M2-1C/Item 2A pre-registered core concept for F8; exercised in R-D/R-G analyses."
+    },
+    {
+      "concept_id": "OPPOSITE_SIDE_TRADING",
+      "definition": "The opposite-side (hedging-direction) trading signal that distinguishes an opposite-trade-ratio finding from device/network findings.",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-wi3",
+      "evidence": "Item 2A distinguishing-concept annotation for F8; R-D unique-support verdict at 0.90."
+    }
+  ],
+  "candidates": [
+    {
+      "candidate_id": "F5",
+      "candidate_type": "finding",
+      "title_snapshot": "Shared Device Relationships.",
+      "core_concepts": [
+        "SHARED_DEVICE_RELATIONSHIP"
+      ],
+      "distinguishing_concepts": [
+        "SHARED_DEVICE"
+      ],
+      "potential_confusions": [
+        "F6"
+      ],
+      "mechanism_concepts": [],
+      "target_status": "UNVERIFIED",
+      "evidence": {
+        "sources": [
+          "docs/baselines/2026-09-24-sp-m2-1c-candidate-separability-v1.md",
+          "docs/baselines/2026-09-24-wp-m2-1-item2a-sufficiency-non-equivalence-discovery-v1.md",
+          "docs/qa/2026-09-24-sp-m2-1-final-independent-qa-v1.md"
+        ],
+        "rationale": "Core and distinguishing concepts were pre-registered before observation (SP-M2-1C), exercised through validated core-mapping verdicts (Item 2A C1/C6: SELECT F5 under the CORE criterion; non-equivalence against F6 analyzed), and confirmed by the final independent QA (E3 stable correct selection class). Known confusion with F6 (derivation mention) is recorded."
+      },
+      "description_snapshot": "1 shared device was used by this account and other users, indicating a link between this account and additional user accounts. [3]",
+      "content_hash": "df8984090eea6bbd3c27e486bd0b156f0a91ccc3fe93c8e72a8299c366b91eee"
+    },
+    {
+      "candidate_id": "F6",
+      "candidate_type": "finding",
+      "title_snapshot": "Linked Account Network.",
+      "core_concepts": [
+        "LINKED_ACCOUNT_NETWORK"
+      ],
+      "distinguishing_concepts": [
+        "ACCOUNT_NETWORK_ENUMERATION"
+      ],
+      "potential_confusions": [
+        "F5"
+      ],
+      "mechanism_concepts": [
+        "SHARED_DEVICE_RELATIONSHIP"
+      ],
+      "target_status": "UNVERIFIED",
+      "evidence": {
+        "sources": [
+          "docs/baselines/2026-09-24-sp-m2-1c-candidate-separability-v1.md",
+          "docs/baselines/2026-09-24-wp-m2-1-item2a-sufficiency-non-equivalence-discovery-v1.md",
+          "docs/qa/2026-09-24-sp-m2-1-final-independent-qa-v1.md"
+        ],
+        "rationale": "Core (network enumeration) pre-registered and exercised (Item 2A C3/C8/C11: stable unique-F6); the device-sharing derivation is recorded as a mechanism concept, not core, which is the documented non-equivalence boundary against F5."
+      },
+      "description_snapshot": "18 connected accounts were detected through shared devices, forming a network of related accounts that should be reviewed as part of this investigation. [3]",
+      "content_hash": "c69c746107aab28678e39fa4986d56b2ee1ff5b0e71297da9efb1b37b5cbd4f9"
+    },
+    {
+      "candidate_id": "F8",
+      "candidate_type": "finding",
+      "title_snapshot": "Opposite Trade Ratio.",
+      "core_concepts": [
+        "OPPOSITE_TRADE_RATIO"
+      ],
+      "distinguishing_concepts": [
+        "OPPOSITE_SIDE_TRADING"
+      ],
+      "potential_confusions": [
+        "F7"
+      ],
+      "mechanism_concepts": [],
+      "target_status": "UNVERIFIED",
+      "evidence": {
+        "sources": [
+          "docs/baselines/2026-09-24-sp-m2-1c-candidate-separability-v1.md",
+          "docs/baselines/2026-09-24-wp-m2-1-item2-evidence-validation-discovery-v1.md",
+          "docs/qa/2026-09-24-sp-m2-1-final-independent-qa-v1.md"
+        ],
+        "rationale": "Core (opposite-trade ratio) pre-registered and exercised (Item 2 R-D unique-F8 at 0.90; R-G analyzed the F7-family boundary and the anomaly disclaimer in F8's own description). Confusion with trading-frequency findings (F7) is recorded."
+      },
+      "description_snapshot": "An opposite-trade ratio of 34.38% was observed, which is below the 40% threshold for the coordinated trading rule. This ratio is a single aggregate statistic and does not by itself demonstrate coordination or position offsetting.",
+      "content_hash": "2414755ec9fb144ab552c2e9abf0860b032ddaec71bccd98c5850f0fb1799e2f"
+    },
+    {
+      "candidate_id": "F1",
+      "candidate_type": "finding",
+      "title_snapshot": "ML Pattern Detection",
+      "core_concepts": [],
+      "distinguishing_concepts": [],
+      "potential_confusions": [],
+      "mechanism_concepts": [],
+      "target_status": "INCOMPLETE",
+      "insufficiency_reason": "No verified semantic evidence in project baselines: no discovery derived core/distinguishing concepts for this finding; its description is a self-limiting system signal (99.41/100, 'not a calibrated probability'). Requires domain authoring before eligibility.",
+      "description_snapshot": "99.41/100; a system signal, not a calibrated probability.",
+      "content_hash": "0bdf300e1c8387d5a45d8d862f3d4f7be26139d381a9fdafa91355d9715485a5"
+    },
+    {
+      "candidate_id": "F2",
+      "candidate_type": "finding",
+      "title_snapshot": "New account with high activity.",
+      "core_concepts": [],
+      "distinguishing_concepts": [],
+      "potential_confusions": [
+        "F7"
+      ],
+      "mechanism_concepts": [],
+      "target_status": "INCOMPLETE",
+      "insufficiency_reason": "No verified semantic evidence in project baselines: new-account/high-activity rule semantics were never formalized as concepts; potential confusion with F7 (same 54-trades evidence) is recorded but unresolved. Requires domain authoring.",
+      "description_snapshot": "The account is 6 days old and recorded 54 trades in 24 hours, satisfying the system's new-account/high-activity rule.",
+      "content_hash": "37861e72ceddff48ea6074ccb4b988c1abfafa76ca3542463ec39c80bc38992e"
+    },
+    {
+      "candidate_id": "F3",
+      "candidate_type": "finding",
+      "title_snapshot": "High withdrawal frequency.",
+      "core_concepts": [],
+      "distinguishing_concepts": [],
+      "potential_confusions": [
+        "F4"
+      ],
+      "mechanism_concepts": [],
+      "target_status": "INCOMPLETE",
+      "insufficiency_reason": "No verified semantic evidence in project baselines: withdrawal-frequency semantics were never formalized as concepts; confusion with F4 (same withdrawal evidence) is recorded but unresolved. Requires domain authoring.",
+      "description_snapshot": "7 withdrawals were recorded in 24 hours, exceeding the system's threshold for elevated withdrawal frequency. [2]",
+      "content_hash": "c74cfe05a9ef879f32806463e777df6c626069ee61d1205150c10ed35ee07065"
+    },
+    {
+      "candidate_id": "F4",
+      "candidate_type": "finding",
+      "title_snapshot": "First withdrawal to new address.",
+      "core_concepts": [],
+      "distinguishing_concepts": [],
+      "potential_confusions": [
+        "F3"
+      ],
+      "mechanism_concepts": [],
+      "target_status": "INCOMPLETE",
+      "insufficiency_reason": "No verified semantic evidence in project baselines: first-withdrawal/new-address semantics were never formalized as concepts; confusion with F3 is recorded but unresolved. Requires domain authoring.",
+      "description_snapshot": "A first withdrawal to a new address was detected; 7 withdrawals were recorded in 24 hours, and 100.00% of withdrawals were sent to newly encountered addresses.",
+      "content_hash": "2fcd61795a2eecee9cbad564c2d2162809c643128b57396bd4f302baa47d6088"
+    },
+    {
+      "candidate_id": "F7",
+      "candidate_type": "finding",
+      "title_snapshot": "High Trading Frequency.",
+      "core_concepts": [],
+      "distinguishing_concepts": [],
+      "potential_confusions": [
+        "F8",
+        "F2"
+      ],
+      "mechanism_concepts": [],
+      "target_status": "INCOMPLETE",
+      "insufficiency_reason": "No verified semantic evidence in project baselines: Item 2A (R-G) explicitly left the trading-frequency vs opposite-trade-ratio boundary unresolved; the frequency/anomaly distinction requires domain authoring. Confusions with F8 and F2 (same 54-trades evidence) are recorded.",
+      "description_snapshot": "54 trades were recorded in 24 hours, an elevated level of trading activity for a single-day window.\nAccount Age.\nThe account is 6 days old; this is contextual evidence, relevant in combination with the high activity observed above.",
+      "content_hash": "712432c4638976c925acd4fb1670412dd536e2676352f96a0d8baec1890bb303"
+    }
+  ]
+}

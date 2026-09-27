@@ -49,8 +49,11 @@ class _NoLLM:
 
 
 def _svc():
+    # deterministic resolver under test (the semantic assist has its own
+    # Layer-B suites and must not reach the real LLM here)
     return InvestigationService(planner=PlannerV2(_NoLLM()),
-                                task_store=TaskStoreV2(":memory:"))
+                                task_store=TaskStoreV2(":memory:"),
+                                allow_llm_resolution=False)
 
 
 # --- intent classification ------------------------------------------------------

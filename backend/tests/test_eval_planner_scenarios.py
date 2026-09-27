@@ -6,8 +6,9 @@ routing quality (intent → operation) for the core scenarios; the full
 3-run matrix with failure categories runs via
 `python -m eval.run_planner_eval`.
 
-Excluded from this wrapper: P08 (opposite-trade routing — validated in
-the standalone runner with run-level stability reporting).
+Excluded from this wrapper: P08 (same-account opposite-trade routing)
+and P11 (cross-account opposite-trade routing) — both validated in the
+standalone runner with run-level stability reporting.
 """
 
 import pytest

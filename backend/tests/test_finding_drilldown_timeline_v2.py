@@ -207,13 +207,14 @@ class TestResolutionAndSemantics:
 
     def test_unknown_view_cannot_execute(self, case_U00299):
         f = withdrawal_finding(case_U00299)
-        res = run_drilldown(case_U00299, f.finding_id, view="opposite_trades")
-        # opposite_trades is a DISTINCT bounded semantic request
-        # (FIX E15): unsupported with capability context, never a generic
-        # validation error and never a silent evidence-stream fallback
+        res = run_drilldown(case_U00299, f.finding_id, view="self_opposite_trades")
+        # the self view is IMPLEMENTED but capability-gated: a finding
+        # without self_opposite_trades is a DISTINCT bounded semantic
+        # rejection — never a generic validation error, never a silent
+        # evidence-stream fallback
         assert res.outcome == ToolResultOutcome.UNSUPPORTED
-        assert res.error.code == "OPPOSITE_TRADES_NOT_SUPPORTED"
-        assert "opposite-trades" in res.error.message
+        assert res.error.code == "CAPABILITY_NOT_SUPPORTED"
+        assert res.error.detail.get("capability") == "self_opposite_trades"
         assert res.data is None                       # nothing executed
 
     def test_no_case_context_and_no_case_id(self):

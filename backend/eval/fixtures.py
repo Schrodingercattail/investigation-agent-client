@@ -43,7 +43,7 @@ def default_findings():
     f1 = f1.model_copy(update={
         "signal_refs": [{"signal_type": "ML", "name": "ml_score"}]})
     f2 = make_finding("F2", "Coordinated Trading Pattern",
-                      caps=FULL_CAPS + ["opposite_trades"])
+                      caps=FULL_CAPS + ["self_opposite_trades"])
     f3 = make_finding("F3", "High Withdrawal Frequency")
     f3 = f3.model_copy(update={
         "signal_refs": [{"signal_type": "Feature",
@@ -72,6 +72,58 @@ def rp_patches(case_id="U00299"):
               new=lambda self, uid: (evidence, fx.rp_explanation_payload())),
         patch("app.adapters.risk_platform.RiskPlatformAdapter.fetch_case_evidence",
               new=lambda self, uid, expose_complete_records=False: evidence),
+    )
+
+
+# Related account used by the cross-account analysis fixture (U00123-style
+# id, connected to the case account through a device-sharing cluster).
+CATA_RELATED_ACCOUNT = "U00123"
+
+
+def cata_patches(case_id="U00299"):
+    """Patch the account-scoped retrieval seams consumed by
+    cross_account_trade_analysis (network signals + bounded transaction
+    pages). Controlled multi-account evidence: one 1_to_1 candidate
+    (same symbol, opposite sides, 15s gap, equal values). Scenarios that
+    never plan the analysis tool are unaffected."""
+    signals = {
+        "connected_account_count": 1,
+        "connected_accounts": [{
+            "user_id": CATA_RELATED_ACCOUNT,
+            "relationship_type": ["shared_device"],
+            "device_fingerprints": ["dev-1"],
+            "shared_ips": [],
+            "risk_level": "HIGH",
+            "risk_score": 77.0,
+        }],
+    }
+    transactions = {
+        "case_user_id": case_id,
+        "requested_accounts": [case_id, CATA_RELATED_ACCOUNT],
+        "transactions": [
+            {"transaction_id": "CATX-00001", "account_id": case_id,
+             "symbol": "BTC", "side": "BUY", "price": 40000.0,
+             "quantity": 0.5, "value": 20000.0,
+             "timestamp": "2026-08-19T10:00:00+00:00"},
+            {"transaction_id": "CATX-00002",
+             "account_id": CATA_RELATED_ACCOUNT,
+             "symbol": "BTC", "side": "SELL", "price": 40000.0,
+             "quantity": 0.5, "value": 20000.0,
+             "timestamp": "2026-08-19T10:00:15+00:00"},
+        ],
+        "total_matched": 2,
+        "returned_count": 2,
+        "offset": 0,
+        "limit": 100,
+        "truncated": False,
+        "has_more": False,
+        "next_offset": None,
+    }
+    return (
+        patch("app.adapters.risk_platform.RiskPlatformAdapter.fetch_network_signals",
+              new=lambda self, uid, limit=None: signals),
+        patch("app.adapters.risk_platform.RiskPlatformAdapter.fetch_account_transactions",
+              new=lambda self, uid, **kw: transactions),
     )
 
 

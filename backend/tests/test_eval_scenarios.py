@@ -5,9 +5,11 @@ composer, scripted planner LLM, stubbed RP) — never real LLM or real RP.
 Uses the exact same scenario definitions and checkers as the standalone
 runner (backend/eval/) — no duplicated scenario logic.
 
-All 15 scripted scenarios are stable and gated: E15 verifies that an
-opposite-trade request is a DISTINCT bounded semantic request (never a
-generic-evidence fallback).
+All 17 scripted scenarios are stable and gated: E15 verifies that a
+same-account opposite-trade request on a NON-capable finding stays a
+bounded rejection; E16 verifies cross-account routing to the derived
+analysis tool; E17 verifies the self-opposite view executes for a
+capable finding with same-account wording.
 """
 
 import pytest
@@ -16,7 +18,7 @@ from eval.runner import run_scenario
 from eval.scenarios import build_scenarios
 
 STABLE = ["E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09",
-          "E10", "E11", "E12", "E13", "E14", "E15"]
+          "E10", "E11", "E12", "E13", "E14", "E15", "E16", "E17"]
 
 
 @pytest.mark.parametrize("scenario_id", STABLE)

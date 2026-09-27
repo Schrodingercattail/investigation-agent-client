@@ -7,7 +7,7 @@ LLM and Risk Platform faked.
 
 Positive path: 5 turns over one investigation (case intake → timeline →
 event explanation → policy → artifact bundle).
-Negative paths: unsupported capability (F3 lacks opposite_trades) and
+Negative paths: unsupported capability (F3 lacks self_opposite_trades) and
 ambiguous context resolution.
 
 No live LLM, no live Risk Platform, no network.
@@ -44,7 +44,7 @@ INVESTIGATION_ID = "CASE:U00299"
 # ---------------------------------------------------------------------------
 
 F3_CAPS = FindingCapability.model_validate(
-    ["timeline", "signal_explain", "policy_lookup"]          # no opposite_trades
+    ["timeline", "signal_explain", "policy_lookup"]          # no self_opposite_trades
 )
 
 
@@ -245,7 +245,7 @@ class TestPositivePath:
         # F3 came from runtime context injection, not LLM output
         assert tc.arguments["finding_id"] == "F3"
         assert tc.arguments["view"] == "timeline"
-        assert "opposite_trades" not in str(tc.arguments)
+        assert "self_opposite_trades" not in str(tc.arguments)
         # real TimelineEvents in the result
         events = tc.result.data["events"]
         assert len(events) >= 2
@@ -419,17 +419,17 @@ class TestPositivePath:
 
 
 # ===========================================================================
-# NEGATIVE PATH — unsupported capability (F3 lacks opposite_trades)
+# NEGATIVE PATH — unsupported capability (F3 lacks self_opposite_trades)
 # ===========================================================================
 
 class TestNegativeUnsupportedCapability:
-    def test_opposite_trades_bounded_rejection(self, store):
+    def test_self_opposite_trades_bounded_rejection(self, store):
         findings = make_findings()
         svc, p1, p2 = make_service(store, [
             # planner (scripted) would try a trade plan — but the trade skill
             # is NOT in the eligible set, so the planner itself bounds it.
             ('{"skill_id": "trade_investigation", "goal": "g", "steps": ['
-             '{"type": "inspect_opposite_trades", "reason": "show trades"}]}'),
+             '{"type": "inspect_self_opposite_trades", "reason": "show trades"}]}'),
         ])
         focused = InvestigationContext(
             case_id="U00299", focused_finding_id="F3",
@@ -475,7 +475,7 @@ class TestNegativeUnsupportedCapability:
         findings = make_findings()
         trade_script = (
             '{"skill_id": "trade_investigation", "goal": "g", "steps": ['
-            '{"type": "inspect_opposite_trades", "reason": "r"}]}'
+            '{"type": "inspect_self_opposite_trades", "reason": "r"}]}'
         )
         svc = InvestigationService(
             planner=PlannerV2(ScriptedLLM([trade_script])),
@@ -534,14 +534,15 @@ class TestAmbiguousResolution:
 
         planner = NoPlanner()
         svc = InvestigationService(planner=planner,
-                                   task_store=store)
+                                   task_store=store,
+                                   allow_llm_resolution=False)
 
         # The REAL ContextResolver supports an `events` parameter (loaded
         # timeline views). The service's plain resolve call doesn't pass
         # events yet (no timeline is loaded in this bare scenario), so we
         # exercise both: the resolver directly with events, and the service
         # end-to-end (which resolves to unresolved → same bounded stop).
-        svc.resolver = ContextResolver()
+        svc.resolver = ContextResolver(llm_assist=False)
 
         # Direct resolver check with events: true ambiguity, bounded outcome.
         outcome = svc.resolver.resolve(

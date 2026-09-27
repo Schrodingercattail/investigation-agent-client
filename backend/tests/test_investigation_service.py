@@ -54,10 +54,14 @@ TIMELINE_PLAN = ('{"skill_id": "timeline_investigation", "goal": "g", "steps": '
                  '[{"type": "inspect_timeline", "reason": "r"}]}')
 
 
-def make_service(script=None, store=None, planner=None) -> InvestigationService:
+def make_service(script=None, store=None, planner=None,
+                 allow_llm_resolution=False) -> InvestigationService:
+    # deterministic resolver by default: these tests pin the deterministic
+    # resolution/gating path (the semantic assist has its own suites)
     return InvestigationService(
         planner=planner or PlannerV2(llm_factory(script or [CASE_PLAN])),
         task_store=store or TaskStoreV2(":memory:"),
+        allow_llm_resolution=allow_llm_resolution,
     )
 
 

@@ -586,7 +586,7 @@ class TestFixB_ExplicitEvidenceStream:
     def test_invalid_stream_rejected(self):
         case, cc = live_case_context()
         r = finding_drilldown(finding_id="F1", view="evidence",
-                              case_context=cc, stream="opposite_trades")
+                              case_context=cc, stream="self_opposite_trades")
         assert r.outcome == ToolResultOutcome.VALIDATION_ERROR
 
     def test_planner_specializes_stream_steps(self):

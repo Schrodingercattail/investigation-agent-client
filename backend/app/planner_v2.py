@@ -125,7 +125,7 @@ INTENT → STEP GUIDANCE (when a listed step serves the intent, plan exactly tha
 - "why was this flagged" / detection-basis questions → explain_signal ONLY. Never combine it with inspect_timeline or inspect_evidence.
 - Vague explanatory language ("what's behind this", "tell me more", "what stands out", "walk me through") is AMBIGUOUS: plan explain_signal (the explanation level) — never inspect_evidence for these. inspect_evidence is reserved for requests that clearly ask for records ("show all withdrawals", "list every transaction", "show the evidence records").
 - timeline/chronology requests ("show related timeline", "show the timeline") → inspect_timeline. Without an explicit count, the result is the complete timeline — do not pass any count.
-- concrete-record requests ("show the withdrawals", "list all supporting transactions") → inspect_evidence. It returns the COMPLETE record set by contract — plan it alone. When the request names a SPECIFIC evidence stream, plan the matching scoped step instead: withdrawal records ("show me all the withdrawals") → inspect_withdrawals; transaction/trade records ("show me all the transactions") → inspect_transactions. Never substitute one stream for another. Opposite-trade requests ("show me the opposite trade") are a DISTINCT semantic request: plan inspect_opposite_trades EXACTLY (it is a valid step — the runtime bounds it as unsupported when the focused finding lacks the opposite_trades capability). Never plan inspect_evidence (or any other step) for an opposite-trade request, and never substitute another stream for it.
+- concrete-record requests ("show the withdrawals", "list all supporting transactions") → inspect_evidence. It returns the COMPLETE record set by contract — plan it alone. When the request names a SPECIFIC evidence stream, plan the matching scoped step instead: withdrawal records ("show me all the withdrawals") → inspect_withdrawals; transaction/trade records ("show me all the transactions") → inspect_transactions. Never substitute one stream for another. CROSS-ACCOUNT opposite-trade requests ("find opposite trades across accounts", "cross-account opposite-side trades", "check whether related accounts traded opposite sides") → analyze_cross_account_trades EXACTLY. SAME-ACCOUNT opposite-trade requests ("show me the opposite trade of this finding", "check this account's opposite trades", "show self-opposite trading", "does this account trade both sides?") → inspect_self_opposite_trades (the same-account drilldown; the runtime bounds it as unsupported without the self_opposite_trades capability). Never plan inspect_evidence (or any other step) for either request, and never substitute another stream for them.
 - policy/requirement questions → retrieve_policy.
 - EXPLICIT subset requests ("show me 5 examples", "show 5 recent events") → inspect_timeline with top_n set to the requested number. Never invent a count the user did not state.
 - artifact/export requests ("generate a Markdown investigation bundle", "export the investigation") → generate_artifact ONLY. Never prepend fetch_case for these: bundle composition uses already-executed results from this investigation. Only plan fetch_case when NO case context exists yet at all.
@@ -490,15 +490,24 @@ class PlannerV2:
             # the explicitly-scoped step — so the requested stream governs
             # tool behavior and can never be silently replaced by the
             # finding-title heuristic (P5: the response answers the request).
-            # Opposite-trade wording specializes to inspect_opposite_trades
-            # (a DISTINCT semantic request): it must never be transformed
-            # into generic evidence — the tool bounds it as unsupported when
-            # the focused finding lacks the opposite_trades capability.
+            # CROSS-ACCOUNT wording is evaluated FIRST: cross-account
+            # phrasing contains "opposite trades", so a cross-account
+            # request must never degrade into the same-account
+            # self-opposite step. Same-account opposite-trade wording
+            # specializes to inspect_self_opposite_trades (a DISTINCT
+            # semantic request): never generic evidence, never another
+            # stream — the tool bounds it as unsupported when the focused
+            # finding lacks the self_opposite_trades capability.
             emitted_type = ls.type
-            if ls.type == "inspect_evidence":
+            if ls.type in ("inspect_evidence", "inspect_self_opposite_trades") \
+                    and _is_cross_account_trade_request(user_request):
+                emitted_type = "analyze_cross_account_trades"
+                binding = STEP_TOOL_MAP["analyze_cross_account_trades"]
+                arguments = dict(binding.parameter_locks)
+            elif ls.type == "inspect_evidence":
                 if _is_opposite_trade_request(user_request):
-                    emitted_type = "inspect_opposite_trades"
-                    binding = STEP_TOOL_MAP["inspect_opposite_trades"]
+                    emitted_type = "inspect_self_opposite_trades"
+                    binding = STEP_TOOL_MAP["inspect_self_opposite_trades"]
                     arguments = dict(binding.parameter_locks)
                 else:
                     stream_step = _explicit_stream_step(user_request)
@@ -552,23 +561,42 @@ def _investigation_ref(context: InvestigationContext) -> str:
 # heuristic (P5/P14). Purely deterministic echo of the user's vocabulary.
 _WITHDRAWAL_RE = __import__("re").compile(
     r"withdrawal|提现|取款", __import__("re").IGNORECASE)
-# "opposite trade(s)" names the opposite-trade investigation (a separate,
-# explicitly unsupported capability) — never specialized to transactions.
+# "opposite trade(s)" names the same-account self-opposite drilldown —
+# never specialized to transactions. CROSS-ACCOUNT wording is matched by
+# _CROSS_ACCOUNT_TRADE_RE and must be evaluated FIRST (see below).
 _TRANSACTION_RE = __import__("re").compile(
     r"(?<!opposite )transactions?\b|trading|交易", __import__("re").IGNORECASE)
-# Opposite-trade wording names a DISTINCT semantic request (the
-# opposite-trades investigation) — never generic evidence, never another
-# stream. Matched before transaction wording precisely because "trade"
-# inside "opposite trade" would otherwise mis-specialize the request.
+# Cross-account wording names the derived cross-account analysis. It is
+# matched before the self-opposite regex because cross-account phrasing
+# ("opposite trades across accounts") CONTAINS "opposite trades" — the
+# cross-account intent must win.
+_CROSS_ACCOUNT_TRADE_RE = __import__("re").compile(
+    r"cross[\s-]*account|across[\s]+accounts|between[\s]+accounts|"
+    r"related[\s]+accounts|跨账户|跨賬戶|对倒|對倒",
+    __import__("re").IGNORECASE)
+# Same-account opposite-trade wording names the self-opposite drilldown —
+# never generic evidence, never another stream.
 _OPPOSITE_TRADE_RE = __import__("re").compile(
-    r"opposite[\s-]*trades?|反向交易|对向交易", __import__("re").IGNORECASE)
+    r"opposite[\s-]*trades?|self[\s-]*opposite|both[\s-]+sides|"
+    r"反向交易|对向交易",
+    __import__("re").IGNORECASE)
+
+
+def _is_cross_account_trade_request(user_request: str) -> bool:
+    """True when the user's own words name CROSS-ACCOUNT opposite-trade
+    analysis. Evaluated BEFORE the self-opposite route: cross-account
+    phrasing contains "opposite trades" and must never degrade into the
+    same-account step."""
+    return bool(_CROSS_ACCOUNT_TRADE_RE.search(user_request or ""))
 
 
 def _is_opposite_trade_request(user_request: str) -> bool:
-    """True when the user's own words name the opposite-trade investigation.
-    Such requests specialize to inspect_opposite_trades — a distinct
-    semantic request that is bounded (unsupported without the
-    opposite_trades capability), never transformed into generic evidence."""
+    """True when the user's own words name the SAME-ACCOUNT opposite-trade
+    drilldown. Such requests specialize to inspect_self_opposite_trades —
+    a distinct semantic request that is bounded (unsupported without the
+    self_opposite_trades capability), never transformed into generic
+    evidence. Callers must evaluate _is_cross_account_trade_request
+    first."""
     return bool(_OPPOSITE_TRADE_RE.search(user_request or ""))
 
 
@@ -596,7 +624,7 @@ _PLAIN_INTAKE_RE = __import__("re").compile(
 _DEEPER_ASK_RE = __import__("re").compile(
     r"(artifact|bundle|export|report|导出|报告|policy|policies|政策|timeline|"
     r"时间线|evidence|证据|signal|信号|why|为什么|finding|发现|withdrawal|"
-    r"交易|policy support|summar|总结|prepare)",
+    r"交易|policy support|summar|总结|prepare|opposite|cross[\s-]*account)",
     __import__("re").IGNORECASE,
 )
 

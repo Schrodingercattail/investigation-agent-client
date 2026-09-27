@@ -158,6 +158,13 @@ class TurnResponse(BaseModel):
     follow_ups: list[FollowUp] = Field(default_factory=list)
     context_changed: bool = False
     status: str                       # completed | failed | clarification_needed
+    # Stage 2.1 structured Question / Goal Representation (bounded,
+    # user-safe projection). Additive; None when no goal was produced.
+    goal: dict[str, Any] | None = None
+    # SP-M2-1R QA evidence: user-safe target-resolution path record
+    # (fast path / ambiguity / refinement invoked, decision, target,
+    # confidence). Additive; None when no target semantics applied.
+    target_resolution: dict[str, Any] | None = None
 
 
 class InvestigationResponse(BaseModel):
@@ -215,6 +222,53 @@ class TaskDetailResponse(BaseModel):
     """This Agent message's own Suggested Follow-ups (conversation restore —
     chips belong to their specific message and survive a refresh)."""
     task_follow_ups: list["FollowUp"] = Field(default_factory=list)
+
+
+class GoalRunRequest(BaseModel):
+    """POST /api/v2/investigations/{id}/goal — start a bounded Agent Loop
+    run for the investigation. `goal` is user intent (untrusted content);
+    `context_action` carries the client's explicit pending UI selection
+    (e.g. the focused finding) — the same ONLY-client-writable context
+    surface the turn endpoint honors (QA-01: the loop must preserve the
+    user-selected focus). The runtime supplies everything else."""
+
+    goal: str = Field(min_length=1, max_length=2000)
+    context_action: FocusAction | None = None
+
+
+class GoalRunResponse(BaseModel):
+    """Accepted loop run: poll GET /tasks/{task_id}/activity until a
+    terminal agent_status."""
+
+    task_id: str
+    investigation_id: str
+    agent_status: str
+
+
+class TaskActivityResponse(BaseModel):
+    """Bounded, UI-safe Agent Activity projection (agent-activity baseline
+    §11): whitelisted fields from the persisted Agent Loop state — the
+    sequence-ordered activity record, plan snapshot, and run status. Never
+    internal observations/decision structures, never raw tool payloads."""
+
+    task_id: str
+    investigation_id: str
+    case_id: str
+    goal: str
+    criteria_kind: str
+    focused_finding_id: str | None = None
+    agent_status: str
+    stop_reason: str | None = None
+    iteration: int
+    max_iterations: int
+    plan_revisions: int
+    plan_steps: list[dict[str, Any]] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    activity: list[dict[str, Any]] = Field(default_factory=list)
+    # Stage 2.1 structured Question / Goal Representation (bounded,
+    # user-safe projection; additive).
+    goal_representation: dict[str, Any] | None = None
+    is_terminal: bool
 
 
 def summarize_tool_call(tc: ToolCallV2) -> ToolCallSummary:

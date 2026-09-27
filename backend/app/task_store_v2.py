@@ -15,6 +15,7 @@ import json
 import logging
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -97,7 +98,46 @@ class TaskStoreV2:
                 )
                 """
             )
+            # Agent Loop state (docs/baselines/2026-09-19-bounded-agent-loop-v1.md
+            # §5): one resume-ready document per loop task — same store, same
+            # DB file, same document-per-record pattern. Loop semantics are
+            # NEVER collapsed into the TaskV2 status column.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS agent_states (
+                    task_id    TEXT PRIMARY KEY,
+                    updated_at TEXT,
+                    document   TEXT NOT NULL
+                )
+                """
+            )
+            # Candidate Semantic Metadata (WP-M2-1 WI-1; schema owner:
+            # app/candidate_metadata.py). Same store, same DB file,
+            # additive IF-NOT-EXISTS migration. No runtime behavior reads
+            # these tables yet (flags default OFF).
+            from app.candidate_metadata import ensure_candidate_metadata_schema
+            ensure_candidate_metadata_schema(conn)
+            # Clarify ledger (WP-M2-1 WI-6; schema owner:
+            # app/clarification_state.py) — bounded-clarification loop
+            # protection. Same store, same additive convention.
+            from app.clarification_state import (
+                ensure_clarification_state_schema)
+            ensure_clarification_state_schema(conn)
             conn.commit()
+
+    @contextmanager
+    def metadata_write(self):
+        """Exclusive, committing connection for the candidate-metadata
+        repository (WP-M2-1 WI-1). The store owns the connection
+        lifecycle and its lock; the repository only borrows them."""
+        with self._lock:
+            conn = self._connection()
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     # --- CRUD ----------------------------------------------------------------
 
@@ -185,6 +225,40 @@ class TaskStoreV2:
         if row is None:
             return None
         return Investigation.model_validate_json(row["document"])
+
+    # --- Agent Loop state -----------------------------------------------------
+    # Resume-ready persisted loop state (baseline §5/§12): saved after every
+    # meaningful transition; sufficient for inspection, audit, and future
+    # resume. Resume EXECUTION is deliberately deferred (baseline §12).
+
+    def save_agent_state(self, state: Any) -> Any:
+        from app.agent_loop import AgentLoopState
+        assert isinstance(state, AgentLoopState)
+        with self._lock:
+            conn = self._connection()
+            conn.execute(
+                """INSERT OR REPLACE INTO agent_states
+                   (task_id, updated_at, document)
+                   VALUES (?, ?, ?)""",
+                (
+                    state.task_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    state.model_dump_json(),
+                ),
+            )
+            conn.commit()
+        return state
+
+    def get_agent_state(self, task_id: str) -> Any | None:
+        from app.agent_loop import AgentLoopState
+        with self._lock:
+            row = self._connection().execute(
+                "SELECT document FROM agent_states WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return AgentLoopState.model_validate_json(row["document"])
 
     # --- Investigation session state ----------------------------------------
     #

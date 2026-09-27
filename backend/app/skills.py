@@ -71,9 +71,19 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
         tool_name="finding_drilldown",
         parameter_locks={"view": "evidence", "stream": "transactions"},
     ),
-    "inspect_opposite_trades": StepToolBinding(
+    # Canonical self-opposite step: opposite-side trading by the SAME
+    # account (view stays registered-but-unimplemented; bounded
+    # unsupported at runtime — never a substitute for other views).
+    "inspect_self_opposite_trades": StepToolBinding(
         tool_name="finding_drilldown",
-        parameter_locks={"view": "opposite_trades"},
+        parameter_locks={"view": "self_opposite_trades"},
+    ),
+    # Derived analytical tool: candidate cross-account opposite-trade
+    # relationships (baseline §12b). analysis_type is locked — the planner
+    # can never emit another value.
+    "analyze_cross_account_trades": StepToolBinding(
+        tool_name="cross_account_trade_analysis",
+        parameter_locks={"analysis_type": "cross_account_opposite_trade"},
     ),
     "explain_signal": StepToolBinding(tool_name="signal_explain"),
     "retrieve_policy": StepToolBinding(tool_name="policy_lookup"),
@@ -86,17 +96,23 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
 # Keys: (tool_name, locked-parameter key/value pairs that must ALL be
 # supported; a step with no locks always passes).
 _TOOL_SUPPORTED_PARAMETERIZATIONS: dict[str, set[tuple[tuple[str, Any], ...]]] = {
-    # finding_drilldown implements timeline + evidence views only;
-    # opposite_trades is registered but not implemented (Week 1).
-    # inspect_withdrawals / inspect_transactions carry an EXPLICIT
-    # evidence-stream scope so a record request can never silently select
-    # the wrong stream via the finding-title heuristic.
+    # finding_drilldown implements the timeline, evidence, and
+    # self_opposite_trades views. inspect_withdrawals /
+    # inspect_transactions carry an EXPLICIT evidence-stream scope so a
+    # record request can never silently select the wrong stream via the
+    # finding-title heuristic.
     "finding_drilldown": {
         (("view", "timeline"),),
         (("view", "evidence"),),
         (("view", "evidence"), ("stream", "withdrawals")),
         (("view", "evidence"), ("stream", "transactions")),
+        (("view", "self_opposite_trades"),),
         (),                       # default view (no view argument)
+    },
+    # cross_account_trade_analysis implements exactly the one registered
+    # analysis (baseline §12b).
+    "cross_account_trade_analysis": {
+        (("analysis_type", "cross_account_opposite_trade"),),
     },
 }
 
@@ -196,7 +212,7 @@ SKILLS: dict[str, SkillDefinition] = {
             "inspect_evidence",
             "inspect_withdrawals",
             "inspect_transactions",
-            "inspect_opposite_trades",
+            "inspect_self_opposite_trades",
             "explain_signal",
             "retrieve_policy",
             "generate_artifact",
@@ -217,17 +233,23 @@ SKILLS: dict[str, SkillDefinition] = {
         name="Trade Investigation",
         description=(
             "Investigate a focused finding through the trades composing "
-            "its opposite-trade signal."
+            "its opposite-trade signal, including candidate cross-account "
+            "opposite-trade analysis."
         ),
-        required_capabilities=["opposite_trades"],
+        required_capabilities=["self_opposite_trades"],
         allowed_tools=[
-            "finding_drilldown",   # locked to view="opposite_trades"
+            "cross_account_trade_analysis",
+            "finding_drilldown",   # locked to view="self_opposite_trades"
             "signal_explain",
             "policy_lookup",
             "artifact_bundle",
         ],
+        # The cross-account analysis is the skill's primary investigation
+        # step and the only executable path today (P19): the same-account
+        # self-opposite drilldown view stays registered-but-unimplemented.
         planning_steps=[
-            "inspect_opposite_trades",
+            "analyze_cross_account_trades",
+            "inspect_self_opposite_trades",
             "explain_signal",
             "retrieve_policy",
             "generate_artifact",
@@ -235,9 +257,15 @@ SKILLS: dict[str, SkillDefinition] = {
         constraints=[
             "Requires InvestigationContext.focused_finding_id.",
             "Executable only if the focused finding declares capability "
-            "'opposite_trades'.",
-            "finding_drilldown is locked to view='opposite_trades'; any "
-            "other view is invalid under this skill.",
+            "'self_opposite_trades'.",
+            "analyze_cross_account_trades is the derived candidate "
+            "cross-account opposite-trade analysis; its analysis_type is "
+            "locked by the registry and its thresholds are system "
+            "configuration — results are candidate relationships, never "
+            "confirmed coordinated trading.",
+            "finding_drilldown is locked to view='self_opposite_trades' "
+            "(opposite-side trading by the SAME account); any other view "
+            "is invalid under this skill.",
         ],
     ),
 }

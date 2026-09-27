@@ -317,28 +317,89 @@ def build_scenarios():
               "contains only F2 content and only contributing provenance.",
     ))
 
-    # E15 — unsupported opposite-trade request
+    # E15 — unsupported same-account (self) opposite-trade request
     add(Scenario(
         scenario_id="E15", category="unsupported", mode="scripted",
         case_id="U00299", focus="F1",
         turns=["show me the opposite trade"],
         # the scripted plan mirrors the live contract: the request
-        # specializes to inspect_opposite_trades (distinct semantic request)
+        # specializes to inspect_self_opposite_trades (distinct semantic
+        # request; same-account drilldown, registered-but-unimplemented)
         planner_scripts=[plan_json("timeline_investigation",
-                                   ["inspect_opposite_trades"])],
+                                   ["inspect_self_opposite_trades"])],
         checks=[
             _C("expected_skill", skill="timeline_investigation"),
-            _C("expected_step", "inspect_opposite_trades"),
+            _C("expected_step", "inspect_self_opposite_trades"),
             _C("tool_argument", tool_name="finding_drilldown",
-               key="view", value="opposite_trades"),
+               key="view", value="self_opposite_trades"),
             _C("expected_outcome", "finding_drilldown", "unsupported"),
             _C("response_contains",
-               "opposite-trade investigation is not available"),
+               "self-opposite-trade investigation is not available"),
             _C("response_not_contains", "transaction record",
                "opposite-trade ratio"),
         ],
-        notes="Opposite-trade unsupported for F1: bounded response, NO "
-              "ordinary transaction fallback.",
+        notes="Self-opposite (same-account) drilldown unsupported for F1: "
+              "bounded response, NO ordinary transaction fallback.",
+    ))
+
+    # E16 — cross-account opposite-trade analysis (trade investigation)
+    # The cross-account step is the trade skill's primary executable path;
+    # the deterministic planner hook routes cross-account wording here (it
+    # must never degrade into the same-account self step). The RP adapter
+    # seams are patched (fixture below) so the analysis runs on controlled
+    # multi-account evidence.
+    add(Scenario(
+        scenario_id="E16", category="trade-analysis", mode="scripted",
+        case_id="U00299", focus="F2",
+        turns=["Find opposite trades across accounts for this finding."],
+        planner_scripts=[plan_json("trade_investigation",
+                                   ["analyze_cross_account_trades"])],
+        checks=[
+            _C("expected_skill", skill="trade_investigation"),
+            _C("expected_step", "analyze_cross_account_trades"),
+            _C("tool_called", tool_name="cross_account_trade_analysis"),
+            _C("tool_argument", tool_name="cross_account_trade_analysis",
+               key="analysis_type", value="cross_account_opposite_trade"),
+            _C("expected_outcome", "cross_account_trade_analysis",
+               "success"),
+            _C("response_contains",
+               "candidate cross-account opposite-trade relationship"),
+            _C("response_contains", "U00299", "U00123"),
+            _C("response_not_contains",
+               "confirmed coordinated trading", "confirmed collusion"),
+        ],
+        notes="Cross-account wording routes to the analysis tool (never "
+              "the self step); MATCH_FOUND renders candidate terminology "
+              "with account pair + metrics.",
+    ))
+
+    # E17 — self-opposite (same-account) view executes on a capable finding
+    # The completion-phase contract: the canonical view is IMPLEMENTED and
+    # capability-gated. F2 declares self_opposite_trades → the RP aggregate
+    # ratio + backing rule render with same-account wording; the same
+    # request on F1 stays bounded-unsupported (E15).
+    add(Scenario(
+        scenario_id="E17", category="trade-analysis", mode="scripted",
+        case_id="U00299", focus="F2",
+        turns=["show me the opposite trade"],
+        planner_scripts=[plan_json("timeline_investigation",
+                                   ["inspect_self_opposite_trades"])],
+        checks=[
+            _C("expected_skill", skill="timeline_investigation"),
+            _C("expected_step", "inspect_self_opposite_trades"),
+            _C("tool_argument", tool_name="finding_drilldown",
+               key="view", value="self_opposite_trades"),
+            _C("expected_outcome", "finding_drilldown", "success"),
+            _C("response_contains",
+               "opposite-side trading activity by this SAME account"),
+            _C("response_contains", "45.24%",
+               "Coordinated Trading Pattern"),
+            _C("response_not_contains",
+               "candidate cross-account", "confirmed coordinated"),
+        ],
+        notes="Self-opposite view executes for the capable finding: RP "
+              "aggregate ratio + rule echoed, same-account wording only; "
+              "no cross-account candidate terminology.",
     ))
 
     return scenarios

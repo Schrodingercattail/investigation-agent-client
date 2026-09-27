@@ -249,6 +249,11 @@ class TestCapabilityDocsMatchRuntime:
                 assert provider.has(binding.tool_name)
 
     def test_documented_unsupported_paths_stay_unexecutable(self):
-        assert not skill_path_executable("trade_investigation")
+        # Completion phase: the canonical self view is IMPLEMENTED and
+        # executable (capability-gated at runtime); the trade skill's
+        # primary path remains the derived cross-account analysis tool.
+        from app.skills import step_path_executable
+        assert step_path_executable("inspect_self_opposite_trades")
+        assert skill_path_executable("trade_investigation")
         from app.domain_tools.finding_drilldown import ALLOWED_VIEWS
-        assert "opposite_trades" not in ALLOWED_VIEWS
+        assert "self_opposite_trades" in ALLOWED_VIEWS

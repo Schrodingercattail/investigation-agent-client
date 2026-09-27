@@ -13,8 +13,10 @@ import type {
   CreateInvestigationRequest,
   FocusAction,
   FollowUpsResponse,
+  GoalRunResponse,
   InvestigationListResponse,
   InvestigationResponse,
+  TaskActivityResponse,
   TaskDetailResponse,
   TaskResultsResponse,
   TurnRequest,
@@ -129,6 +131,35 @@ export const investigationApi = {
     return request<{ deleted: boolean }>(
       `/investigations/${encodeURIComponent(investigationId)}`,
       { method: 'DELETE' },
+    )
+  },
+
+  /** Start a bounded Agent Loop run for this investigation. The pending
+   * UI selection (contextAction) travels with the goal so the loop honors
+   * the user-selected focus (QA-01). Returns immediately with the task id
+   * — poll getTaskActivity until a terminal agent_status. */
+  startAgentGoal(
+    investigationId: string,
+    goal: string,
+    contextAction?: FocusAction,
+  ) {
+    return request<GoalRunResponse>(
+      `/investigations/${encodeURIComponent(investigationId)}/goal`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          goal,
+          ...(contextAction ? { context_action: contextAction } : {}),
+        }),
+      },
+    )
+  },
+
+  /** Bounded, UI-safe Agent Activity for one loop task. 404 (code
+   * NO_AGENT_ACTIVITY) for turn-local tasks — those use TaskDetail. */
+  getTaskActivity(taskId: string) {
+    return request<TaskActivityResponse>(
+      `/tasks/${encodeURIComponent(taskId)}/activity`,
     )
   },
 }

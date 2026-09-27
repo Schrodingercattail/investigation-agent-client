@@ -202,6 +202,114 @@ def _render_evidence_records(payload: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _render_cross_account_candidates(payload: dict[str, Any]) -> list[str]:
+    """Candidate cross-account opposite-trade relationships section (§17
+    baseline content rules): candidate relationship, supporting transaction
+    IDs, matching criteria/metrics, evidence in the ids themselves, and
+    limitations. Candidate terminology only — quantitative matches under
+    configured tolerances, never a coordinated-trading conclusion."""
+    status = payload.get("analysis_status")
+    cfg = payload.get("config") or {}
+    lines = [
+        f"Matching criteria (system configuration): time within "
+        f"{cfg.get('max_time_delta_seconds', '?'):g}s; value within "
+        f"{cfg.get('value_tolerance_relative', '?'):.0%} relative "
+        f"(floor {cfg.get('value_tolerance_absolute_floor', '?')}).",
+        "",
+    ]
+    if status == "MATCH_FOUND":
+        lines.append(
+            "| Candidate | Type | Account A | Side A | Account B | Side B "
+            "| Symbol | Max gap (s) | Value A | Value B | Diff (rel) | "
+            "Transactions |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        for c in payload.get("candidates") or []:
+            ids = ", ".join(c.get("transaction_ids_a", [])
+                            + c.get("transaction_ids_b", []))
+            lines.append(
+                f"| {c.get('candidate_id')} | {c.get('match_type')} "
+                f"| {c.get('account_a')} | {c.get('side_a')} "
+                f"| {c.get('account_b')} | {c.get('side_b')} "
+                f"| {c.get('symbol')} "
+                f"| {c.get('max_time_gap_seconds'):g} "
+                f"| {c.get('value_a'):,.2f} | {c.get('value_b'):,.2f} "
+                f"| {c.get('value_difference'):,.2f} "
+                f"({c.get('value_difference_relative'):.1%}) | {ids} |")
+        lines.append("")
+        lines.append(
+            "These are candidate relationships: quantitative matches "
+            "under the configured analytical tolerances — leads for "
+            "analyst judgment, not conclusions about intent.")
+    else:
+        lines.append(
+            "No candidate relationships are reported: the available "
+            "transaction evidence was insufficient for a reliable "
+            "conclusion (bounded or empty retrieval). This is not a "
+            "no-match result.")
+    limitations: list[str] = []
+    retrieval = payload.get("retrieval") or {}
+    if retrieval.get("truncated"):
+        reasons = ", ".join(retrieval.get("truncated_reasons") or [])
+        limitations.append(
+            "Retrieval was bounded (partial evidence"
+            + (f": {reasons}" if reasons else "") + "); absence of "
+            "further matches is not established.")
+    dq = payload.get("data_quality") or {}
+    excluded = dq.get("records_excluded_untimestamped") or 0
+    if excluded:
+        limitations.append(
+            f"{excluded} transaction record(s) were excluded from "
+            "matching because no usable timestamp was available.")
+    if payload.get("candidates_found", 0) > payload.get(
+            "candidates_emitted", 0):
+        limitations.append(
+            f"{payload['candidates_found']} candidates were found; only "
+            f"the top {payload['candidates_emitted']} are listed "
+            "(result limit).")
+    if limitations:
+        lines.append("Limitations:")
+        lines.extend(f"- {x}" for x in limitations)
+    return lines
+
+
+def _render_self_opposite(payload: dict[str, Any]) -> list[str]:
+    """Self-Opposite (Same-Account) Trade Activity section: the Risk
+    Platform's authoritative opposite_trade_ratio + backing rule echoed
+    verbatim, plus the account's complete transaction record set. Wording
+    names the SAME account; no cross-account terminology, no intent
+    claims."""
+    lines: list[str] = []
+    ratio = payload.get("opposite_trade_ratio")
+    if ratio is not None:
+        lines.append(
+            f"Opposite-trade ratio (Risk Platform aggregate for this "
+            f"same account): {ratio:.2%}."
+        )
+    else:
+        lines.append(
+            "The Risk Platform does not report an opposite-trade ratio "
+            "for this account."
+        )
+    rule = payload.get("rule")
+    if isinstance(rule, dict):
+        parts = [f"Detection rule: {rule.get('name')}"]
+        if rule.get("description"):
+            parts.append(str(rule["description"]))
+        if rule.get("threshold"):
+            parts.append(f"threshold: {rule['threshold']}")
+        lines.append(" — ".join(parts) + ".")
+    record_lines = _render_evidence_records(payload)
+    if record_lines:
+        lines.append("")
+        lines.extend(record_lines)
+    lines.append("")
+    lines.append(
+        "Same-account activity only; this implies no cross-account "
+        "relationships and nothing about intent."
+    )
+    return lines
+
+
 def _gather_gaps(tool_calls: list[ToolCallV2]) -> list[str]:
     gaps: list[str] = []
     for tc in tool_calls:
@@ -441,6 +549,54 @@ def artifact_bundle(
         lines.append("")
         lines.append("## Signal Explanation")
         lines.extend(signal_lines)
+
+    # --- candidate cross-account relationships (only when present) --------
+    # §17 baseline content rules: candidate relationship + supporting
+    # transaction IDs + matching criteria/metrics + limitations. Renders
+    # for MATCH_FOUND (candidate table) and for INSUFFICIENT_DATA (a
+    # bounded insufficiency statement — the artifact must carry the gap,
+    # never silently omit the analysis). NO_MATCH renders as its own
+    # bounded statement so the analysis is never invisible in a bundle.
+    candidate_lines: list[str] = []
+    for tc in executed:
+        data = tc.result.data if isinstance(tc.result.data, dict) else {}
+        if data.get("analysis") != "cross_account_trade_analysis":
+            continue
+        if data.get("analysis_status") == "MATCH_FOUND" \
+                and not (data.get("candidates") or []):
+            continue          # nothing to render → not a contributor
+        block = _render_cross_account_candidates(data)
+        if block:
+            if candidate_lines:
+                candidate_lines.append("")
+            candidate_lines.append(f"### {tc.tool_call_id}")
+            candidate_lines.extend(block)
+            contributing_calls.append(tc)
+    if candidate_lines:
+        lines.append("")
+        lines.append("## Candidate Cross-Account Relationships")
+        lines.extend(candidate_lines)
+
+    # --- self-opposite (same-account) trade activity -----------------------
+    # The canonical self view: RP's own ratio + rule, the account's complete
+    # transaction record set, same-account wording only. Rendered BEFORE
+    # the concrete-evidence section (different view key, no overlap).
+    self_lines: list[str] = []
+    for tc in executed:
+        data = tc.result.data if isinstance(tc.result.data, dict) else {}
+        if data.get("view") != "self_opposite_trades":
+            continue
+        block = _render_self_opposite(data)
+        if block:
+            if self_lines:
+                self_lines.append("")
+            self_lines.append(f"### {tc.tool_call_id}")
+            self_lines.extend(block)
+            contributing_calls.append(tc)
+    if self_lines:
+        lines.append("")
+        lines.append("## Self-Opposite (Same-Account) Trade Activity")
+        lines.extend(self_lines)
 
     # --- policy context (only when present) ---------------------------------------
     # Scope containment (P11) with EXPLICIT presentation scope:

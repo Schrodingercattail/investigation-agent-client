@@ -21,6 +21,8 @@ import { ConversationPanel, type ConversationTurn } from '@/components/investiga
 import { ContextPanel } from '@/components/investigation/ContextPanel'
 import { FindingsPanel } from '@/components/investigation/FindingsPanel'
 import { TimelineView } from '@/components/investigation/TimelineView'
+import { AgentActivityPanel } from '@/components/investigation/AgentActivityPanel'
+import { useAgentActivity } from '@/hooks/useAgentActivity'
 import type {
   Artifact,
   Finding,
@@ -32,7 +34,7 @@ import type {
   TurnResponse,
 } from '@/api/types'
 import { InvestigationApiError, investigationApi } from '@/api/investigation'
-import { Bot, Loader2, PanelLeftOpen, PanelRightOpen, SendHorizonal } from 'lucide-react'
+import { Bot, Loader2, PanelLeftOpen, PanelRightOpen, SendHorizonal, Workflow } from 'lucide-react'
 
 type TurnPhase = 'idle' | 'creating' | 'loading' | 'error'
 
@@ -92,9 +94,15 @@ export function InvestigationPage() {
   /** Backend-provided follow-ups for the CURRENT context (previewed via the
    * read-only followups endpoint once a finding is selected). Never
    * generated client-side; superseded by each turn response's own set. */
-  /** Controlled value for the right-side Context/Artifacts tabs so UI
-   * navigation follow-ups can focus the Artifacts panel. */
-  const [rightTab, setRightTab] = useState<'context' | 'artifacts'>('context')
+  /** Controlled value for the right-side Context/Artifacts/Activity tabs so
+   * UI navigation follow-ups can focus the Artifacts panel. */
+  const [rightTab, setRightTab] = useState<'context' | 'artifacts' | 'activity'>('context')
+  /** The loop task whose Agent Activity is displayed (Agent Activity V1:
+   * started via the explicit "Run Agent Loop" action; rendered read-only
+   * from the durable activity projection afterwards). */
+  const [activityTaskId, setActivityTaskId] = useState<string | null>(null)
+  const [goalPhase, setGoalPhase] = useState<'idle' | 'running' | 'error'>('idle')
+  const agentActivity = useAgentActivity(activityTaskId)
 
   const setPhase = (phase: TurnPhase, errorMessage: string | null = null) =>
     setState((s) => ({ ...s, phase, errorMessage }))
@@ -151,6 +159,10 @@ export function InvestigationPage() {
     async (investigationId: string) => {
       setPhase('loading')
       try {
+        // QA-03: scope the Activity view to THIS investigation — the
+        // previous investigation's activity task id must never survive a
+        // switch (stale traces otherwise render under the new case).
+        setActivityTaskId(null)
         const stateData = await investigationApi.getInvestigation(investigationId)
         const restoredContext = stateData.context
         const restoredTurns: ConversationTurn[] = []
@@ -242,6 +254,8 @@ export function InvestigationPage() {
         persistInvestigationId(investigationId)
         // preview follow-ups for the restored (possibly focused) context
         void refreshPreviewFollowUps(investigationId)
+        // restore the Agent Activity view for the latest loop task, if any
+        void restoreLatestActivity(investigationId)
       } catch (err) {
         setPhase('error', errorMessage(err))
       }
@@ -423,6 +437,62 @@ export function InvestigationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state.investigationId, input, pendingFocus, startInvestigation, refreshFindings],
   )
+
+  /** Agent Loop (Agent Activity V1): run the current input as a bounded
+   * loop goal. The pending finding selection travels with the goal as its
+   * context_action (QA-01: the loop honors the user-selected focus exactly
+   * like a turn); the backend starts the run and persists state per
+   * transition; the workspace switches to the Activity tab and polls
+   * until the terminal status (useAgentActivity stops itself there). */
+  const runAgentLoop = useCallback(async () => {
+    const goal = input.trim()
+    if (!state.investigationId || !goal || goalPhase === 'running') return
+    setGoalPhase('running')
+    setInput('')
+    setState((s) => ({
+      ...s,
+      turns: [...s.turns, { id: `u-${Date.now()}`, role: 'user' as const, text: goal }],
+    }))
+    try {
+      const started = await investigationApi.startAgentGoal(
+        state.investigationId,
+        goal,
+        pendingFocus && pendingFocus.type !== 'clear_focus'
+          ? {
+              type: pendingFocus.type === 'focus_event'
+                ? 'focus_event' : 'focus_finding',
+              finding_id: pendingFocus.finding_id,
+              ...(pendingFocus.type === 'focus_event'
+                ? { event_id: pendingFocus.event_id }
+                : {}),
+            }
+          : undefined,
+      )
+      // the selection is now authoritative persisted context
+      if (pendingFocus) setPendingFocus(null)
+      setActivityTaskId(started.task_id)
+      setRightTab('activity')
+    } catch (err) {
+      setGoalPhase('error')
+      setPhase('error', errorMessage(err))
+      return
+    }
+    setGoalPhase('idle')
+  }, [state.investigationId, input, goalPhase, pendingFocus, setPhase])
+
+  /** On reopen: restore the most recent loop task's Activity (completed
+   * runs render read-only history from the durable projection). */
+  const restoreLatestActivity = useCallback(async (investigationId: string) => {
+    try {
+      const stateData = await investigationApi.getInvestigation(investigationId)
+      const loopTask = [...stateData.tasks]
+        .reverse()
+        .find((t) => t.type === 'agent_loop')
+      if (loopTask) setActivityTaskId(loopTask.task_id)
+    } catch {
+      // activity restore is best-effort
+    }
+  }, [])
 
   /** Append a focus-confirmation as a normal conversation turn (a real
    * historical event — never removed by later turns or refresh). Its
@@ -726,13 +796,35 @@ export function InvestigationPage() {
               )}
               <span className="sr-only">Send message</span>
             </Button>
+            {state.investigationId && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  goalPhase === 'running' ||
+                  !input.trim() ||
+                  state.phase === 'loading' ||
+                  state.phase === 'creating'
+                }
+                title="Run this request with the bounded Agent Loop (shows its execution trace in the Activity tab)"
+                onClick={() => void runAgentLoop()}
+              >
+                {goalPhase === 'running' ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                ) : (
+                  <Workflow className="h-4 w-4" aria-hidden />
+                )}
+                <span className="hidden sm:inline">Run loop</span>
+                <span className="sr-only">Run with Agent Loop</span>
+              </Button>
+            )}
           </form>
         </main>
 
         <aside className="hidden min-h-0 overflow-hidden lg:block">
           <Tabs
             value={rightTab}
-            onValueChange={(v) => setRightTab(v as 'context' | 'artifacts')}
+            onValueChange={(v) => setRightTab(v as 'context' | 'artifacts' | 'activity')}
             className="flex h-full min-h-0 flex-col"
           >
             <TabsList className="shrink-0">
@@ -740,10 +832,48 @@ export function InvestigationPage() {
               <TabsTrigger value="artifacts" className="flex-1">
                 Artifacts{state.artifacts.length > 0 ? ` (${state.artifacts.length})` : ''}
               </TabsTrigger>
+              <TabsTrigger value="activity" className="flex-1">
+                Activity
+                {agentActivity.activity && !agentActivity.activity.is_terminal && (
+                  <Loader2 className="ml-1 inline h-3 w-3 animate-spin" aria-hidden />
+                )}
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="context" className="mt-3 min-h-0 flex-1 overflow-y-auto">{contextPanel}</TabsContent>
             <TabsContent value="artifacts" className="mt-3 min-h-0 flex-1 overflow-hidden">
               {artifactsPanel}
+            </TabsContent>
+            <TabsContent value="activity" className="mt-3 min-h-0 flex-1 overflow-y-auto">
+              {state.phase === 'loading' || state.phase === 'creating' ? (
+                <Card>
+                  <CardContent className="p-3 flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                    Restoring investigation…
+                  </CardContent>
+                </Card>
+              ) : agentActivity.notFound ? (
+                <Card>
+                  <CardContent className="p-3 text-xs text-muted-foreground">
+                    No Agent Activity for this task. Regular investigation turns are
+                    shown in the conversation; start a bounded Agent Loop run to see
+                    its execution trace here.
+                  </CardContent>
+                </Card>
+              ) : agentActivity.activity ? (
+                <Card>
+                  <CardContent className="p-3">
+                    <AgentActivityPanel activity={agentActivity.activity} />
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card>
+                  <CardContent className="p-3 text-xs text-muted-foreground">
+                    {agentActivity.loading
+                      ? 'Loading Agent Activity…'
+                      : 'No Agent Loop run yet for this investigation.'}
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
           </Tabs>
         </aside>

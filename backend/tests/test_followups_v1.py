@@ -71,16 +71,16 @@ class TestCapabilityFiltering:
         out = select(caps=[])
         assert "check_policy" in ids(out)
 
-    def test_no_trade_followups_without_opposite_trades(self):
-        # F3 lacks opposite_trades: no trade-related follow-up can appear
+    def test_no_trade_followups_without_self_opposite_trades(self):
+        # F3 lacks self_opposite_trades: no trade-related follow-up can appear
         # (Week 1 defines none, and none may be derived from other caps).
         out = select(caps=ALL_WEEK1_CAPS)
         assert not [f for f in out if "trade" in f.follow_up_id]
 
     def test_trade_capability_still_yields_no_trade_followup_in_week1(self):
-        # opposite_trades alone has no dedicated Week 1 follow-up template;
+        # self_opposite_trades alone has no dedicated Week 1 follow-up template;
         # its absence of templates must not be "fixed" by borrowing others.
-        out = select(caps=ALL_WEEK1_CAPS + ["opposite_trades"])
+        out = select(caps=ALL_WEEK1_CAPS + ["self_opposite_trades"])
         assert not [f for f in out if "trade" in f.follow_up_id]
 
 

@@ -11,6 +11,14 @@ Views:
                 finding). top_n is IGNORED for this view: completeness is
                 its contract, and a subset may never be presented as the
                 evidence.
+- "self_opposite_trades" : SAME-ACCOUNT opposite-side trading composition
+                (canonical name; legacy alias "opposite_trades"). The
+                authoritative opposite_trade_ratio and its threshold rule
+                are Risk Platform aggregates echoed verbatim; the account's
+                own complete transaction record set rides along. Capability
+                gated on "self_opposite_trades". This is NOT the
+                cross-account analysis — that is the separate
+                cross_account_trade_analysis tool.
 
 Pipeline:
   input validation (finding_id, view lock, top_n bounds)
@@ -32,6 +40,7 @@ from typing import Any
 from app.adapters.risk_platform import (
     RiskPlatformError,
     normalize_evidence_records,
+    normalize_rule_signal,
     normalize_timeline_events,
 )
 from app.models import (
@@ -48,7 +57,10 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_VIEWS = {"timeline", "evidence"}   # opposite_trades arrives later
+ALLOWED_VIEWS = {"timeline", "evidence", "self_opposite_trades"}
+# Legacy alias for the canonical self-opposite view (compatibility only).
+SELF_VIEW_LEGACY_ALIAS = "opposite_trades"
+SELF_VIEW = "self_opposite_trades"
 TOP_N_DEFAULT = 20
 TOP_N_MAX = 100
 
@@ -72,7 +84,9 @@ def finding_drilldown(
 
     Args:
         finding_id: canonical Finding ID from the current case context.
-        view: "timeline" or "evidence" — both are COMPLETE views.
+        view: "timeline", "evidence", or "self_opposite_trades" — all are
+            COMPLETE views ("opposite_trades" is accepted as a legacy
+            alias of the self view).
         stream: EXPLICIT evidence-stream scope for view="evidence"
             ("withdrawals" | "transactions"). When supplied it governs
             which RP stream is returned and OVERRIDES the finding-title
@@ -102,29 +116,13 @@ def finding_drilldown(
         return _validation_error("finding_id is required (non-empty string).")
     finding_id = finding_id.strip()
 
+    # Legacy alias → canonical self-opposite view (compatibility only:
+    # self_opposite_trades is the canonical name; the alias executes the
+    # same bounded, capability-gated view and is recorded on the payload).
+    legacy_alias_used = view == SELF_VIEW_LEGACY_ALIAS
+    if legacy_alias_used:
+        view = SELF_VIEW
     if view not in ALLOWED_VIEWS:
-        # Explicit specialized request that Week 1 does not implement
-        # (e.g. opposite_trades): a BOUNDED unsupported result — the
-        # request must never fall through to the generic evidence view
-        # or silently substitute another stream. When the finding lacks
-        # the opposite_trades capability the bound names that directly.
-        if view == "opposite_trades":
-            return ToolResult(
-                outcome=ToolResultOutcome.UNSUPPORTED,
-                error=ToolError(
-                    code="OPPOSITE_TRADES_NOT_SUPPORTED",
-                    message=(
-                        f"Finding {finding_id} does not support the "
-                        "opposite-trades investigation."
-                    ),
-                    detail={
-                        "capability": "opposite_trades",
-                        "scope": "finding",
-                        "finding_id": finding_id,
-                        "requested_view": view,
-                    },
-                ),
-            )
         return _validation_error(
             f"view {view!r} is not supported by finding_drilldown; "
             f"supported views: {sorted(ALLOWED_VIEWS)}."
@@ -173,17 +171,25 @@ def finding_drilldown(
     finding = matches[0]
 
     # --- capability enforcement (runtime re-check; never silent-empty) --------
-    if not finding.capabilities.supports("timeline"):
+    # View-scoped: the self-opposite view requires the self_opposite_trades
+    # capability (same-account opposite-side composition data exists);
+    # every other view keeps the timeline gate. A finding lacking the
+    # capability is a bounded unsupported result — never an empty success.
+    required_capability = "self_opposite_trades" \
+        if view == SELF_VIEW else "timeline"
+    if not finding.capabilities.supports(required_capability):
+        capability_noun = "self-opposite-trades" \
+            if required_capability == "self_opposite_trades" else "timeline"
         return ToolResult(
             outcome=ToolResultOutcome.UNSUPPORTED,
             error=ToolError(
                 code="CAPABILITY_NOT_SUPPORTED",
                 message=(
-                    f"Finding {finding_id} does not support the timeline "
-                    "investigation."
+                    f"Finding {finding_id} does not support the "
+                    f"{capability_noun} investigation."
                 ),
                 detail={
-                    "capability": "timeline",
+                    "capability": required_capability,
                     "scope": "finding",
                     "finding_id": finding_id,
                     "supported_capabilities": sorted(finding.capabilities),
@@ -226,6 +232,82 @@ def finding_drilldown(
             error=ToolError(code=code, message=err.message,
                             detail={"status_code": err.status_code}
                             if err.status_code else None),
+        )
+
+    # --- self-opposite view: SAME-ACCOUNT opposite-side composition -------------
+    # The authoritative semantics are the Risk Platform's own: a count-based
+    # opposite_trade_ratio over the account's OWN trade stream
+    # (min(BUY, SELL) / total, computed by RP) plus the threshold rule it
+    # backs, echoed VERBATIM — never recomputed client-side (no second
+    # definition, no pairing, no time/value matching; that is the separate
+    # cross_account_trade_analysis tool). The concrete transaction records
+    # of the same account ride along as the complete supporting record set.
+    if view == SELF_VIEW:
+        try:
+            payload = normalize_evidence_records(
+                case_id=str(case_id or evidence.get("user_id", "")),
+                evidence=evidence,
+                finding=finding,
+                stream="transactions",
+            )
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error("finding_drilldown self-view normalization "
+                         "failure: %s", e)
+            return ToolResult(
+                outcome=ToolResultOutcome.INTEGRATION_ERROR,
+                error=ToolError(
+                    code="RISK_PLATFORM_MALFORMED_RESPONSE",
+                    message=f"Could not normalize transaction records: {e}",
+                ),
+            )
+        features = evidence.get("feature_evidence") or {}
+        ratio = features.get("opposite_trade_ratio")
+        if ratio is None and payload["record_count"] == 0:
+            # Valid finding with the capability, but RP holds neither the
+            # aggregate nor any concrete trades: genuinely nothing to show.
+            return ToolResult(
+                outcome=ToolResultOutcome.EMPTY,
+                data={
+                    "finding_id": finding_id, "view": SELF_VIEW,
+                    "semantics": "same_account_opposite_side",
+                    "records": [], "record_count": 0,
+                    "complete": True,
+                },
+                warnings=[
+                    "The Risk Platform holds no opposite-side trading "
+                    "activity data for this account.",
+                ],
+            )
+        rule = normalize_rule_signal(finding=finding, evidence=evidence)
+        data = {
+            "finding_id": finding_id,
+            "view": SELF_VIEW,
+            "semantics": "same_account_opposite_side",
+            "account_id": str(evidence.get("user_id") or case_id or ""),
+            "opposite_trade_ratio": ratio,
+            "ratio_source": "risk_platform_feature_evidence",
+            "rule": rule["rule"] if rule else None,
+            "records": payload["records"],
+            "record_count": payload["record_count"],
+            "complete": True,          # completeness is the record contract
+        }
+        if legacy_alias_used:
+            data["requested_view_alias"] = SELF_VIEW_LEGACY_ALIAS
+        warnings = [
+            "The opposite-trade ratio is the Risk Platform's aggregate "
+            "over this account's full trade stream; the records below are "
+            "the concrete transaction set — the two are related but never "
+            "recombined here.",
+        ]
+        return ToolResult(
+            outcome=ToolResultOutcome.SUCCESS,
+            data=data,
+            evidence_refs=[
+                EvidenceRef(kind="transaction", id=r["record_id"])
+                for r in payload["records"]
+            ],
+            citation_refs=list(finding.policy_refs),
+            warnings=warnings,
         )
 
     # --- evidence view: COMPLETE concrete records (top_n never applies) ---------

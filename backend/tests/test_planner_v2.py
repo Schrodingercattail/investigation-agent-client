@@ -21,7 +21,7 @@ from app.skills import SKILLS, eligible_skills_for_finding
 
 
 F3_CAPS = FindingCapability.model_validate(
-    ["timeline", "signal_explain", "policy_lookup"]   # no opposite_trades
+    ["timeline", "signal_explain", "policy_lookup"]   # no self_opposite_trades
 )
 
 
@@ -96,7 +96,7 @@ class TestValidPlans:
         # LLM hallucinated an ineligible-but-real skill (trade) for F3.
         llm = FakeLLM(json_response(
             "trade_investigation", "g",
-            [{"type": "inspect_opposite_trades", "reason": "r"}],
+            [{"type": "inspect_self_opposite_trades", "reason": "r"}],
         ))
         result = PlannerV2(llm).plan("anything", CTX_F3,
                                      ["case_intake", "timeline_investigation"],
@@ -154,12 +154,12 @@ class TestRejections:
         assert result.code in ("STEP_NOT_ALLOWED", "PLAN_CONTRACT_VIOLATION")
 
     def test_unsupported_trade_request_cannot_select_trade(self):
-        # F3 lacks opposite_trades; even if the LLM emits trade_investigation
+        # F3 lacks self_opposite_trades; even if the LLM emits trade_investigation
         # (it shouldn't see it), the planner rejects rather than executes a
         # capability-violating plan.
         llm = FakeLLM(json_response(
             "trade_investigation", "g",
-            [{"type": "inspect_opposite_trades", "reason": "show trades"}],
+            [{"type": "inspect_self_opposite_trades", "reason": "show trades"}],
         ))
         eligible = [s.skill_id for s in eligible_skills_for_finding(F3_CAPS)]
         assert "trade_investigation" not in eligible      # eligibility gate held
@@ -192,31 +192,29 @@ class TestDeterministicResolution:
         assert step.tool_name == "finding_drilldown"
         assert step.arguments["view"] == "timeline"
 
-    def test_non_executable_skill_excluded_from_planner(self):
-        """DEF-3/P19: trade_investigation's core step binds to the
-        opposite_trades view, which finding_drilldown does not implement.
-        The skill must NEVER enter the planner candidate set — registry
-        metadata alone cannot make a path executable."""
-        caps = FindingCapability.model_validate(["opposite_trades"])
-        ctx = InvestigationContext(case_id="X", focused_finding_id="F2")
-        llm = FakeLLM(json_response(
-            "trade_investigation", "g",
-            [{"type": "inspect_opposite_trades", "reason": "composition"}],
+    def test_non_executable_skill_excluded_from_planner(self, monkeypatch):
+        """DEF-3/P19: the exclusion mechanism survives the completion
+        phase. A SYNTHETIC skill whose primary step has NO registered tool
+        binding must still be excluded — registry metadata alone cannot
+        make a path executable."""
+        from app.skills import SKILLS, SkillDefinition, \
+            skill_path_executable
+        monkeypatch.setitem(SKILLS, "synthetic_skill", SkillDefinition(
+            skill_id="synthetic_skill", name="S", description="d",
+            required_capabilities=["timeline"],
+            allowed_tools=["finding_drilldown"],
+            planning_steps=["unregistered_step_type"],
         ))
-        plan = PlannerV2(llm).plan("Which trades composed this?", ctx,
-                                   ["trade_investigation"], caps)
-        from app.planner_v2 import PlanningFailure
-        assert isinstance(plan, PlanningFailure)
-        assert plan.code == "NO_ELIGIBLE_SKILL"
-        # nothing executed: no fabricated, no partial run
-        assert "opposite_trades" not in str(plan)
+        assert not skill_path_executable("synthetic_skill")
 
     def test_executable_skills_still_eligible(self):
-        """The executable-path guard excludes ONLY non-executable skills."""
+        """The executable-path guard excludes ONLY non-executable skills.
+        trade_investigation's primary path is the executable derived
+        analysis tool (P19, cross-account phase)."""
         from app.skills import skill_path_executable
         assert skill_path_executable("case_intake")
         assert skill_path_executable("timeline_investigation")
-        assert not skill_path_executable("trade_investigation")
+        assert skill_path_executable("trade_investigation")
 
     def test_llm_cannot_override_parameter_locks(self):
         # Even though the LLM schema has no slot for arguments, verify at the
@@ -331,7 +329,7 @@ class TestSafetyBoundaries:
         assert "case_intake" in system
         # …non-eligible skill hidden entirely.
         assert "trade_investigation" not in system
-        # inspect_opposite_trades appears only as part of the routing
+        # inspect_self_opposite_trades appears only as part of the routing
         # guidance for opposite-trade requests (a distinct bounded semantic
         # request) — the non-eligible trade SKILL itself stays hidden
         # User content fenced as data inside the user message, untrusted:

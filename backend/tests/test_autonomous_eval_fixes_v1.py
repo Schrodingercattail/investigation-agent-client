@@ -176,7 +176,7 @@ class TestFailureWordingSemantics:
                         ToolResultOutcome.INTEGRATION_ERROR,
                         ToolResultOutcome.EMPTY):
             text = self._resp_for_outcome(outcome)
-            for term in ("finding_drilldown", "inspect_opposite_trades",
+            for term in ("finding_drilldown", "inspect_self_opposite_trades",
                          "timeline_investigation", "signal_explain",
                          "risk_case_fetch", "S1", "TC-X", "STEP_EXECUTION"):
                 assert term not in text, f"{term} leaked for {outcome}"
@@ -185,21 +185,28 @@ class TestFailureWordingSemantics:
 # --- DEF-3 / P19: planner excludes non-executable paths -------------------------
 
 class TestPlannerExecutablePaths:
-    def test_trade_investigation_never_planned(self):
-        caps = FindingCapability.model_validate(["opposite_trades"])
+    def test_trade_investigation_executable_via_analysis_tool(self):
+        """P19 (updated for the cross-account analysis phase): the trade
+        skill's PRIMARY path is now the executable derived analysis tool.
+        The same-account self-opposite step stays registered-but-
+        unimplemented (bounded unsupported at runtime, E15)."""
+        caps = FindingCapability.model_validate(["self_opposite_trades"])
         ctx = InvestigationContext(case_id="X", focused_finding_id="F8")
         llm_scripts = [('{"skill_id": "trade_investigation", "goal": "g", '
-                        '"steps": [{"type": "inspect_opposite_trades", '
+                        '"steps": [{"type": "analyze_cross_account_trades", '
                         '"reason": "r"}]}')]
         svc_plan = PlannerV2(_L(llm_scripts)).plan(
-            "Show all opposite trades.", ctx, ["trade_investigation"], caps)
-        assert isinstance(svc_plan, PlanningFailure)
-        assert svc_plan.code == "NO_ELIGIBLE_SKILL"
+            "Find opposite trades across accounts.", ctx,
+            ["trade_investigation"], caps)
+        assert not isinstance(svc_plan, PlanningFailure)
+        assert [s.type for s in svc_plan.steps] == \
+            ["analyze_cross_account_trades"]
+        assert svc_plan.steps[0].tool_name == "cross_account_trade_analysis"
 
     def test_single_semantic_answer_helper(self):
         assert skill_path_executable("case_intake")
         assert skill_path_executable("timeline_investigation")
-        assert not skill_path_executable("trade_investigation")
+        assert skill_path_executable("trade_investigation")
 
 
 class _L:

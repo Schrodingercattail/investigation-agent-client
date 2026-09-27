@@ -86,11 +86,16 @@ class TestDocumentedCapabilitiesAreExecutable:
 class TestDocumentedUnsupportedPaths:
     """Paths declared not-implemented must stay non-executable."""
 
-    def test_opposite_trades_view_not_implemented(self):
+    def test_self_opposite_trades_view_implemented(self):
+        # completion phase: the canonical self view is now IMPLEMENTED and
+        # its step binding is an executable path (P19) — capability-gated
+        # at runtime (findings without self_opposite_trades stay bounded
+        # unsupported).
         from app.domain_tools.finding_drilldown import ALLOWED_VIEWS
-        assert "opposite_trades" not in ALLOWED_VIEWS
-        # the step binding still exists (registered) but cannot execute
-        assert "inspect_opposite_trades" in STEP_TOOL_MAP
+        from app.skills import step_path_executable
+        assert "self_opposite_trades" in ALLOWED_VIEWS
+        assert "inspect_self_opposite_trades" in STEP_TOOL_MAP
+        assert step_path_executable("inspect_self_opposite_trades")
 
     def test_trade_investigation_not_eligible_without_capability(self):
         eligible = [s.skill_id for s in eligible_skills_for_finding(

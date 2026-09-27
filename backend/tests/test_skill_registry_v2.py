@@ -24,7 +24,7 @@ def finding_caps(*caps: str) -> FindingCapability:
     return FindingCapability.model_validate(list(caps))
 
 
-F3_CAPS = finding_caps("timeline", "signal_explain", "policy_lookup")  # no opposite_trades
+F3_CAPS = finding_caps("timeline", "signal_explain", "policy_lookup")  # no self_opposite_trades
 
 
 def step(step_id: str, type_: str, tool: str | None, arguments=None) -> PlanStep:
@@ -79,20 +79,23 @@ class TestRegistryContents:
         assert s.planning_steps == [
             "inspect_timeline", "inspect_evidence",
             "inspect_withdrawals", "inspect_transactions",
-            "inspect_opposite_trades",
+            "inspect_self_opposite_trades",
             "explain_signal",
             "retrieve_policy", "generate_artifact",
         ]
 
     def test_trade_skill_shape(self):
         s = SKILLS["trade_investigation"]
-        assert s.required_capabilities == ["opposite_trades"]
+        assert s.required_capabilities == ["self_opposite_trades"]
         assert set(s.allowed_tools) == {
+            "cross_account_trade_analysis",
             "finding_drilldown", "signal_explain", "policy_lookup", "artifact_bundle",
         }
+        # the executable analysis is the PRIMARY investigation step (P19);
+        # the same-account self drilldown stays registered-but-unimplemented
         assert s.planning_steps == [
-            "inspect_opposite_trades", "explain_signal", "retrieve_policy",
-            "generate_artifact",
+            "analyze_cross_account_trades", "inspect_self_opposite_trades",
+            "explain_signal", "retrieve_policy", "generate_artifact",
         ]
 
     def test_step_tool_mapping_is_explicit_and_locked(self):
@@ -101,9 +104,13 @@ class TestRegistryContents:
         tl = STEP_TOOL_MAP["inspect_timeline"]
         assert tl.tool_name == "finding_drilldown"
         assert tl.parameter_locks == {"view": "timeline"}
-        tr = STEP_TOOL_MAP["inspect_opposite_trades"]
+        tr = STEP_TOOL_MAP["inspect_self_opposite_trades"]
         assert tr.tool_name == "finding_drilldown"
-        assert tr.parameter_locks == {"view": "opposite_trades"}
+        assert tr.parameter_locks == {"view": "self_opposite_trades"}
+        ca = STEP_TOOL_MAP["analyze_cross_account_trades"]
+        assert ca.tool_name == "cross_account_trade_analysis"
+        assert ca.parameter_locks == {
+            "analysis_type": "cross_account_opposite_trade"}
         assert STEP_TOOL_MAP["explain_signal"].tool_name == "signal_explain"
         assert STEP_TOOL_MAP["retrieve_policy"].tool_name == "policy_lookup"
 
@@ -139,18 +146,18 @@ class TestCapabilityGating:
         )
         assert result.valid, result.errors
 
-    def test_trade_investigation_rejected_without_opposite_trades(self):
+    def test_trade_investigation_rejected_without_self_opposite_trades(self):
         result = check_plan("trade_investigation", [], capabilities=F3_CAPS)
         assert not result.valid
         assert error_codes(result) == ["CAPABILITY_NOT_SUPPORTED"]
         assert result.errors[0].step_id is None  # plan-level, not step-level
 
-    def test_trade_investigation_accepted_with_opposite_trades(self):
-        caps = finding_caps("timeline", "signal_explain", "policy_lookup", "opposite_trades")
+    def test_trade_investigation_accepted_with_self_opposite_trades(self):
+        caps = finding_caps("timeline", "signal_explain", "policy_lookup", "self_opposite_trades")
         result = check_plan(
             "trade_investigation",
-            [step("S1", "inspect_opposite_trades", "finding_drilldown",
-                  {"view": "opposite_trades"})],
+            [step("S1", "inspect_self_opposite_trades", "finding_drilldown",
+                  {"view": "self_opposite_trades"})],
             capabilities=caps,
         )
         assert result.valid, result.errors
@@ -161,7 +168,7 @@ class TestCapabilityGating:
 
     def test_finding_type_alone_does_not_determine_capabilities(self):
         # Same nominal finding type; only declared capabilities matter.
-        with_caps = finding_caps("opposite_trades")
+        with_caps = finding_caps("self_opposite_trades")
         without_caps = finding_caps()
         trade_eligible = {s.skill_id for s in eligible_skills_for_finding(with_caps)}
         assert "trade_investigation" in trade_eligible
@@ -207,7 +214,7 @@ class TestVocabularyAndMapping:
     def test_step_from_another_skills_vocabulary_rejected(self):
         # fetch_case exists in the registry but only in case_intake's
         # vocabulary — a timeline plan carrying it is rejected.
-        # (inspect_opposite_trades is now legitimately IN this skill's
+        # (inspect_self_opposite_trades is now legitimately IN this skill's
         # vocabulary: a distinct, capability-bounded semantic request —
         # FIX E15.)
         result = check_plan(
@@ -218,15 +225,15 @@ class TestVocabularyAndMapping:
         assert not result.valid
         assert error_codes(result) == ["STEP_NOT_ALLOWED"]
 
-    def test_opposite_trades_step_in_timeline_vocabulary(self):
+    def test_self_opposite_trades_step_in_timeline_vocabulary(self):
         # FIX E15: opposite-trade requests specialize to this step; it is a
         # valid planning step of timeline_investigation and is bounded by
-        # the tool (OPPOSITE_TRADES_NOT_SUPPORTED) — never a generic
+        # the tool (SELF_OPPOSITE_TRADES_NOT_SUPPORTED) — never a generic
         # evidence fallback.
         result = check_plan(
             "timeline_investigation",
-            [step("S1", "inspect_opposite_trades", "finding_drilldown",
-                  {"view": "opposite_trades"})],
+            [step("S1", "inspect_self_opposite_trades", "finding_drilldown",
+                  {"view": "self_opposite_trades"})],
             capabilities=F3_CAPS,
         )
         assert result.valid
@@ -256,7 +263,7 @@ class TestParameterLocks:
         result = check_plan(
             "timeline_investigation",
             [step("S1", "inspect_timeline", "finding_drilldown",
-                  {"view": "opposite_trades"})],
+                  {"view": "self_opposite_trades"})],
             capabilities=F3_CAPS,
         )
         assert not result.valid
@@ -281,17 +288,17 @@ class TestParameterLocks:
         )
         assert result.valid, result.errors
 
-    def test_trade_skill_enforces_opposite_trades_lock(self):
-        caps = finding_caps("opposite_trades")
+    def test_trade_skill_enforces_self_opposite_trades_lock(self):
+        caps = finding_caps("self_opposite_trades")
         ok = check_plan(
             "trade_investigation",
-            [step("S1", "inspect_opposite_trades", "finding_drilldown",
-                  {"view": "opposite_trades"})],
+            [step("S1", "inspect_self_opposite_trades", "finding_drilldown",
+                  {"view": "self_opposite_trades"})],
             capabilities=caps,
         )
         bad = check_plan(
             "trade_investigation",
-            [step("S1", "inspect_opposite_trades", "finding_drilldown",
+            [step("S1", "inspect_self_opposite_trades", "finding_drilldown",
                   {"view": "timeline"})],
             capabilities=caps,
         )

@@ -15,7 +15,11 @@ Design contract (Week 1):
   future backends) can attach an in-memory or external sink.
 
 Event types: planner.started/completed/failed,
-execution.started/completed/failed, semantic.evaluated.
+execution.started/completed/failed, semantic.evaluated, and the Agent
+Loop family (docs/baselines/2026-09-19-bounded-agent-loop-v1.md §14):
+agent.started, context.resolved, plan.created, step.started, tool.called,
+tool.completed, observation.recorded, decision.made, step.completed,
+step.retried, agent.completed, agent.blocked, agent.stopped, agent.failed.
 """
 
 import logging
@@ -77,6 +81,32 @@ class AgentTelemetryEvent(BaseModel):
     failure_category: str | None = None
     scenario_id: str | None = None       # eval runs only
 
+    # Agent Loop group (loop events carry task/iteration/step/tool/decision
+    # identity and a USER-SAFE summary — never chain-of-thought, never raw
+    # prompts or model output).
+    task_id: str | None = None
+    iteration: int | None = None
+    step_id: str | None = None
+    step_type: str | None = None
+    tool_name: str | None = None
+    outcome: str | None = None           # ToolResult outcome value
+    decision: str | None = None          # CONTINUE | RE_PLAN | STOP | BLOCK
+    agent_status: str | None = None      # completed | stopped_by_limit | ...
+    stop_reason: str | None = None
+    retry_count: int | None = None
+    artifact_ids: list[str] | None = None
+    summary: str | None = None           # user-safe summary / reason
+
+    # Candidate metadata / Safe-Select group (WP-M2-1 WI-7). Observational
+    # only — never a decision input. No prompts, no raw request text, no
+    # chain-of-thought: hashes and reason classes only.
+    candidate_id: str | None = None
+    reason_class: str | None = None
+    request_fingerprint: str | None = None
+    candidate_set_hash: str | None = None
+    metadata_status_hash: str | None = None
+    coverage_counts: dict[str, Any] | None = None
+
 
 # --- sink interface ----------------------------------------------------------
 
@@ -121,6 +151,18 @@ def set_sink(sink: TelemetrySink) -> None:
 
 def get_sink() -> TelemetrySink:
     return _sink
+
+
+def emit_event(event_type: str, **fields) -> None:
+    """Convenience observational emitter (WP-M2-1 WI-7): builds an
+    AgentTelemetryEvent from non-None fields and emits it. Never raises
+    into the caller; never carries prompts or chain-of-thought."""
+    try:
+        clean = {k: v for k, v in fields.items() if v is not None}
+        emit(AgentTelemetryEvent(event_type=event_type, **clean))
+    except Exception:                     # noqa: BLE001 — boundary isolation
+        logger.warning("telemetry event construction failed: %s",
+                       event_type, exc_info=True)
 
 
 def emit(event: AgentTelemetryEvent) -> None:

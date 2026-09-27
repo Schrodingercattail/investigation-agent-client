@@ -86,14 +86,14 @@ class TestNormalizationViaTool:
                  if f.capabilities.supports("timeline")]
         assert timed
 
-    def test_a_finding_without_opposite_trades_capability(self):
+    def test_a_finding_without_self_opposite_trades_capability(self):
         with patch_adapter(fetch_return=ok_payloads()):
             result = risk_case_fetch("U00299")
         ml_finding = next(
             f for f in result.data["findings"]
             if f.title.startswith("ML Pattern Detection")
         )
-        assert not ml_finding.capabilities.supports("opposite_trades")
+        assert not ml_finding.capabilities.supports("self_opposite_trades")
 
 
 # --- 7. empty case ---------------------------------------------------------------

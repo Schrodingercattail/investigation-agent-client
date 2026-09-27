@@ -175,10 +175,10 @@ class TestValidationFailuresZeroExecution:
         calls = []
         ex = ExecutorV2(provider_with(
             risk_case_fetch=lambda a: (calls.append(a), ok_result())[1]))
-        # F3 lacks opposite_trades; trade skill must not run even here.
+        # F3 lacks self_opposite_trades; trade skill must not run even here.
         t = task(skill="trade_investigation")
-        steps = [step("S1", "inspect_opposite_trades", "finding_drilldown",
-                      {"view": "opposite_trades"})]
+        steps = [step("S1", "inspect_self_opposite_trades", "finding_drilldown",
+                      {"view": "self_opposite_trades"})]
         from app.skills import check_plan
         pre = check_plan("trade_investigation", steps, capabilities=F3_CAPS)
         assert not pre.valid                        # checker itself rejects
@@ -296,7 +296,7 @@ class TestToolResults:
         unsup = ToolResult(
             outcome=ToolResultOutcome.UNSUPPORTED,
             error=ToolError(code="capability_unsupported",
-                            message="finding does not support opposite_trades"),
+                            message="finding does not support self_opposite_trades"),
         )
         ex = ExecutorV2(make_provider(lambda a: unsup))
         res = ex.execute(plan([step()]), task(), CTX)

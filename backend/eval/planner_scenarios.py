@@ -64,10 +64,16 @@ def _scenario_set():
     add("P07", "Generate an investigation artifact.", "generate_artifact",
         focus="F2", kind="ordered",
         steps=("fetch_case", "generate_artifact"))
-    # P08 — CRITICAL: opposite-trade intent must be recognized as its own
-    #       operation, never degraded to generic inspect_evidence
-    add("P08", "Show me the opposite trade.", "inspect_opposite_trades",
+    # P08 — CRITICAL: same-account opposite-trade intent must be
+    #       recognized as its own operation, never degraded to generic
+    #       inspect_evidence
+    add("P08", "Show me the opposite trade.", "inspect_self_opposite_trades",
         focus="F1")
+    # P11 — CRITICAL: cross-account opposite-trade intent must route to the
+    #       derived analysis tool, NEVER to the same-account self step
+    #       (cross-account phrasing contains "opposite trades").
+    add("P11", "Find opposite trades across accounts.",
+        "analyze_cross_account_trades", focus="F2")
     # P09 — focus switch (explicit UI selection → F2) + timeline request:
     #       the focus is applied via the context mechanism BEFORE planning,
     #       so the planner's job is the timeline operation on F2.

@@ -280,3 +280,56 @@ export interface ApiErrorEnvelope {
     message: string
   }
 }
+
+// ---------------------------------------------------------------------------
+// Agent Activity / Execution Trace (docs/baselines/2026-09-19-agent-activity-v1)
+// Bounded, UI-safe projection of the persisted Agent Loop state. Raw tool
+// payloads and model reasoning never appear here by contract.
+// ---------------------------------------------------------------------------
+
+export interface AgentActivityRecord {
+  seq: number
+  event_type: string
+  timestamp: string
+  iteration: number | null
+  step_id: string | null
+  step_type: string | null
+  tool_name: string | null
+  outcome: string | null
+  decision: string | null
+  agent_status: string | null
+  stop_reason: string | null
+  summary: string | null
+  artifact_ids: string[]
+}
+
+export interface AgentPlanStep {
+  step_id: string
+  type: string
+  status: string
+  tool_name: string | null
+}
+
+export interface TaskActivityResponse {
+  task_id: string
+  investigation_id: string
+  case_id: string
+  goal: string
+  criteria_kind: string
+  focused_finding_id: string | null
+  agent_status: string
+  stop_reason: string | null
+  iteration: number
+  max_iterations: number
+  plan_revisions: number
+  plan_steps: AgentPlanStep[]
+  artifact_ids: string[]
+  activity: AgentActivityRecord[]
+  is_terminal: boolean
+}
+
+export interface GoalRunResponse {
+  task_id: string
+  investigation_id: string
+  agent_status: string
+}

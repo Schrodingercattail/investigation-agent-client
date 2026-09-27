@@ -360,7 +360,7 @@ class TestBoundedFailures:
     def test_unsupported_capability_bounded_failure(self):
         # Scripted planner picks trade skill; eligibility gate rejects.
         trade = ('{"skill_id": "trade_investigation", "goal": "g", "steps": ['
-                 '{"type": "inspect_opposite_trades", "reason": "r"}]}')
+                 '{"type": "inspect_self_opposite_trades", "reason": "r"}]}')
         client, _, _ = build_client([trade])
         with rp_patches()[0], rp_patches()[1]:
             inv_id = client.post("/api/v2/investigations",
@@ -556,7 +556,7 @@ class TestTrustBoundaries:
         r = client.post(f"/api/v2/investigations/{inv_id}/turn",
                         json={"message": "Investigate U00299", "tool_name": "network_drilldown",
                               "skill_id": "trade_investigation",
-                              "arguments": {"view": "opposite_trades"}})
+                              "arguments": {"view": "self_opposite_trades"}})
         assert r.status_code == 200
         body = r.json()
         # the executed tool came from the plan/registry, not the client
@@ -570,7 +570,7 @@ class TestTrustBoundaries:
             "investigation"]["investigation_id"]
         r = client.post(f"/api/v2/investigations/{inv_id}/turn", json={
             "message": "x",
-            "context": {"case_id": "HACKED", "capabilities": ["opposite_trades"]},
+            "context": {"case_id": "HACKED", "capabilities": ["self_opposite_trades"]},
             "capabilities": ["everything"],
         })
         assert r.status_code == 200
@@ -634,13 +634,18 @@ class TestIsolationAndCoexistence:
         assert "/api/tasks/{task_id}" in openapi["paths"]
 
     def test_v2_router_does_not_import_legacy_modules(self):
+        # precise import-form checks: the router must not import the legacy
+        # app.agent / app.store / app.runner modules. (app.agent_loop — the
+        # bounded loop coordinator — is a NEW V2 module and explicitly
+        # allowed; the old bare-substring form falsely matched it.)
         import app.api.investigations as mod
         src = open(mod.__file__).read()
-        assert "from app.agent" not in src
-        assert "from app.store" not in src
-        assert "from app.runner" not in src
-        assert "import agent" not in src
-        assert "import store" not in src
+        assert "from app.agent import" not in src
+        assert "from app.store import" not in src
+        assert "from app.runner import" not in src
+        assert "import app.agent," not in src
+        assert "import app.store" not in src
+        assert "import app.runner" not in src
 
     def test_api_serialization_stable(self):
         client, _, _ = build_client([PLAN_CASE])

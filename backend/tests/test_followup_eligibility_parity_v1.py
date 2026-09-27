@@ -44,7 +44,7 @@ from app.skills import (
     eligible_skills_for_finding,
 )
 
-FULL = ["timeline", "signal_explain", "policy_lookup", "opposite_trades"]
+FULL = ["timeline", "signal_explain", "policy_lookup", "self_opposite_trades"]
 
 # follow_up_id → (target_skill, target_step) — the registry route a click takes
 ROUTES = {t.follow_up_id: (t.target_skill, t.target_step)
@@ -187,7 +187,7 @@ class TestCheckPolicyDataOutcomes:
 
 class TestParityAndUnsupported:
     def test_unsupported_trade_investigation_never_offered(self):
-        # 6. opposite_trades/trade_investigation have no Week-1 follow-up
+        # 6. self_opposite_trades/trade_investigation have no Week-1 follow-up
         # template at any capability level — never offered, never dead.
         offered = chips_for(FULL)
         assert not any("trade" in f or "opposite" in f for f in offered)

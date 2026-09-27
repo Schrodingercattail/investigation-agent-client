@@ -23,12 +23,21 @@ integration_error / empty / success+evidence_missing).
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
-from app.context_resolution import ContextResolver, ResolutionStatus
+from app.config import settings
+from app.admissibility import AdmissibilityDecision
+from app.context_resolution import (
+    Candidate,
+    ContextResolver,
+    ResolutionOutcome,
+    ResolutionStatus,
+)
 from app.executor_v2 import ExecutorV2, ExecutionResult
+from app.telemetry import AgentTelemetryEvent
+from app.telemetry import emit as telemetry_emit
 from app.followups import (
     SelectionInput,
     TriggerReason,
@@ -37,6 +46,7 @@ from app.followups import (
 )
 from app.models import (
     Finding,
+    FocusSource,
     InvestigationContext,
     Plan,
     PlanStatus,
@@ -99,7 +109,7 @@ def _strip_citation_markers(text: str) -> str:
 _CAPABILITY_PHRASES = {
     "timeline": "The timeline investigation",
     "signal_explain": "Signal explanation",
-    "opposite_trades": "The opposite-trade investigation",
+    "self_opposite_trades": "The self-opposite-trade investigation",
 }
 
 
@@ -301,6 +311,51 @@ def compose_response(
                 )
                 # §3/§20: a concrete-record answer carries records only —
                 # risk features belong to signal/feature-explanation scope.
+            elif data.get("view") == "self_opposite_trades":
+                # SAME-ACCOUNT opposite-side composition (canonical self
+                # view): the ratio and rule are Risk Platform aggregates
+                # echoed verbatim. Wording names the SAME account; never
+                # cross-account terminology, never an intent claim.
+                ratio = data.get("opposite_trade_ratio")
+                if ratio is None:
+                    prose.append(
+                        "The Risk Platform does not report an opposite-"
+                        "trade ratio for this account, but its supporting "
+                        "transaction records are shown below."
+                    )
+                elif ratio == 0:
+                    prose.append(
+                        "No opposite-side trading activity was observed "
+                        "for this account: the Risk Platform's opposite-"
+                        "trade ratio is 0% over its trade stream."
+                    )
+                else:
+                    prose.append(
+                        "The Risk Platform shows opposite-side trading "
+                        "activity by this SAME account: an opposite-trade "
+                        f"ratio of {ratio:.2%} over the account's own "
+                        "trade stream (aggregate computed by the Risk "
+                        "Platform)."
+                    )
+                rule = data.get("rule")
+                if isinstance(rule, dict):
+                    desc = (rule.get("description") or "").strip()
+                    parts = [f"Detection rule: {rule.get('name')}"]
+                    if desc:
+                        parts.append(_strip_citation_markers(desc))
+                    if rule.get("threshold"):
+                        parts.append(f"threshold: {rule['threshold']}")
+                    prose.append(" — ".join(parts) + ".")
+                n = data.get("record_count", 0)
+                if n:
+                    prose.append(
+                        f"All {n} supporting transaction record"
+                        f"{'s are' if n != 1 else ' is'} shown below."
+                    )
+                prose.append(
+                    "This is same-account activity only; it implies no "
+                    "cross-account relationships and nothing about intent."
+                )
             elif data.get("view") == "timeline":
                 events = data.get("events") or []
                 total = data.get("total_events", len(events))
@@ -317,6 +372,67 @@ def compose_response(
                         "event"
                         + ("s" if total != 1 else "")
                         + ", shown below in chronological order."
+                    )
+            elif data.get("analysis") == "cross_account_trade_analysis":
+                # Candidate cross-account opposite-trade analysis (§6
+                # observation contract): candidate terminology only — the
+                # result is a quantitative match under configured
+                # tolerances, never a confirmed-pattern claim.
+                status = data.get("analysis_status")
+                cfg = data.get("config") or {}
+                delta = cfg.get("max_time_delta_seconds")
+                rel = cfg.get("value_tolerance_relative")
+                criteria = (
+                    f" (matching criteria: time within {delta:g}s, value "
+                    f"within {rel:.0%})" if delta is not None and rel is not None
+                    else "")
+                if status == "MATCH_FOUND":
+                    candidates = data.get("candidates") or []
+                    n = len(candidates)
+                    prose.append(
+                        f"The analysis found {n} candidate cross-account "
+                        "opposite-trade relationship"
+                        + ("s" if n != 1 else "")
+                        + f" in the analyzed evidence{criteria}."
+                    )
+                    for c in candidates:
+                        ids = ", ".join(
+                            c.get("transaction_ids_a", [])
+                            + c.get("transaction_ids_b", []))
+                        prose.append(
+                            f"- Candidate {c.get('candidate_id')} "
+                            f"({c.get('match_type')}): "
+                            f"{c.get('account_a')} {c.get('side_a')} vs "
+                            f"{c.get('account_b')} {c.get('side_b')} — "
+                            f"{c.get('symbol')}; max gap "
+                            f"{c.get('max_time_gap_seconds'):g}s; value "
+                            f"{c.get('value_a'):,.2f} vs "
+                            f"{c.get('value_b'):,.2f} (difference "
+                            f"{c.get('value_difference'):,.2f}, "
+                            f"{c.get('value_difference_relative'):.1%}); "
+                            f"transactions: {ids}"
+                        )
+                    prose.append(
+                        "These are candidate relationships: quantitative "
+                        "matches under the configured analytical "
+                        "tolerances — leads for analyst judgment, not "
+                        "conclusions about intent."
+                    )
+                elif status == "NO_MATCH":
+                    prose.append(
+                        "No candidate cross-account opposite-trade "
+                        "relationships matched within the configured "
+                        f"tolerances{criteria} in the analyzed evidence. "
+                        "This applies to the analyzed accounts and data "
+                        "window only."
+                    )
+                else:   # INSUFFICIENT_DATA
+                    prose.append(
+                        "The cross-account trade analysis could not reach "
+                        "a reliable conclusion: the available transaction "
+                        "evidence is incomplete or insufficient "
+                        "(retrieval was bounded or empty). This is not a "
+                        "no-match result."
                     )
             elif data.get("signal_type") == "Rule" and "rule" in data:
                 # 1) detection mechanism (deterministic, from the payload).
@@ -409,6 +525,9 @@ def compose_response(
                     pass          # signal branch above appended the
                     # producer-specific gap as the continuation of the
                     # detection-mechanism/confirmed-fact sentence
+                elif data.get("analysis") == "cross_account_trade_analysis":
+                    pass          # the analysis branch above stated the
+                    # insufficiency exactly (bounded status wording)
                 else:
                     # Producer-specific gap semantics (shared with the
                     # artifact gap renderer): the sentence names exactly the
@@ -620,6 +739,12 @@ def compose_response(
                     "aggregate feature values exist. Complete concrete "
                     "evidence is therefore unavailable."
                 )
+            elif empty_data.get("view") == "self_opposite_trades":
+                prose.append(
+                    "The Risk Platform holds no opposite-side trading "
+                    "activity data for this account — no aggregate and no "
+                    "supporting transaction records."
+                )
             elif isinstance(empty_data.get("matches"), list) \
                     and empty_data.get("finding_id"):
                 # Policy-lookup empty (P20/P9): a valid lookup whose answer
@@ -700,6 +825,14 @@ class InvestigationTurnResult(BaseModel):
     context: InvestigationContext
     follow_ups: list[FollowUp] = Field(default_factory=list)
     context_changed: bool = False
+    # Stage 2.1 structured Question / Goal Representation (open-ended
+    # baseline §35b). Additive; None when no goal resolver is wired.
+    goal_representation: Any | None = None
+    # SP-M2-1R QA evidence: user-safe target-resolution path record —
+    # distinguishes fast-path resolution / ambiguity without refinement /
+    # refinement-invoked (SELECT | CLARIFY). No model reasoning, no prompts.
+    # Additive; None on paths with no target semantics (capability guidance).
+    target_resolution: dict[str, Any] | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -718,17 +851,41 @@ class InvestigationService:
         executor: ExecutorV2 | None = None,
         task_store: TaskStoreV2 | None = None,
         investigation_id: str | None = None,
-        allow_llm_resolution: bool = False,
+        allow_llm_resolution: bool = True,
+        goal_resolver: Callable | None = None,
+        refinement_resolver: Callable | None = None,
+        metadata_admissibility: Callable | None = None,
+        clarification_ledger: Any | None = None,
     ):
-        # Default resolver runs deterministic-only: the orchestration layer
-        # never implicitly spends LLM calls, and deterministic resolution is
-        # sufficient for the Week 1 flows. Callers may inject an LLM-assisted
-        # resolver explicitly.
-        self.resolver = resolver or ContextResolver()
+        # Stage 1 (open-ended baseline): semantic target resolution is
+        # ENABLED by default — natural-language requests resolve their
+        # finding from the authoritative candidate set via the bounded,
+        # candidate-restricted LLM assist (never free-form). Callers may
+        # pass allow_llm_resolution=False for a deterministic-only resolver.
+        self.resolver = resolver or ContextResolver(
+            llm_assist=allow_llm_resolution)
         self._allow_llm_resolution = allow_llm_resolution
-        if resolver is None:
-            # disable LLM assist on the default resolver
+        if resolver is None and not allow_llm_resolution:
+            # deterministic-only: hard-disable the assist availability check
             self.resolver._llm_configured = lambda: False
+        # Stage 2.1 goal understanding: callable (request_text,
+        # focused_finding_id, case_id) -> GoalRepresentation. None =>
+        # heuristic-only proposer (no LLM); product wiring injects the
+        # LLM-backed resolver.
+        self.goal_resolver = goal_resolver
+        # SP-M2-1: optional bounded goal-aware target refinement
+        # (request_text, candidates, goal) -> RefinementDecision.
+        self.refinement_resolver = refinement_resolver
+        # WP-M2-1 WI-5: optional deterministic Safe-Select admissibility
+        # gate (app/admissibility.py). Called between the frozen
+        # refinement PROPOSAL and any resolution upgrade when
+        # ENABLE_SAFE_SELECT_ADMISSIBILITY is on; None = legacy
+        # pre-WI-5 behavior (flag OFF bypass).
+        self.metadata_admissibility = metadata_admissibility
+        # WP-M2-1 WI-6: bounded-clarification ledger (loop-boundary
+        # protection). Active at runtime only when
+        # ENABLE_SAFE_SELECT_ADMISSIBILITY is on; None = legacy behavior.
+        self.clarification_ledger = clarification_ledger
         self.planner = planner or PlannerV2()
         self.executor = executor or ExecutorV2(task_store=None)
         self.task_store = task_store   # optional; run_turn also accepts one
@@ -773,6 +930,140 @@ class InvestigationService:
         )
         resolved_ctx = resolution.updated_context
 
+        # --- 1b) SP-M2-1 bounded goal-aware target refinement ---------------
+        # Experimental (flag-gated): when initial resolution retains
+        # multiple plausible candidates, ONE goal-aware refinement attempt
+        # may upgrade the resolution to a unique high-confidence target.
+        # Never forces a selection; failure degrades to the existing
+        # clarification path. (docs/baselines/2026-09-21-...-v1.md §3)
+        # SP-M2-1R: the refinement resolver is wired into the production
+        # API construction (app/api/investigations.py). QA-safe evidence
+        # (invoked/decision/target/confidence — no model reasoning) is
+        # recorded for every resolution outcome so an independent QA can
+        # distinguish fast-path / ambiguous-without-refinement /
+        # refinement-invoked turns.
+        refined_target_id = None
+        refinement_evidence: dict[str, Any] = {
+            "invoked": False, "skipped_reason": None,
+        }
+        if (resolution.status == ResolutionStatus.AMBIGUOUS
+                and resolution.candidates):
+            if not settings.ENABLE_TARGET_GOAL_REFINEMENT:
+                refinement_evidence["skipped_reason"] = "flag_disabled"
+            elif self.refinement_resolver is None:
+                refinement_evidence["skipped_reason"] = "resolver_not_wired"
+            else:
+                try:
+                    cand = [{"id": c2.id, "title": c2.title,
+                             "description": hint}
+                            for c2, hint in (
+                                (c, next((f.summary for f in case_findings
+                                          if f.finding_id == c.id), c.hint))
+                                for c in resolution.candidates)]
+                    goal = (self.goal_resolver(
+                        user_request, None, resolved_ctx.case_id)
+                        if self.goal_resolver else None)
+                    refined = self.refinement_resolver(
+                        user_request, cand,
+                        goal.project() if goal is not None else None)
+                    refinement_evidence.update({
+                        "invoked": True,
+                        "decision": refined.decision,
+                        "target_id": refined.target_id,
+                        "confidence": refined.confidence,
+                        "reason": refined.reason,
+                    })
+                    telemetry_emit(AgentTelemetryEvent(
+                        event_type="target.refinement",
+                        investigation_id=inv_id,
+                        case_id=resolved_ctx.case_id,
+                        decision=refined.decision,
+                        outcome=refined.target_id,
+                        summary=refined.reason,
+                    ))
+                    logger.info(
+                        "target.refinement decision=%s target=%s "
+                        "confidence=%s candidates=%s", refined.decision,
+                        refined.target_id, refined.confidence,
+                        len(cand))
+                    if (refined.decision == "SELECT"
+                            and refined.target_id in
+                            {c.id for c in resolution.candidates}):
+                        # --- WI-5 Safe-Select admissibility gate ---------
+                        # The frozen refinement PROPOSAL never upgrades the
+                        # resolution by itself when the gate is enabled: a
+                        # deterministic system decision (metadata
+                        # eligibility + support evidence + uniqueness +
+                        # target identity + confidence) is required
+                        # first. Flag OFF = legacy pre-WI-5 behavior
+                        # (no gate).
+                        gate = (self.metadata_admissibility
+                                if settings.ENABLE_SAFE_SELECT_ADMISSIBILITY
+                                else None)
+                        gate_decision = None
+                        if gate is not None:
+                            try:
+                                gate_decision = gate(
+                                    request_text=user_request,
+                                    candidate_ids=[c.id for c in
+                                                   resolution.candidates],
+                                    proposed_target=refined.target_id,
+                                    confidence=refined.confidence,
+                                    candidate_set_stable=True,
+                                    investigation_id=inv_id)
+                            except Exception:
+                                logger.warning(
+                                    "metadata admissibility gate failed; "
+                                    "treating as rejected", exc_info=True)
+                                gate_decision = AdmissibilityDecision(
+                                    False, "gate_error")
+                            refinement_evidence["admissibility"] = {
+                                "decision": gate_decision.reason_class,
+                                "details": dict(gate_decision.details),
+                            }
+                            if not gate_decision.admitted:
+                                refinement_evidence["invoked"] = True
+                                refinement_evidence["decision"] = "CLARIFY"
+                                refinement_evidence["reason"] = (
+                                    "admissibility rejected: "
+                                    + gate_decision.reason_class)
+                        admitted = (gate is None
+                                    or gate_decision.admitted)
+                        if admitted:
+                            target = next(
+                                (f for f in case_findings
+                                 if f.finding_id == refined.target_id),
+                                None)
+                            if target is not None:
+                                resolution = ResolutionOutcome(
+                                    status=ResolutionStatus.RESOLVED,
+                                    updated_context=resolved_ctx.model_copy(
+                                        update={
+                                            "focused_finding_id":
+                                                target.finding_id,
+                                            "focus_source":
+                                                FocusSource.AGENT_RESOLVED,
+                                        }),
+                                    context_changed=True,
+                                    focus_source=FocusSource.AGENT_RESOLVED,
+                                    resolved_entity=Candidate(
+                                        kind="finding",
+                                        id=target.finding_id,
+                                        title=target.title),
+                                    used_llm=True,
+                                    resolution_kind="inferred",
+                                    resolution_reason=refined.reason,
+                                )
+                                resolved_ctx = resolution.updated_context
+                                refined_target_id = target.finding_id
+                except Exception:
+                    logger.warning("target refinement failed", exc_info=True)
+                    refinement_evidence["error"] = "refinement_failed"
+        target_resolution = {
+            "kind": ("refined_select" if refined_target_id else "resolved"),
+            "refinement": refinement_evidence,
+        }
+
         # Target-independent guidance (capability questions): a completed
         # informational turn — no planning, no tools, no failure (P12/P14).
         if resolution.status == ResolutionStatus.CAPABILITY_GUIDANCE:
@@ -789,9 +1080,77 @@ class InvestigationService:
             )
 
         if resolution.status == ResolutionStatus.AMBIGUOUS:
+            # --- WI-6 bounded clarification lifecycle --------------------
+            # The clarification is a resumable control state, hash-keyed
+            # by (request, candidate set, governed metadata statuses).
+            # First occurrence -> bounded clarification. Same key repeated
+            # with no meaningful state change -> bounded non-selectable
+            # terminal outcome (never a third clarification, never a
+            # pretended answer).
+            ledger = (self.clarification_ledger
+                      if settings.ENABLE_SAFE_SELECT_ADMISSIBILITY
+                      else None)
+            signal = None
+            if ledger is not None:
+                try:
+                    signal = ledger.record_clarification(
+                        investigation_id=inv_id,
+                        request_text=user_request,
+                        candidate_ids=[c.id for c in resolution.candidates],
+                        reason_class=("admissibility_rejected" if
+                                      refinement_evidence.get("admissibility")
+                                      else "ambiguous_resolution"))
+                except Exception:
+                    logger.warning("clarify ledger failed; continuing with "
+                                   "standard clarification", exc_info=True)
+            if signal is not None and signal.terminal:
+                # bounded non-selectable terminal outcome: honest
+                # informational completion (CAPABILITY_GUIDANCE
+                # precedent) — NOT a pretended answer, NOT an error.
+                task.status = TaskStatusV2.COMPLETED
+                task.completed_at = task.started_at = _stamp()
+                result = InvestigationTurnResult(
+                    task=task,
+                    response=(
+                        "I can't autonomously determine which finding you "
+                        "mean, and clarifying hasn't provided new "
+                        "information. You can select a finding from the "
+                        "Findings panel yourself, or rephrase with more "
+                        "specific details."),
+                    context=resolved_ctx,
+                    follow_ups=[],
+                    context_changed=False,
+                    target_resolution={
+                        "kind": "non_selectable_terminal",
+                        "candidates_considered": len(resolution.candidates),
+                        "refinement": refinement_evidence,
+                        "clarification": {
+                            "pending": False,
+                            "terminal": True,
+                            "resumable": True,
+                            "request_fingerprint": signal.request_fingerprint,
+                            "candidate_set_hash": signal.candidate_set_hash,
+                            "metadata_status_hash":
+                                signal.metadata_status_hash,
+                            "reason_class": "non_selectable_terminal",
+                        },
+                    },
+                )
+                self._persist(store, result.task)
+                return result
             task.status = TaskStatusV2.FAILED
             task.completed_at = task.started_at = _stamp()
             task.error = "clarification_needed"
+            clarification_state = None
+            if signal is not None:
+                clarification_state = {
+                    "pending": True,
+                    "terminal": False,
+                    "resumable": True,
+                    "request_fingerprint": signal.request_fingerprint,
+                    "candidate_set_hash": signal.candidate_set_hash,
+                    "metadata_status_hash": signal.metadata_status_hash,
+                }
             result = InvestigationTurnResult(
                 task=task,
                 response=resolution.clarification_message
@@ -800,6 +1159,14 @@ class InvestigationService:
                 context=resolved_ctx,          # unchanged copy
                 follow_ups=[],                 # never after ambiguity
                 context_changed=False,
+                target_resolution={
+                    "kind": ("refined_clarify"
+                             if refinement_evidence.get("invoked")
+                             else "ambiguous"),
+                    "candidates_considered": len(resolution.candidates),
+                    "refinement": refinement_evidence,
+                    "clarification": clarification_state,
+                },
             )
             self._persist(store, result.task)
             return result
@@ -815,6 +1182,10 @@ class InvestigationService:
                 context=resolved_ctx,          # unchanged; no invented focus
                 follow_ups=[],
                 context_changed=False,
+                target_resolution={
+                    "kind": "unresolved",
+                    "refinement": refinement_evidence,
+                },
             )
             self._persist(store, result.task)
             return result
@@ -832,6 +1203,21 @@ class InvestigationService:
         finding_caps = focused_finding.capabilities if focused_finding else None
         eligible = eligible_skills_for_finding(finding_caps)
         eligible_ids = [s.skill_id for s in eligible]
+
+        # --- 2b) Stage 2.1 structured goal representation ----------------------
+        # Produced after target resolution, before planning; distinct from
+        # tool selection (open-ended baseline §35b). Bounded: failure to
+        # understand the goal never blocks the turn.
+        goal_representation = None
+        if self.goal_resolver is not None:
+            try:
+                goal = self.goal_resolver(
+                    user_request, resolved_ctx.focused_finding_id,
+                    resolved_ctx.case_id)
+                if goal is not None:
+                    goal_representation = goal
+            except Exception:
+                logger.warning("goal representation failed", exc_info=True)
 
         # --- 3) Planner -------------------------------------------------------
         plan_or_failure = self.planner.plan(
@@ -856,6 +1242,7 @@ class InvestigationService:
                 context=resolved_ctx,
                 follow_ups=[],     # no follow-ups for planning failure
                 context_changed=resolution.context_changed,
+                target_resolution=target_resolution,
             )
             self._persist(store, result.task)
             return result
@@ -930,6 +1317,8 @@ class InvestigationService:
             context=final_ctx,
             follow_ups=follow_ups,
             context_changed=resolution.context_changed,
+            target_resolution=target_resolution,
+            goal_representation=goal_representation,
         )
         self._persist(store, result.task)
         return result

@@ -92,11 +92,23 @@ def default_tool_provider() -> ToolProvider:
         risk_case_fetch,
         signal_explain,
     )
+    from app.domain_tools.cross_account_trade_analysis import (
+        ANALYSIS_TYPE,
+        cross_account_trade_analysis,
+    )
 
     provider = ToolProvider()
     provider.register("risk_case_fetch", lambda args: risk_case_fetch(
         case_id=args.get("case_id", ""),
     ))
+    provider.register(
+        "cross_account_trade_analysis",
+        lambda args: cross_account_trade_analysis(
+            case_id=args.get("case_id", ""),
+            finding_id=args.get("finding_id"),
+            # registry-locked value; the planner can never emit another
+            analysis_type=args.get("analysis_type", ANALYSIS_TYPE),
+        ))
     provider.register("finding_drilldown", lambda args: finding_drilldown(
         finding_id=args.get("finding_id", ""),
         view=args.get("view", "timeline"),
@@ -201,8 +213,9 @@ class ExecutorV2:
         if step.type == "fetch_case" and "case_id" not in args:
             args["case_id"] = context.case_id
         if step.type in ("inspect_timeline", "inspect_evidence",
-                         "inspect_opposite_trades",
-                         "inspect_withdrawals", "inspect_transactions") \
+                         "inspect_self_opposite_trades",
+                         "inspect_withdrawals", "inspect_transactions",
+                         "analyze_cross_account_trades") \
                 and "finding_id" not in args:
             # Focus Mode: the focused finding is the canonical drilldown
             # target; the planner never picks entity ids.
@@ -210,8 +223,9 @@ class ExecutorV2:
         if step.type == "explain_signal" and "finding_id" not in args:
             args["finding_id"] = context.focused_finding_id
         if step.type in ("inspect_timeline", "inspect_evidence",
-                         "inspect_opposite_trades", "inspect_withdrawals",
-                         "inspect_transactions",
+                         "inspect_self_opposite_trades",
+                         "inspect_withdrawals", "inspect_transactions",
+                         "analyze_cross_account_trades",
                          "explain_signal") and "case_id" not in args:
             args["case_id"] = context.case_id
         if step.type == "explain_signal" and "signal_type" not in args:
@@ -462,6 +476,41 @@ class ExecutorV2:
         return result
 
     # --- internals --------------------------------------------------------------
+
+    def execute_one_step(
+        self,
+        step: PlanStep,
+        *,
+        context: InvestigationContext,
+        investigation_id: str,
+        task_id: str,
+        provenance_pool: list[ToolCallV2] | None = None,
+        user_request: str = "",
+        focused_finding: Any | None = None,
+    ) -> tuple[PlanStep, ToolCallV2 | None, ExecutorError | None,
+               list[dict[str, Any]]]:
+        """Execute exactly ONE plan step through the normal tool boundary
+        (Agent Loop entry; baseline §3). Same semantics as `_execute_step`
+        — runtime argument injection, capability/view locks, normalized
+        ToolResult, artifact harvest — without whole-plan bookkeeping or
+        task finalization. Returns (step, tool_call|None, error|None,
+        harvested artifacts)."""
+        collected_calls: list[ToolCallV2] = []
+        collected_artifacts: list[dict[str, Any]] = []
+        error = self._execute_step(
+            step,
+            context=context,
+            investigation_id=investigation_id,
+            task_id=task_id,
+            collected_calls=collected_calls,
+            collected_artifact_ids=[],
+            collected_artifacts=collected_artifacts,
+            provenance_pool=provenance_pool,
+            user_request=user_request,
+            focused_finding=focused_finding,
+        )
+        tool_call = collected_calls[0] if collected_calls else None
+        return step, tool_call, error, collected_artifacts
 
     def _execute_step(
         self,
