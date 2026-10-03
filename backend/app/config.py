@@ -23,7 +23,12 @@ class Settings(BaseSettings):
     # not product-final decisions (docs/baselines/
     # 2026-09-18-cross-account-trade-analysis-v1.md §12); the contract is
     # that retrieval without these bounds cannot happen.
-    TRADE_ANALYSIS_MAX_ACCOUNTS: int = 5
+    # AL-2.10: 5 → 24. The reference case U00010's RP network attribution
+    # carries 18-19 related accounts; the former budget truncated retrieval
+    # (INSUFFICIENT_DATA) on every realistic request, making the governed
+    # capability look broken for exactly the case it exists to serve. 24
+    # still bounds retrieval (the contract is the bound, not the value).
+    TRADE_ANALYSIS_MAX_ACCOUNTS: int = 24
     TRADE_ANALYSIS_MAX_TOTAL_TRANSACTIONS: int = 500
     TRADE_ANALYSIS_MAX_PAGE_SIZE: int = 100
     TRADE_ANALYSIS_MAX_PAGES: int = 10
@@ -56,6 +61,17 @@ class Settings(BaseSettings):
     # (coverage check / admissibility gate respectively).
     ENABLE_CANDIDATE_METADATA_COVERAGE: bool = False   # WI-2
     ENABLE_SAFE_SELECT_ADMISSIBILITY: bool = False     # WI-5
+
+    # AL-2.8: the M2 semantic foundation (Concept Registry + Candidate
+    # Metadata + SemanticNormalizer) as conversational finding-resolution
+    # grounding. Resolution ≠ authorization: this stage may ground a
+    # finding target conversationally; it NEVER confers Safe-Select
+    # eligibility (WI-5 gate stays the only authorization point). When an
+    # LLM is unavailable AND no deterministic stage resolved, the turn
+    # degrades to SEMANTIC_RESOLUTION_UNAVAILABLE (an honest outage state,
+    # distinct from unresolved_reference). OFF = legacy resolution chain
+    # without the M2 stage.
+    ENABLE_SEMANTIC_FINDING_RESOLUTION: bool = True
 
     class Config:
         env_file = ".env"

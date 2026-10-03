@@ -539,10 +539,17 @@ class TestRouting:
         plan = PlannerV2(LLM()).plan(
             "Find opposite trades across accounts.", ctx,
             ["trade_investigation"], caps)
-        assert [s.type for s in plan.steps] == ["analyze_cross_account_trades"]
+        # AL-2.6: the deterministic case-level branch now plans this
+        # governed step directly (the LLM script below is only a fallback
+        # that must never be reached for this intent); the bundle step
+        # keeps the run bounded when the analysis honestly reports
+        # insufficient data.
+        assert plan.steps[0].type == "analyze_cross_account_trades"
         assert plan.steps[0].tool_name == "cross_account_trade_analysis"
         assert plan.steps[0].arguments == {
             "analysis_type": "cross_account_opposite_trade"}
+        assert [s.type for s in plan.steps] == [
+            "analyze_cross_account_trades", "generate_artifact"]
 
     def test_self_wording_still_routes_to_self_step(self):
         from app.planner_v2 import (_is_cross_account_trade_request,
@@ -560,7 +567,7 @@ class TestRouting:
                             "analysis_type": "cross_account_opposite_trade"})
         ctx = InvestigationContext(case_id="U90001",
                                    focused_finding_id="F2")
-        args = ExecutorV2._runtime_arguments(step, ctx)
+        args, _sources = ExecutorV2._runtime_arguments(step, ctx)
         assert args["case_id"] == "U90001"
         assert args["finding_id"] == "F2"
         assert args["analysis_type"] == "cross_account_opposite_trade"

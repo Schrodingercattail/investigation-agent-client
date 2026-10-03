@@ -180,6 +180,25 @@ for determinism, but when a real dependency (RP, LLM, browser) was
 unavailable, document the limitation and do not claim the real path
 was validated.
 
+### Canonical runtime
+
+The canonical development/acceptance runtime is the committed
+configuration: **frontend :3001 (`frontend/vite.config.ts`) → backend
+:8001 (uvicorn) → Risk Platform :8000**, sharing
+`backend/data/investigation_agent_v2.db` (the default store path is
+derived from `__file__` and is cwd-independent). Every work item's
+FINAL acceptance journey must run against this stack AFTER restarting
+its processes onto the current working tree — passing on an isolated
+QA stack does not satisfy acceptance. Isolated QA stacks (e.g.
+`frontend/vite.qa.config.ts` → :8010) are temporary scaffolding for
+deterministic/no-key/parallel runs: never the acceptance surface, and
+torn down after use. Before diagnosing "it fails in my browser",
+check which code the target stack actually runs
+(`GET /api/v2/runtime/identity` + process start time; note the
+identity fingerprints are computed from disk at request time and do
+NOT prove what a long-running process has loaded — use a behavioral
+marker instead).
+
 ### Defect handling
 
 On an E2E/browser failure: reproduce → identify the failing boundary

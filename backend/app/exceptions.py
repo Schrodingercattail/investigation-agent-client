@@ -49,6 +49,15 @@ class LLMRateLimitError(LLMError):
     pass
 
 
+class LLMEmptyResponseError(LLMError):
+    """The provider was REACHABLE and returned a response, but the
+    response carried no usable text block (AL-2.10: observed with
+    thinking-style models when a small max_tokens budget is consumed by
+    reasoning blocks). Semantically DISTINCT from an unavailable
+    provider: the taxonomy must not report an outage when the provider
+    answered."""
+
+
 class ToolExecutionError(InvestigationAgentError):
     """Error in tool execution."""
 

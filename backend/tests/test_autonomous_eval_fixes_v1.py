@@ -199,8 +199,11 @@ class TestPlannerExecutablePaths:
             "Find opposite trades across accounts.", ctx,
             ["trade_investigation"], caps)
         assert not isinstance(svc_plan, PlanningFailure)
+        # AL-2.6: the deterministic case-level branch plans this intent
+        # directly; the bundle step keeps insufficient-data runs bounded.
+        assert svc_plan.steps[0].type == "analyze_cross_account_trades"
         assert [s.type for s in svc_plan.steps] == \
-            ["analyze_cross_account_trades"]
+            ["analyze_cross_account_trades", "generate_artifact"]
         assert svc_plan.steps[0].tool_name == "cross_account_trade_analysis"
 
     def test_single_semantic_answer_helper(self):

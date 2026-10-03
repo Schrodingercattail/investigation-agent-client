@@ -1,6 +1,8 @@
 import logging
 import re
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -98,6 +100,42 @@ app = FastAPI(
 from app.api.investigations import router as investigations_v2_router  # noqa: E402
 
 app.include_router(investigations_v2_router)
+
+
+@app.on_event("startup")
+def _seed_governed_candidate_metadata() -> None:
+    """AL-2.8: provision the governed M2 metadata catalog (Concept
+    Registry + candidate records) at startup from the reviewed seed
+    document. Create-if-absent; an auto-provisioned empty INCOMPLETE
+    placeholder may be completed by an authored seed entry (onboarding
+    Step 2 -> Step 3) — governed records are NEVER overwritten. Failure
+    is logged and never blocks startup: without the catalog the semantic
+    foundation stage is inert and the legacy resolution chain runs."""
+    from pathlib import Path
+    try:
+        from app.config import settings
+        if not settings.ENABLE_SEMANTIC_FINDING_RESOLUTION:
+            return
+        import app.api.investigations as _inv_api
+        from app.metadata_seeding import (
+            DEFAULT_SEED_FILE,
+            SeedConformanceError,
+            seed_from_document,
+        )
+        seed_path = (Path(__file__).resolve().parent.parent
+                     / DEFAULT_SEED_FILE)
+        doc = json.loads(seed_path.read_text(encoding="utf-8"))
+        summary = seed_from_document(_inv_api.api.store, doc)
+        logger.info("governed metadata seeding: concepts=%s seeded=%s "
+                    "present=%s", summary.concepts_seeded,
+                    summary.candidates_seeded,
+                    summary.candidates_already_present)
+    except SeedConformanceError as e:
+        logger.error("governed metadata seed rejected: %s", e.errors)
+    except Exception:
+        logger.warning("governed metadata seeding failed; semantic "
+                       "foundation stage stays inert", exc_info=True)
+
 
 
 

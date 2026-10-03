@@ -189,7 +189,11 @@ class TaskStoreV2:
         with self._lock:
             rows = self._connection().execute(
                 "SELECT document FROM tasks_v2 WHERE investigation_id = ? "
-                "ORDER BY started_at ASC, task_id ASC",
+                # NULLs LAST: a task without a start stamp (historic loop
+                # runs) must never jump ahead of stamped turns — restore
+                # chronology is this ordering (AL-2.10).
+                "ORDER BY (started_at IS NULL) ASC, started_at ASC, "
+                "task_id ASC",
                 (investigation_id,),
             ).fetchall()
         return [TaskV2.model_validate_json(r["document"]) for r in rows]

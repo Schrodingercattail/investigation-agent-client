@@ -82,6 +82,21 @@ class ToolProvider:
         return tool_name in self._tools
 
 
+# AL-2 argument contract: required argument keys per planning step type.
+# Deterministic system contract — the planner cannot waive these.
+REQUIRED_ARGUMENTS: dict[str, list[str]] = {
+    "fetch_case": ["case_id"],
+    "inspect_timeline": ["finding_id"],
+    "inspect_evidence": ["finding_id"],
+    "inspect_withdrawals": ["finding_id"],
+    "inspect_transactions": ["finding_id"],
+    "inspect_self_opposite_trades": ["finding_id"],
+    "analyze_cross_account_trades": ["case_id"],
+    "analyze_related_accounts": ["case_id"],
+    "explain_signal": ["finding_id"],
+}
+
+
 def default_tool_provider() -> ToolProvider:
     """Week 1 provider: the wired Agent tools. Additional tools plug in
     through this same boundary."""
@@ -96,6 +111,10 @@ def default_tool_provider() -> ToolProvider:
         ANALYSIS_TYPE,
         cross_account_trade_analysis,
     )
+    from app.domain_tools.related_account_analysis import (
+        ANALYSIS_TYPE as RELATED_ACCOUNT_ANALYSIS_TYPE,
+        related_account_analysis,
+    )
 
     provider = ToolProvider()
     provider.register("risk_case_fetch", lambda args: risk_case_fetch(
@@ -108,6 +127,14 @@ def default_tool_provider() -> ToolProvider:
             finding_id=args.get("finding_id"),
             # registry-locked value; the planner can never emit another
             analysis_type=args.get("analysis_type", ANALYSIS_TYPE),
+        ))
+    provider.register(
+        "related_account_analysis",
+        lambda args: related_account_analysis(
+            case_id=args.get("case_id", ""),
+            # registry-locked value; the planner can never emit another
+            analysis_type=args.get(
+                "analysis_type", RELATED_ACCOUNT_ANALYSIS_TYPE),
         ))
     provider.register("finding_drilldown", lambda args: finding_drilldown(
         finding_id=args.get("finding_id", ""),
@@ -201,33 +228,46 @@ class ExecutorV2:
         step: PlanStep,
         context: InvestigationContext,
         focused_finding: Any | None = None,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, str]]:
         """Inject structural arguments derived from the investigation context
         at execution time (planner-provided locked args are never overridden).
 
         This is runtime argument injection per DOMAIN_MODELS_V1 §4.2 — the
         planner/LLM never supplies these; the executor resolves them from
         explicit, inspectable context.
+
+        AL-2: returns (args, argument_sources) — per-argument provenance
+        categories for the audit trajectory (investigation_context /
+        deterministic_system_value / planner).
         """
+        sources: dict[str, str] = {}
         args = dict(step.arguments)
+        for key in step.arguments:
+            sources[key] = "planner"
         if step.type == "fetch_case" and "case_id" not in args:
             args["case_id"] = context.case_id
-        if step.type in ("inspect_timeline", "inspect_evidence",
-                         "inspect_self_opposite_trades",
-                         "inspect_withdrawals", "inspect_transactions",
-                         "analyze_cross_account_trades") \
-                and "finding_id" not in args:
-            # Focus Mode: the focused finding is the canonical drilldown
-            # target; the planner never picks entity ids.
-            args["finding_id"] = context.focused_finding_id
-        if step.type == "explain_signal" and "finding_id" not in args:
-            args["finding_id"] = context.focused_finding_id
+            sources["case_id"] = "investigation_context"
         if step.type in ("inspect_timeline", "inspect_evidence",
                          "inspect_self_opposite_trades",
                          "inspect_withdrawals", "inspect_transactions",
                          "analyze_cross_account_trades",
+                         "analyze_related_accounts") \
+                and "finding_id" not in args:
+            # Focus Mode: the focused finding is the canonical drilldown
+            # target; the planner never picks entity ids.
+            args["finding_id"] = context.focused_finding_id
+            sources["finding_id"] = "investigation_context"
+        if step.type == "explain_signal" and "finding_id" not in args:
+            args["finding_id"] = context.focused_finding_id
+            sources["finding_id"] = "investigation_context"
+        if step.type in ("inspect_timeline", "inspect_evidence",
+                         "inspect_self_opposite_trades",
+                         "inspect_withdrawals", "inspect_transactions",
+                         "analyze_cross_account_trades",
+                         "analyze_related_accounts",
                          "explain_signal") and "case_id" not in args:
             args["case_id"] = context.case_id
+            sources["case_id"] = "investigation_context"
         if step.type == "explain_signal" and "signal_type" not in args:
             # Detector identity derives from the focused finding's
             # AUTHORITATIVE structured signal_refs — never a hard-coded
@@ -258,7 +298,8 @@ class ExecutorV2:
                 # never invent unrestricted policy arguments.
                 focused = context.focused_finding_id or ""
                 args["topic"] = f"policy requirements for finding {focused}"
-        return args
+                sources["topic"] = "deterministic_system_value"
+        return args, sources
 
     @staticmethod
     def _artifact_arguments(
@@ -560,20 +601,52 @@ class ExecutorV2:
                 detail={"tool_name": binding_tool},
             )
 
+        if step.type == "generate_artifact":
+            arguments = self._artifact_arguments(
+                step, context, task_id,
+                (provenance_pool or []) + collected_calls,
+                user_request=user_request)
+            # artifact arguments are deterministic system values
+            argument_sources = {k: "deterministic_system_value"
+                                for k in arguments}
+        else:
+            arguments, argument_sources = self._runtime_arguments(
+                step, context, focused_finding=focused_finding)
+        # --- AL-2 argument contract validation (BEFORE execution) ---------
+        # A required argument that cannot be resolved deterministically is
+        # a structured validation failure: the tool is NOT invoked.
+        missing = [key for key in REQUIRED_ARGUMENTS.get(
+            step.type, []) if not arguments.get(key)]
+        if missing:
+            step.status = PlanStepStatus.FAILED
+            step.completed_at = _now()
+            step.error = (f"Missing required argument(s) for "
+                          f"{binding_tool}: {missing}")
+            tool_call = ToolCallV2(
+                tool_call_id=f"TC-{step.step_id}-{_now().replace(':', '').replace('.', '')}",
+                investigation_id=investigation_id,
+                task_id=task_id,
+                tool_name=binding_tool,
+                arguments=arguments,
+                argument_sources=argument_sources,
+                status=ToolCallStatusV2.FAILED,
+                started_at=_now(),
+                completed_at=_now(),
+                error=f"INVALID_ARGUMENT: missing {missing}",
+            )
+            return ExecutorError(
+                code="INVALID_ARGUMENT",
+                message=step.error,
+                step_id=step.step_id,
+                detail={"missing": missing},
+            )
         tool_call = ToolCallV2(
             tool_call_id=f"TC-{step.step_id}-{_now().replace(':', '').replace('.', '')}",
             investigation_id=investigation_id,
             task_id=task_id,
             tool_name=binding_tool,
-            arguments=(
-                self._artifact_arguments(step, context, task_id,
-                                         (provenance_pool or [])
-                                         + collected_calls,
-                                         user_request=user_request)
-                if step.type == "generate_artifact"
-                else self._runtime_arguments(step, context,
-                                             focused_finding=focused_finding)
-            ),
+            arguments=arguments,
+            argument_sources=argument_sources,
             status=ToolCallStatusV2.RUNNING,
             started_at=_now(),
         )

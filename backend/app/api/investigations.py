@@ -117,6 +117,11 @@ class InvestigationAPI:
             # WP-M2-1 WI-6: bounded-clarification ledger (same runtime
             # flag; inactive when the admissibility flag is off).
             clarification_ledger=ClarificationLedger(self.store),
+            # AL-2.8: the governed M2 catalog grounds conversational
+            # finding resolution (SemanticNormalizer + candidate metadata).
+            # Resolution ≠ authorization: this never confers Safe-Select
+            # eligibility; flag-gated inside the resolver.
+            semantic_catalog=TaskStoreCatalogProvider(self.store),
         )
         # case_findings_provider(case_id) -> list[Finding]: pluggable source
         # for canonical findings (default: real risk_case_fetch via adapter).
@@ -435,13 +440,22 @@ class InvestigationAPI:
 
         def _run() -> None:
             try:
-                runner.run(goal, context, [],
-                           investigation_id=investigation_id,
-                           task_id=task_id,
-                           findings_provider=runner.findings_provider)
+                result = runner.run(goal, context, [],
+                                    investigation_id=investigation_id,
+                                    task_id=task_id,
+                                    findings_provider=runner.findings_provider)
             except Exception:                     # noqa: BLE001 — the runner
                 logger.exception(                 # already bounds its own
                     "Agent Loop run failed for task %s", task_id)
+                return
+            # AL-2.5/2.7: mirror the loop run's products into the
+            # investigation session read model — the SAME surface the turn
+            # path records — so the composed assistant response and the
+            # artifact bodies are served by GET /tasks/{id} (conversation
+            # restore), /tasks/{id}/artifacts, and reopen. Previously the
+            # response existed only inside agent_states/Activity and the
+            # artifact bodies only inside the loop thread.
+            self._record_loop_result(investigation_id, result)
 
         thread = threading.Thread(target=_run, name=f"agent-loop-{task_id}",
                                   daemon=True)
@@ -449,6 +463,45 @@ class InvestigationAPI:
         return GoalRunResponse(task_id=task_id,
                                investigation_id=investigation_id,
                                agent_status="running")
+
+    def _record_loop_result(self, investigation_id: str, result) -> None:
+        """Persist an Agent Loop run's conversational response and artifact
+        bodies into the investigation session (read model shared with the
+        turn path). The response comes from the formal composition
+        mechanism (compose_loop_response via the runner) — never
+        fabricated here."""
+        session = self._session(investigation_id)
+        response = (getattr(result, "response", "") or "").strip()
+        if response:
+            # keyed by task id; a duplicate record of the same run must
+            # not overwrite or duplicate anything
+            session.setdefault("turn_responses", {})[
+                result.state.task_id] = response
+        artifacts = list(getattr(result, "artifacts", None) or [])
+        if artifacts:
+            known = {a.get("artifact_id") for a in
+                     session.setdefault("artifacts", [])}
+            session["artifacts"].extend(
+                a for a in artifacts if a.get("artifact_id") not in known)
+        if response or artifacts:
+            self.store.save_session(investigation_id, session)
+
+    def resume_agent_loop(self, task_id: str) -> GoalRunResponse:
+        """WP-M2-1 AL-1 recovery: resume a persisted NON-terminal loop
+        run from its agent_states document. Same runner factory, same
+        caps/policy — nothing is reset. Terminal runs are refused."""
+        runner = self.loop_runner_factory(self.store)
+        runner.findings_provider = lambda: self._findings_strict(
+            self.store.get_task(task_id).investigation_id
+            if self.store.get_task(task_id) else "")
+        result = runner.resume(task_id,
+                               findings_provider=runner.findings_provider)
+        # AL-2.5/2.7: same read-model parity as a fresh goal run
+        self._record_loop_result(result.state.investigation_id, result)
+        return GoalRunResponse(
+            task_id=task_id,
+            investigation_id=result.state.investigation_id,
+            agent_status=result.state.agent_status)
 
     def get_task_activity(self, task_id: str) -> TaskActivityResponse:
         from app.agent_loop import project_task_activity
@@ -699,12 +752,15 @@ def _turn_status(result) -> str:
 
 def _default_loop_runner(store: TaskStoreV2):
     """Real bounded loop coordinator: ContextResolver (Stage 1 target
-    resolution) + Stage 2.1 goal understanding + PlannerV2 + ExecutorV2
+    resolution, AL-2.8 semantic foundation wired to the governed M2
+    catalog) + Stage 2.1 goal understanding + PlannerV2 + ExecutorV2
     (default provider) + LLM/heuristic decision proposer, all persisting
     into the shared store."""
     from app.agent_loop import AgentLoopRunner
     return AgentLoopRunner(store=store,
-                           resolver=ContextResolver(),
+                           resolver=ContextResolver(
+                               semantic_catalog=TaskStoreCatalogProvider(
+                                   store)),
                            goal_resolver=_default_goal_resolver())
 
 
@@ -722,6 +778,21 @@ def _default_goal_resolver():
     return resolve
 
 
+def _default_llm_or_none():
+    """Tolerant LLM provider construction for the module-default
+    collaborators. The backend must START (and run its documented
+    deterministic fallbacks) even when no LLM key is configured — an
+    eager ClaudeProvider() here crashed startup instead (AL-2.5 finding).
+    Every consumer of the returned None already degrades deterministically
+    (refine_target → CLARIFY, SemanticNormalizer → UNKNOWN)."""
+    from app.llm_provider import ClaudeProvider
+    try:
+        return ClaudeProvider()
+    except Exception:
+        logger.info("LLM not configured; deterministic fallbacks active")
+        return None
+
+
 def _default_refinement_resolver():
     """SP-M2-1 bounded goal-aware target refinement callable
     (request_text, candidates, goal) -> RefinementDecision.
@@ -731,12 +802,13 @@ def _default_refinement_resolver():
     threshold, mirroring the planner's ClaudeProvider convention. The
     decision algorithm, prompt, and threshold semantics are unchanged.
     """
-    from app.llm_provider import ClaudeProvider
     from app.target_refinement import refine_target
+
+    llm = _default_llm_or_none()
 
     def refine(request_text: str, candidates, goal):
         return refine_target(request_text, candidates, goal,
-                             llm=ClaudeProvider(),
+                             llm=llm,
                              min_confidence=settings
                              .TARGET_REFINEMENT_MIN_CONFIDENCE)
     return refine
@@ -749,11 +821,10 @@ def _default_metadata_admissibility(store):
     deterministic system logic. Runtime-enforced only when
     ENABLE_SAFE_SELECT_ADMISSIBILITY is on."""
     from app.admissibility import SafeSelectGate
-    from app.llm_provider import ClaudeProvider
 
     return SafeSelectGate(
         catalog_provider=TaskStoreCatalogProvider(store),
-        normalizer_llm=ClaudeProvider(),
+        normalizer_llm=_default_llm_or_none(),
         min_confidence=settings.TARGET_REFINEMENT_MIN_CONFIDENCE)
 
 
@@ -817,6 +888,12 @@ def start_goal(investigation_id: str, request: GoalRunRequest):
     immediately with the task id; poll GET /tasks/{task_id}/activity until
     a terminal agent_status (Agent Activity baseline §16)."""
     return api.start_goal(investigation_id, request)
+
+
+@router.post("/tasks/{task_id}/resume", response_model=GoalRunResponse)
+def resume_agent_loop(task_id: str):
+    """WP-M2-1 AL-1: resume a persisted non-terminal Agent Loop run."""
+    return api.resume_agent_loop(task_id)
 
 
 @router.get("/tasks/{task_id}/activity", response_model=TaskActivityResponse)

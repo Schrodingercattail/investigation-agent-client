@@ -1,5 +1,5 @@
 {
-  "seed_version": 1,
+  "seed_version": 3,
   "source_case": "U00010",
   "provenance": {
     "enacted_by": "PMO implementation baseline (rev. 3, WI-3)",
@@ -7,9 +7,13 @@
       "docs/baselines/2026-09-24-sp-m2-1c-candidate-separability-v1.md",
       "docs/baselines/2026-09-24-wp-m2-1-item2-evidence-validation-discovery-v1.md",
       "docs/baselines/2026-09-24-wp-m2-1-item2a-sufficiency-non-equivalence-discovery-v1.md",
-      "docs/qa/2026-09-24-sp-m2-1-final-independent-qa-v1.md"
+      "docs/qa/2026-09-24-sp-m2-1-final-independent-qa-v1.md",
+      "docs/qa/2026-09-30-al2-8-finding-level-semantic-resolution-v1.md",
+      "docs/qa/2026-09-30-al2-9-conversational-follow-up-resolution-v1.md"
     ],
-    "live_titles_verified_at": "2026-09-24"
+    "live_titles_verified_at": "2026-09-24",
+    "v2_change": "AL-2.8: F3 minimal authoring (HIGH_WITHDRAWAL_FREQUENCY core + WITHDRAWAL_FREQUENCY distinguishing; F3<->F4 confusion already recorded). Status stays UNVERIFIED pending independent verification; conversational reachability does not depend on verification status.",
+    "v3_change": "AL-2.9: F7 minimal authoring (HIGH_TRADING_FREQUENCY core + TRADING_FREQUENCY distinguishing; F7<->F8/F2 confusions already recorded) so 高频交易 grounds through the M2 foundation and is deterministically separable from HIGH_WITHDRAWAL_FREQUENCY (F3). UNVERIFIED; reachability unaffected."
   },
   "concept_registry": [
     {
@@ -59,6 +63,38 @@
       "version": 1,
       "created_by": "seed-wi3",
       "evidence": "Item 2A distinguishing-concept annotation for F8; R-D unique-support verdict at 0.90."
+    },
+    {
+      "concept_id": "HIGH_WITHDRAWAL_FREQUENCY",
+      "definition": "An elevated rate of withdrawals from the subject account within a short observation window (the finding is centrally about this elevated withdrawal frequency).",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-al2-8",
+      "evidence": "AL-2.8 authoring from the live RP finding description (U00010 'High withdrawal frequency.': 7 withdrawals in 24h above the system's elevated-frequency threshold)."
+    },
+    {
+      "concept_id": "WITHDRAWAL_FREQUENCY",
+      "definition": "The withdrawal-frequency signal that distinguishes a high-withdrawal-frequency finding from one-time withdrawal-destination findings (e.g. a first withdrawal to a newly encountered address).",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-al2-8",
+      "evidence": "AL-2.8 distinguishing-concept annotation for F3 against its recorded confusable F4 (same withdrawal evidence; frequency semantics vs one-time new-address semantics)."
+    },
+    {
+      "concept_id": "HIGH_TRADING_FREQUENCY",
+      "definition": "An elevated number of trades executed by the subject account within a short observation window (the finding is centrally about this elevated trading activity frequency).",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-al2-9",
+      "evidence": "AL-2.9 authoring from the live RP finding description (U00010 'High Trading Frequency.': 54 trades in 24 hours, elevated single-day trading activity) and its RP risk feature trade_frequency_24h=54."
+    },
+    {
+      "concept_id": "TRADING_FREQUENCY",
+      "definition": "The trading-frequency signal that distinguishes a high-trading-frequency finding from opposite-trade-ratio findings and new-account/high-activity findings.",
+      "status": "ACTIVE",
+      "version": 1,
+      "created_by": "seed-al2-9",
+      "evidence": "AL-2.9 distinguishing-concept annotation for F7 against its recorded confusables F8 (opposite-trade ratio) and F2 (new-account/high-activity, same 54-trades evidence)."
     }
   ],
   "candidates": [
@@ -174,14 +210,24 @@
       "candidate_id": "F3",
       "candidate_type": "finding",
       "title_snapshot": "High withdrawal frequency.",
-      "core_concepts": [],
-      "distinguishing_concepts": [],
+      "core_concepts": [
+        "HIGH_WITHDRAWAL_FREQUENCY"
+      ],
+      "distinguishing_concepts": [
+        "WITHDRAWAL_FREQUENCY"
+      ],
       "potential_confusions": [
         "F4"
       ],
       "mechanism_concepts": [],
-      "target_status": "INCOMPLETE",
-      "insufficiency_reason": "No verified semantic evidence in project baselines: withdrawal-frequency semantics were never formalized as concepts; confusion with F4 (same withdrawal evidence) is recorded but unresolved. Requires domain authoring.",
+      "target_status": "UNVERIFIED",
+      "evidence": {
+        "sources": [
+          "docs/qa/2026-09-30-al2-8-finding-level-semantic-resolution-v1.md",
+          "docs/baselines/2026-09-24-candidate-semantic-metadata-contract-v1.md"
+        ],
+        "rationale": "Core and distinguishing concepts authored during AL-2.8 from the live RP finding description (U00010: 7 withdrawals in 24h exceeding the system's elevated-withdrawal-frequency threshold) so the finding is conversationally resolvable through the governed semantic foundation. The F3<->F4 confusion (same withdrawal evidence; frequency semantics vs one-time new-address semantics) was recorded at provisioning and now has an explicit distinguishing boundary. Independent verification is pending: status UNVERIFIED (Safe-Select ineligible; conversational reachability unaffected)."
+      },
       "description_snapshot": "7 withdrawals were recorded in 24 hours, exceeding the system's threshold for elevated withdrawal frequency. [2]",
       "content_hash": "c74cfe05a9ef879f32806463e777df6c626069ee61d1205150c10ed35ee07065"
     },
@@ -204,15 +250,25 @@
       "candidate_id": "F7",
       "candidate_type": "finding",
       "title_snapshot": "High Trading Frequency.",
-      "core_concepts": [],
-      "distinguishing_concepts": [],
+      "core_concepts": [
+        "HIGH_TRADING_FREQUENCY"
+      ],
+      "distinguishing_concepts": [
+        "TRADING_FREQUENCY"
+      ],
       "potential_confusions": [
         "F8",
         "F2"
       ],
       "mechanism_concepts": [],
-      "target_status": "INCOMPLETE",
-      "insufficiency_reason": "No verified semantic evidence in project baselines: Item 2A (R-G) explicitly left the trading-frequency vs opposite-trade-ratio boundary unresolved; the frequency/anomaly distinction requires domain authoring. Confusions with F8 and F2 (same 54-trades evidence) are recorded.",
+      "target_status": "UNVERIFIED",
+      "evidence": {
+        "sources": [
+          "docs/qa/2026-09-30-al2-9-conversational-follow-up-resolution-v1.md",
+          "docs/baselines/2026-09-24-candidate-semantic-metadata-contract-v1.md"
+        ],
+        "rationale": "Core and distinguishing concepts authored during AL-2.9 from the live RP finding description (U00010: 54 trades in 24 hours, elevated single-day trading activity; RP risk feature trade_frequency_24h=54) so the finding is conversationally resolvable through the governed semantic foundation. 高频交易 grounds to HIGH_TRADING_FREQUENCY and is deterministically separable from HIGH_WITHDRAWAL_FREQUENCY (F3): no shared core concept. Confusions with F8 (opposite-trade ratio) and F2 (new-account/high-activity, same 54-trades evidence) were recorded at provisioning. Independent verification pending: status UNVERIFIED (Safe-Select ineligible; conversational reachability unaffected)."
+      },
       "description_snapshot": "54 trades were recorded in 24 hours, an elevated level of trading activity for a single-day window.\nAccount Age.\nThe account is 6 days old; this is contextual evidence, relevant in combination with the high activity observed above.",
       "content_hash": "712432c4638976c925acd4fb1670412dd536e2676352f96a0d8baec1890bb303"
     }

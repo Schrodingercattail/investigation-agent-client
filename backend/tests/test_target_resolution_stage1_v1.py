@@ -226,11 +226,21 @@ class TestAmbiguity:
             or out.resolution_kind != "inferred"
 
     def test_llm_high_confidence_unique_is_inferred(self):
+        # AL-2.6: a SUPPORTED case-level analytical intent ("find
+        # cross-account opposite trades" names no finding) routes
+        # case-level BEFORE LLM assist — focusing a finding adds nothing
+        # for a case_id-only analysis, so the old focus-assignment is no
+        # longer reachable for this phrasing.
         out = resolver(llm_resolved("F2")).resolve(
             "find cross-account opposite trades", ctx(), ALL)
-        assert out.status == ResolutionStatus.RESOLVED
-        assert out.resolution_kind == "inferred"
-        assert out.resolution_reason
+        assert out.status == ResolutionStatus.UNCHANGED_CASE_LEVEL
+        # the LLM-assist inference contract itself is unchanged for
+        # phrasings that are NOT a supported case-level intent
+        out2 = resolver(llm_resolved("F2")).resolve(
+            "the ratio described in the evidence, please", ctx(), ALL)
+        assert out2.status == ResolutionStatus.RESOLVED
+        assert out2.resolution_kind == "inferred"
+        assert out2.resolution_reason
 
 
 # ---------------------------------------------------------------------------
@@ -340,8 +350,12 @@ class TestTriggeringRepro:
         assert out.updated_context.focused_finding_id == "F2"
 
     def test_user_request_is_fenced_as_untrusted_data(self):
+        # AL-2.6: use a phrasing that still REACHES Stage-1 LLM assist
+        # (supported case-level intents route deterministically before
+        # the LLM and would make this fence property vacuously true)
         llm = llm_resolved("F2")
-        resolver(llm).resolve("find cross-account opposite trades", ctx(), ALL)
+        resolver(llm).resolve(
+            "look into what the evidence description points to", ctx(), ALL)
         user_msg = llm.messages[-1]["content"]
         assert "USER_REQUEST_START" in user_msg
         assert "untrusted" in user_msg.lower()

@@ -38,6 +38,52 @@ logger = logging.getLogger(__name__)
 ALLOWED_SIGNAL_TYPES = ("ML", "Rule", "Graph")
 
 
+def _graph_relevant_finding(finding: Any) -> bool:
+    """Whether the finding's authoritative title names the graph domain
+    (device sharing / linked accounts / network clusters) — the SAME
+    vocabulary normalize_graph_signal keys on. Deterministic; used only
+    when signal_refs carry no ML/Rule/Graph detector type (AL-2.8)."""
+    title = (getattr(finding, "title", "") or "").lower()
+    return any(w in title for w in ("device", "linked account", "network"))
+
+
+def _feature_signal_payload(finding: Any, evidence: dict[str, Any]) \
+        -> dict[str, Any] | None:
+    """Feature-level explanation payload for findings with no rule/ML/
+    graph backing (AL-2.9). The finding's own Feature signal_refs name
+    the RP risk features; only values that ACTUALLY exist in the case's
+    feature_evidence are reported — nothing is synthesized. None when no
+    named feature is present in the evidence (caller falls back to the
+    bounded missing-evidence outcome)."""
+    features = (evidence or {}).get("feature_evidence") or {}
+    named: list[dict[str, Any]] = []
+    for ref in (finding.signal_refs or []):
+        st = getattr(ref, "signal_type", None) \
+            if not isinstance(ref, dict) else ref.get("signal_type")
+        name = getattr(ref, "name", None) \
+            if not isinstance(ref, dict) else ref.get("name")
+        if st == "Feature" and name and name in features:
+            named.append({"name": name, "value": features[name]})
+    if not named:
+        return None
+    return {
+        "finding_id": finding.finding_id,
+        "signal_type": "Feature",
+        "explanation": {"features": named},
+        "evidence_refs": [],
+        "signal_refs": [
+            s.model_dump() if hasattr(s, "model_dump") else dict(s)
+            for s in (finding.signal_refs or [])
+        ],
+        "policy_refs": [
+            p.model_dump() if hasattr(p, "model_dump") else dict(p)
+            for p in (finding.policy_refs or [])
+        ],
+        "evidence_missing": False,
+        "next_data_needed": [],
+    }
+
+
 def _validation_error(message: str) -> ToolResult:
     return ToolResult(
         outcome=ToolResultOutcome.VALIDATION_ERROR,
@@ -125,6 +171,16 @@ def signal_explain(
             signal_type = sorted(
                 finding_detector_types,
                 key=lambda t: precedence.get(t, 99))[0]
+        elif _graph_relevant_finding(finding):
+            # AL-2.8: a finding whose structured refs are Feature-level
+            # only (RP emits shared_device_count etc. without a Graph ref)
+            # but whose authoritative title names the graph domain is a
+            # GRAPH-detected finding — explain its Graph signal instead of
+            # defaulting to a Rule lookup that can only report missing
+            # evidence. The Graph branch stays evidence-honest (it reports
+            # evidence_missing when network data is absent); the vocabulary
+            # is the SAME one normalize_graph_signal keys on.
+            signal_type = "Graph"
         else:
             signal_type = "Rule"   # no structured signal: rule lookup below
             # reports evidence_missing if nothing backs it (bounded)
@@ -194,6 +250,27 @@ def signal_explain(
         if signal_type == "Rule":
             rule_payload = normalize_rule_signal(finding=finding, evidence=evidence)
             if rule_payload is None:
+                # AL-2.9: no rule backs this finding, but its own Feature
+                # signal_refs may name RP risk features (e.g. F7's
+                # trade_frequency_24h). The feature facts ARE the honest
+                # "why" — report them before falling back to the bare
+                # missing-evidence outcome (which would also mislabel a
+                # feature-detected finding as rule-detected).
+                feature_payload = _feature_signal_payload(finding, evidence)
+                if feature_payload is not None:
+                    return ToolResult(
+                        outcome=ToolResultOutcome.SUCCESS,
+                        data=feature_payload,
+                        evidence_refs=[
+                            EvidenceRef(kind=ref["kind"], id=ref["id"])
+                            for ref in feature_payload.get("evidence_refs",
+                                                           [])
+                        ],
+                        citation_refs=[
+                            PolicyRef(**p)
+                            for p in feature_payload.get("policy_refs", [])
+                        ],
+                    )
                 # No rule actually backs this finding: the tool succeeded in
                 # retrieving available evidence, but it cannot explain a rule
                 # signal → success + evidence_missing (NOT empty, NOT error).

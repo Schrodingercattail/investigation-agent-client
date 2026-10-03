@@ -130,8 +130,69 @@ def seed_from_document(store: TaskStoreV2, doc: dict) -> SeedSummary:
 
     for c in doc["candidates"]:
         cid = c["candidate_id"]
-        if provider.get_candidate(cid) is not None:
-            summary.candidates_already_present.append(cid)
+        authored = bool(c.get("core_concepts"))
+        existing = provider.get_candidate(cid)
+        if existing is not None:
+            # Re-author semantics (Metadata Contract §16 Step 2 -> Step 3):
+            # an empty INCOMPLETE PLACEHOLDER is not governed semantic
+            # state yet — a seed entry carrying authored concepts
+            # completes the onboarding authoring step. Placeholders are
+            # either Coverage-Check auto-provisions or earlier-seed
+            # INCOMPLETE declarations (provenance.seed_version present);
+            # a seed-sourced placeholder is only completed by a NEWER
+            # seed version. Anything else (authored records,
+            # INCOMPLETE-with-concepts, DEPRECATED, manual records) is
+            # protected governed state and is NEVER overwritten.
+            prov = existing.provenance or {}
+            from_seed = prov.get("seed_version") is not None
+            newer_seed = (not from_seed) or (
+                (doc.get("seed_version") or 0) > prov["seed_version"])
+            placeholder = (
+                existing.status == "INCOMPLETE"
+                and not existing.core_concepts
+                and (bool(prov.get("auto_provisioned")) or from_seed)
+                and newer_seed
+            )
+            if not (authored and placeholder):
+                summary.candidates_already_present.append(cid)
+                continue
+            concepts = (c.get("core_concepts", []) +
+                        c.get("distinguishing_concepts", []) +
+                        c.get("mechanism_concepts", []))
+            unknown = sorted(set(concepts) - registry_ids)
+            if unknown:
+                raise SeedConformanceError(
+                    [f"candidate {cid!r}: concepts not in registry: "
+                     f"{unknown}"])
+            ev = c.get("evidence", {})
+            record = CandidateMetadataRecord(
+                candidate_id=cid,
+                candidate_type=existing.candidate_type,
+                case_scope=existing.case_scope or doc.get("source_case"),
+                title_snapshot=existing.title_snapshot,
+                description_snapshot=existing.description_snapshot,
+                content_hash=existing.content_hash,
+                core_concepts=c.get("core_concepts", []),
+                distinguishing_concepts=c.get("distinguishing_concepts", []),
+                potential_confusions=(existing.potential_confusions
+                                      or c.get("potential_confusions", [])),
+                mechanism_concepts=c.get("mechanism_concepts", []),
+                suggested_core_concepts=[],
+                status=c["target_status"],
+                metadata_version=1,
+                owner=c.get("owner"),
+                authored_by=c.get("authored_by", "seed"),
+                created_at=existing.created_at,
+                provenance={
+                    "auto_provisioned": True,       # history preserved
+                    "seed_version": doc.get("seed_version"),
+                    "evidence_sources": ev.get("sources", []),
+                    "evidence_rationale": ev.get("rationale"),
+                    "reauthored_from": "auto_provisioned_placeholder",
+                },
+            )
+            provider.upsert_candidate(record)
+            summary.candidates_seeded[cid] = record.status
             continue
         concepts = (c.get("core_concepts", []) +
                     c.get("distinguishing_concepts", []) +

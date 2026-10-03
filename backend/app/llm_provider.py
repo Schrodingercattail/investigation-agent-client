@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from app.exceptions import (
     LLMConfigurationError,
+    LLMEmptyResponseError,
     LLMError,
     LLMRateLimitError,
     LLMTimeoutError,
@@ -106,9 +107,17 @@ class ClaudeProvider:
                     logger.debug(f"Received LLM response: {len(block.text)} chars")
                     return block.text
 
-            raise LLMError(
+            # AL-2.10: the provider ANSWERED — the response simply carries
+            # no usable text block (e.g. a thinking-style model consumed a
+            # small max_tokens budget with reasoning blocks). A distinct
+            # class keeps the failure taxonomy truthful: this is NOT an
+            # unavailable provider.
+            raise LLMEmptyResponseError(
                 "LLM response contained no text block",
-                context={"response_type": str(type(response.content))},
+                context={
+                    "response_type": str(type(response.content)),
+                    "stop_reason": getattr(response, "stop_reason", None),
+                },
             )
 
         except APITimeoutError as e:
@@ -151,6 +160,9 @@ class ClaudeProvider:
                 f"Failed to connect to LLM API: {str(e)}",
                 context={"base_url": self.base_url},
             ) from e
+
+        except LLMEmptyResponseError:
+            raise                  # already truthfully classified (AL-2.10)
 
         except Exception as e:
             logger.error(f"Unexpected LLM error: {str(e)}", exc_info=True)

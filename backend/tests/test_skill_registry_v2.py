@@ -44,8 +44,13 @@ def error_codes(result) -> list[str]:
 
 class TestRegistryContents:
     def test_registry_contains_exactly_three_week1_skills(self):
+        # AL-2.6: the governed CASE-LEVEL analytical skill joins the
+        # registry (case_trade_analysis) — same governed analysis step as
+        # trade_investigation, reachable without a focused finding.
         assert set(SKILLS.keys()) == {
             "case_intake", "timeline_investigation", "trade_investigation",
+            "case_trade_analysis",
+            "case_related_accounts",
         }
 
     def test_every_skill_has_complete_schema(self):
@@ -164,7 +169,10 @@ class TestCapabilityGating:
 
     def test_eligibility_only_selects_available_skills(self):
         eligible = {s.skill_id for s in eligible_skills_for_finding(F3_CAPS)}
-        assert eligible == {"case_intake", "timeline_investigation"}
+        # AL-2.6: case_trade_analysis is always eligible (case-level)
+        assert eligible == {"case_intake", "timeline_investigation",
+                            "case_trade_analysis",
+                            "case_related_accounts"}
 
     def test_finding_type_alone_does_not_determine_capabilities(self):
         # Same nominal finding type; only declared capabilities matter.
@@ -178,7 +186,10 @@ class TestCapabilityGating:
 
     def test_no_capabilities_means_case_level_only(self):
         eligible = {s.skill_id for s in eligible_skills_for_finding(None)}
-        assert eligible == {"case_intake"}
+        # AL-2.6: the case-level analytical skill is case-level by design;
+        # finding-level skills stay gated (no blanket relaxation).
+        assert eligible == {"case_intake", "case_trade_analysis",
+                            "case_related_accounts"}
 
 
 # --- 5–7. vocabulary containment + mapping ---------------------------------------------

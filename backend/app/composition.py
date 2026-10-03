@@ -88,11 +88,12 @@ def detection_mechanism_sentence(payload: dict[str, Any]) -> str | None:
         when the payload carries no description that will name it again)
       - signal_type ML         → the ML pattern detection model
       - signal_type Graph      → graph-based risk detection
+      - signal_type Feature    → behavioral risk-feature detection
       - signal_type Rule (no backing rule) → rule-based detection
     Returns None for non-signal payloads. No thresholds, features, rules,
     or network facts are fabricated beyond what the payload carries."""
     signal_type = payload.get("signal_type")
-    if payload.get("signal_type") not in ("ML", "Rule", "Graph"):
+    if payload.get("signal_type") not in ("ML", "Rule", "Graph", "Feature"):
         return None
     rule = payload.get("rule")
     if signal_type == "ML":
@@ -100,6 +101,9 @@ def detection_mechanism_sentence(payload: dict[str, Any]) -> str | None:
                 "model.")
     if signal_type == "Graph":
         return "This finding was flagged by graph-based risk detection."
+    if signal_type == "Feature":
+        return ("This finding was flagged by behavioral risk-feature "
+                "detection.")
     # Rule
     if isinstance(rule, dict) and rule.get("name"):
         return (f"This finding was flagged by rule-based detection "

@@ -42,7 +42,10 @@ def _scenario_set():
             expected_steps=steps))
 
     # P01 — ML finding: detection-basis question → explain_signal
-    add("P01", "Why is this finding flagged?", "explain_signal", focus="F1")
+    # (AL-2.8: the deterministic explain branch plans the policy
+    # continuation alongside the signal explanation.)
+    add("P01", "Why is this finding flagged?", "explain_signal", focus="F1",
+        kind="ordered", steps=("explain_signal", "retrieve_policy"))
     # P02 — paraphrased detection-basis question
     add("P02", "Explain why this finding was detected.", "explain_signal",
         focus="F2")

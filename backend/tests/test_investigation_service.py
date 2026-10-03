@@ -234,7 +234,10 @@ class TestResolutionGating:
         svc = InvestigationService(planner=NoPlanner(),
                                    resolver=AmbiguousResolver(),
                                    task_store=TaskStoreV2(":memory:"))
-        r = svc.run_turn("Why did this event trigger?", CTX, [F3])
+        # AL-2.8: an explain-intent request WITH focus is deterministically
+        # planned (explain_signal + retrieve_policy) — gating must use a
+        # genuinely unresolvable reference (no focus, no governed concept).
+        r = svc.run_turn("谈谈虚拟币洗钱这个风险项", CTX, [F3])
         assert planner_calls == []            # never planned
         assert r.execution is None
         assert r.follow_ups == []
@@ -254,7 +257,10 @@ class TestResolutionGating:
 
         svc = InvestigationService(planner=NoPlanner(),
                                    task_store=TaskStoreV2(":memory:"))
-        r = svc.run_turn("Why did this event trigger?", CTX, [F3])
+        # AL-2.8: an explain-intent request WITH focus is deterministically
+        # planned (explain_signal + retrieve_policy) — gating must use a
+        # genuinely unresolvable reference (no focus, no governed concept).
+        r = svc.run_turn("谈谈虚拟币洗钱这个风险项", CTX, [F3])
         assert planner_calls == []
         assert r.context.focused_finding_id is None   # no invented focus
         assert r.follow_ups == []

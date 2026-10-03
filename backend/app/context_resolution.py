@@ -45,6 +45,22 @@ class ResolutionStatus:
     # Target-independent guidance (capability questions): the turn resolves
     # to documentation, not to an investigation target (P12/P14).
     CAPABILITY_GUIDANCE = "capability_guidance"
+    # AL-2.8: the M2 semantic foundation (SemanticNormalizer) could not run
+    # — provider unconfigured/unreachable/malformed — after every
+    # deterministic stage already failed. An honest OUTAGE state, distinct
+    # from UNRESOLVED ("no target matches"): the system says so instead of
+    # dressing an LLM outage up as an ordinary unresolved reference, and
+    # never silently substitutes a keyword agent for semantic resolution.
+    SEMANTIC_RESOLUTION_UNAVAILABLE = "semantic_resolution_unavailable"
+
+
+# User-facing degraded-outcome wording (AL-2.8). UNAVAILABLE ≠
+# UNRESOLVED: this names the service condition and gives the user a
+# deterministic way forward (explicit selection), never a guessed target.
+SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE = (
+    "我暂时无法可靠判断你指的是哪个风险发现，因为语义解析服务当前不可用。"
+    "请直接在 Findings 面板指定风险项/发现，或稍后重试。"
+)
 
 
 class Candidate(BaseModel):
@@ -72,6 +88,11 @@ class ResolutionOutcome(BaseModel):
     # from authoritative case context. None when no finding was resolved.
     resolution_kind: str | None = None             # explicit | inferred
     resolution_reason: str | None = None           # user-safe summary
+    # AL-2.8: bounded, user-safe evidence of the M2 semantic grounding
+    # stage (normalization status/concept/fragment/reason-class + the
+    # grounded candidate ids). None when the stage did not run. Evidence
+    # only — never an authorization fact (Resolution ≠ Safe-Select).
+    semantic_evidence: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +127,7 @@ def _looks_case_level(request_lower: str) -> bool:
 # CJK/intent-word concatenation is a boundary, whitespace is not required)
 # so this resolver can never disagree with the canonical parser.
 from app.case_resolution import _CASE_REF_PATTERN as _SHARED_CASE_REF_PATTERN
+from app import investigation_concepts
 
 _CASE_REF_RE = _SHARED_CASE_REF_PATTERN
 
@@ -130,6 +152,7 @@ def _mentioned_case_ids(request: str) -> list[str]:
         if cid not in seen:
             seen.append(cid)
     return seen
+
 
 
 def _mentions_event(request_lower: str) -> bool:
@@ -231,15 +254,27 @@ def _classify_request_intent(user_request: str) -> RequestIntent:
 # ---------------------------------------------------------------------------
 
 class ContextResolver:
-    """Deterministic-first resolver; optional LLM assist among known candidates."""
+    """Deterministic-first resolver; optional LLM assist among known candidates.
+
+    AL-2.8: `semantic_catalog` (a governed M2 CatalogProvider-like object)
+    enables the semantic-foundation stage — SemanticNormalizer proposes one
+    governed concept; the system grounds it deterministically against the
+    candidate metadata of the CURRENT case. The stage proposes targets and
+    records provenance; it never authorizes a Safe-Select and never
+    filters reachability by metadata status (authored metadata grounds;
+    only DEPRECATED is excluded, per Metadata Contract §24).
+    """
 
     def __init__(self, llm_provider: Any | None = None,
-                 llm_assist: bool | None = None):
+                 llm_assist: bool | None = None,
+                 semantic_catalog: Any | None = None):
         self._llm_override = llm_provider
         # None = auto (use the LLM when a provider is actually configured);
         # False explicitly disables semantic assist (deterministic-only
         # resolver — used by tests and by callers that opt out).
         self._llm_assist = llm_assist
+        self._semantic_catalog = semantic_catalog
+        self._normalizer = None          # lazy: built with the LLM on use
 
     def _llm_assist_enabled(self) -> bool:
         if self._llm_assist is False:
@@ -349,7 +384,29 @@ class ContextResolver:
             return self._keep(ctx, user_request)
 
         # --- Case-level requests need no target -------------------------------
-        if _looks_case_level(request_lower):
+        # AL-2.6: a SUPPORTED case-level analytical intent (shared concept
+        # matcher — cross-account scope AND trade/hedging subject) with the
+        # case known is a legitimate case-level investigation, NOT an
+        # unresolved finding reference. It routes into case-level planning
+        # (the planner's governed case-level analysis branch); execution
+        # needs only the case_id, which the executor injects from context.
+        # AL-2.7 (Defect A): an explicit mention of the CURRENT case id is
+        # itself a case-level reference — the same entity recognition the
+        # create-time parser performs (shared matcher), decoupled from any
+        # specific intent word ("调查" was the only CJK trigger). The
+        # cross-case guard above already rejected texts naming a DIFFERENT
+        # case, so any mention reaching this point names the current case.
+        # Everything else keeps the existing target-resolution contract
+        # unchanged (no blanket "focus-less requests proceed" relaxation).
+        if _looks_case_level(request_lower) or (
+                (ctx.case_id or "").strip()
+                and _mentioned_case_ids(user_request)) or (
+                (ctx.case_id or "").strip()
+                and investigation_concepts
+                .is_cross_account_trade_analysis_request(user_request)) or (
+                (ctx.case_id or "").strip()
+                and investigation_concepts
+                .is_related_account_analysis_request(user_request)):
             # Cross-case references were already rejected at the shared
             # boundary above; a case-level request reaching this point names
             # only the current case (or no case at all).
@@ -397,6 +454,12 @@ class ContextResolver:
         # "Opposite Trade Ratio展开细说一下具体情况") resolves even when it
         # carries no investigation-keyword vocabulary. The conservative
         # token-majority rule still gates the match itself.
+        # AL-2.11: this tier matches the finding's OWN authoritative ENGLISH
+        # title only — it is deliberately NOT a semantic authority and was
+        # never extended with synonym vocabulary. All natural-language
+        # finding understanding (CJK included) belongs to the M2 semantic
+        # stage below (SemanticNormalizer → governed grounding), which is
+        # the single finding-semantic entry.
         if not event_intent:
             hits: list[Finding] = []
             if ctx.focused_finding_id:
@@ -440,6 +503,18 @@ class ContextResolver:
                 context_changed=False,
             )
 
+        # --- Priority 3.5 (AL-2.8): M2 semantic foundation ---------------------
+        # Governed semantic grounding for natural-language finding
+        # references that no deterministic stage matched. Cross-account
+        # scope wording is excluded: such requests belong to the
+        # case-level analytical universe, never to a single finding.
+        if (self._semantic_stage_active()
+                and not investigation_concepts.mentions_cross_account(
+                    user_request)):
+            outcome = self._semantic_resolve(user_request, ctx, findings)
+            if outcome is not None:
+                return outcome
+
         # --- Priority 4: LLM assist among known candidates --------------------
         # Stage 1 (open-ended baseline §4): semantic target resolution over
         # the authoritative candidate set. Handles conversational references
@@ -478,6 +553,163 @@ class ContextResolver:
         )
 
     # --- helpers ------------------------------------------------------------
+
+    def _semantic_stage_active(self) -> bool:
+        """AL-2.8: the M2 semantic-foundation stage runs only when a
+        governed catalog is wired AND the feature flag is on. Without the
+        catalog the resolver is byte-for-byte the legacy deterministic
+        chain (all existing tests keep their construction)."""
+        if self._semantic_catalog is None:
+            return False
+        from app.config import settings
+        return settings.ENABLE_SEMANTIC_FINDING_RESOLUTION
+
+    def _get_normalizer(self):
+        """Lazy SemanticNormalizer over the project's LLM provider
+        convention. Construction failure (e.g. no API key) propagates to
+        the caller, which degrades to the governed unavailable outcome —
+        never to a fake semantic proposal."""
+        if self._normalizer is None:
+            from app.semantic_resolution import SemanticNormalizer
+            self._normalizer = SemanticNormalizer(
+                self._llm_override or self._make_llm())
+        return self._normalizer
+
+    def _semantic_resolve(self, user_request: str, ctx: InvestigationContext,
+                          findings: list[Finding]) -> ResolutionOutcome | None:
+        """AL-2.8 semantic-foundation stage (Resolution ≠ Authorization):
+
+            user language
+              → SemanticNormalizer (LLM proposes ONE governed concept;
+                system enforces registry conformance + verbatim grounding)
+              → deterministic grounding over the governed candidate
+                metadata of the CURRENT case (concept ∈ core_concepts)
+              → UNIQUE → resolved (focus + provenance)
+              | AMBIGUOUS → clarification with the grounded candidates
+              | UNKNOWN → None (legacy fall-through; deterministic reason
+                preserved)
+
+        Boundaries encoded here:
+        - Metadata STATUS is evidence provenance, NOT a reachability gate:
+          any authored record grounds regardless of INCOMPLETE/UNVERIFIED
+          (only DEPRECATED is excluded — Metadata Contract §24). Safe-Select
+          eligibility is a different decision owned by the WI-5 gate.
+        - A provider outage (unconfigured / unreachable / malformed output)
+          after deterministic stages failed is SEMANTIC_RESOLUTION_UNAVAILABLE
+          — an honest degraded state, never dressed up as an ordinary
+          unresolved reference and never replaced by a keyword agent.
+        - No candidate exists outside the current case: grounding is
+          restricted to the caller-supplied authoritative findings.
+        """
+        from app.semantic_resolution import R_LLM_UNAVAILABLE
+        try:
+            concepts = {
+                c.concept_id: c.definition
+                for c in (self._semantic_catalog.list_concepts(
+                    status="ACTIVE") or [])
+            }
+            records = {
+                r.candidate_id: r
+                for r in (self._semantic_catalog.list_candidates() or [])
+            }
+        except Exception:
+            logger.warning("semantic catalog read failed; "
+                           "legacy resolution continues", exc_info=True)
+            return None
+        if not concepts:
+            # No governed semantics to ground with: this is not an outage —
+            # the legacy chain's own honest outcome is the correct one.
+            return None
+        evidence: dict = {"stage": "semantic_normalizer",
+                          "registry_size": len(concepts)}
+        try:
+            normalized = self._get_normalizer().normalize(
+                user_request, concepts)
+        except Exception:
+            logger.warning("semantic normalization unavailable", exc_info=True)
+            return ResolutionOutcome(
+                status=ResolutionStatus.SEMANTIC_RESOLUTION_UNAVAILABLE,
+                updated_context=ctx,
+                context_changed=False,
+                semantic_evidence={
+                    **evidence, "status": "UNKNOWN",
+                    "reason_class": "llm_unavailable"},
+                clarification_message=(
+                    SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE),
+            )
+        evidence.update({
+            "status": normalized.status,
+            "concept_id": normalized.concept_id,
+            "matched_fragment": normalized.matched_fragment,
+            "reason_class": normalized.reason_class,
+        })
+        if normalized.status != "OK":
+            if normalized.reason_class == R_LLM_UNAVAILABLE:
+                # TRUE provider unavailability (unreachable / timeout /
+                # auth / rate limit) after deterministic stages failed:
+                # the honest outage state.
+                return ResolutionOutcome(
+                    status=ResolutionStatus.SEMANTIC_RESOLUTION_UNAVAILABLE,
+                    updated_context=ctx,
+                    context_changed=False,
+                    semantic_evidence=evidence,
+                    clarification_message=(
+                        SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE),
+                )
+            # AL-2.10 taxonomy: a provider that ANSWERED but produced an
+            # unusable proposal (no text block / malformed JSON), or an
+            # honest semantic no-match (no governed concept / ungrounded /
+            # invented id), is a RESOLUTION FAILURE — never an outage.
+            # Fall through to the legacy chain (deterministic reason
+            # preserved; the bounded assist gets its chance).
+            return None
+        # Grounding: the normalized concept must hit the CORE of exactly
+        # the governed records of candidates that exist in THIS case.
+        grounded: list[tuple[Finding, Any]] = []
+        for f in findings:
+            record = records.get(f.finding_id)
+            if record is None or record.status == "DEPRECATED":
+                continue
+            if normalized.concept_id in (record.core_concepts or []):
+                grounded.append((f, record))
+        evidence["grounded_candidate_ids"] = [
+            f.finding_id for f, _ in grounded]
+        if len(grounded) == 1:
+            target, record = grounded[0]
+            changed = (ctx.focused_finding_id != target.finding_id)
+            new_ctx = ctx.model_copy(update={
+                "focused_finding_id": target.finding_id,
+                "focused_event_id": ctx.focused_event_id,
+                "focus_source": FocusSource.AGENT_RESOLVED,
+            })
+            return ResolutionOutcome(
+                status=ResolutionStatus.RESOLVED,
+                updated_context=new_ctx,
+                context_changed=changed or ctx.focus_source != FocusSource.AGENT_RESOLVED,
+                focus_source=FocusSource.AGENT_RESOLVED,
+                resolved_entity=Candidate(kind="finding",
+                                          id=target.finding_id,
+                                          title=target.title),
+                used_llm=True,
+                resolution_kind="inferred",
+                resolution_reason=(
+                    f"semantic concept {normalized.concept_id} "
+                    f"(「{normalized.matched_fragment}」) grounded via "
+                    f"governed candidate metadata "
+                    f"(status {record.status})"),
+                semantic_evidence=evidence,
+            )
+        if len(grounded) > 1:
+            outcome = self._ambiguous_candidates(ctx, [
+                Candidate(kind="finding", id=f.finding_id, title=f.title,
+                          hint=f.summary[:80])
+                for f, _ in grounded
+            ])
+            outcome.semantic_evidence = evidence
+            return outcome
+        # Concept OK but no current-case candidate carries it in its core:
+        # honest no-match for this case — legacy fall-through.
+        return None
 
     @staticmethod
     def _existing_focus_explicit(ctx: InvestigationContext) -> bool:

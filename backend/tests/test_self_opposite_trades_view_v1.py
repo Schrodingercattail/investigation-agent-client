@@ -209,8 +209,11 @@ class TestRoutingDistinction:
         ctx = InvestigationContext(case_id=CASE, focused_finding_id="F2",
                                    focus_source=FocusSource.USER_SELECTED)
         plan = PlannerV2(LLM()).plan(text, ctx, ["trade_investigation"], caps)
+        # AL-2.6: the deterministic case-level branch plans this intent
+        # directly; the bundle step keeps insufficient-data runs bounded.
+        assert plan.steps[0].type == "analyze_cross_account_trades"
         assert [s.type for s in plan.steps] == \
-            ["analyze_cross_account_trades"]
+            ["analyze_cross_account_trades", "generate_artifact"]
 
     def test_10_cross_tool_binding_unchanged(self):
         from app.skills import STEP_TOOL_MAP

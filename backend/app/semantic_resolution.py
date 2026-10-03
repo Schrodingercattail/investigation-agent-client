@@ -62,6 +62,11 @@ R_NORMALIZATION_UNGROUNDED = "normalization_ungrounded"
 R_NORMALIZATION_INVALID_CONCEPT = "normalization_invalid_concept"
 R_LLM_UNAVAILABLE = "llm_unavailable"
 R_MALFORMED_OUTPUT = "malformed_output"
+# AL-2.10 taxonomy fix: the provider was REACHABLE and answered, but the
+# output carried no usable text block (thinking model + small budget).
+# That is a semantic-resolution failure, NOT a provider outage — it must
+# never be reported as llm_unavailable.
+R_OUTPUT_NO_TEXT = "provider_output_no_text"
 
 
 @dataclass
@@ -93,8 +98,11 @@ NORMALIZATION_SYSTEM = (
     "concept. Choose concept_id ONLY from the provided governed concept "
     "list — inventing an id is forbidden. matched_fragment must be a "
     "verbatim substring of the user request that justifies the concept. "
-    "If no governed concept matches, set concept_id to null. Respond "
-    "with raw JSON only: {\"concept_id\": \"<id or null>\", "
+    "When several governed concepts relate to the same subject, choose "
+    "the one the finding is CENTRALLY about (its core concept) — not a "
+    "distinguishing signal and not a derivation mechanism. If no governed "
+    "concept matches, set concept_id to null. Respond with raw JSON "
+    "only: {\"concept_id\": \"<id or null>\", "
     "\"matched_fragment\": \"<verbatim fragment>\", "
     "\"confidence\": <0.0-1.0>}"
 )
@@ -111,7 +119,12 @@ class SemanticNormalizer:
     """LLM proposes; the system validates registry conformance and
     verbatim grounding. Any failure degrades to UNKNOWN."""
 
-    def __init__(self, llm: NormalizingLLM, max_tokens: int = 400):
+    def __init__(self, llm: NormalizingLLM, max_tokens: int = 2048):
+        # 2048, not smaller: thinking-style models emit reasoning blocks
+        # BEFORE the JSON text, and a small budget truncates the answer
+        # inside the reasoning (captured live: the planner needed 2048;
+        # the former 400 budget here made every registry-grounding call
+        # return a text-less response — AL-2.10 audit).
         self._llm = llm
         self._max_tokens = max_tokens
 
@@ -136,9 +149,20 @@ class SemanticNormalizer:
                                 f"User request: {request_text}"},
                 ],
                 max_tokens=self._max_tokens, temperature=0.0)
-        except Exception:
+        except Exception as e:
+            # Truthful taxonomy (AL-2.10): a response that CARRIED NO TEXT
+            # is a provider-output failure, not an outage; only genuine
+            # reachability/config failures are llm_unavailable. The
+            # exception type is logged (it was previously discarded).
+            from app.exceptions import LLMEmptyResponseError
+            if isinstance(e, LLMEmptyResponseError):
+                logger.warning("semantic normalization degraded: provider "
+                               "returned no text block (%s)", e)
+                return Normalization(status="UNKNOWN",
+                                     reason_class=R_OUTPUT_NO_TEXT,
+                                     registry_size=len(governed_concepts))
             logger.warning("semantic normalization degraded: LLM "
-                           "unavailable", exc_info=True)
+                           "unavailable (%s: %s)", type(e).__name__, e)
             return Normalization(status="UNKNOWN",
                                  reason_class=R_LLM_UNAVAILABLE,
                                  registry_size=len(governed_concepts))

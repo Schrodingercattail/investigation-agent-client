@@ -240,10 +240,15 @@ class TestTurnContract:
 class TestMultiTurnContinuity:
     @pytest.fixture()
     def five_turns(self):
-        # Turn 1 ('Investigate U00299') is deterministic fetch_case — the script
-        # begins at turn 2.
+        # Turn 1 ('Investigate U00299') is deterministic fetch_case — the
+        # script begins at turn 2.
+        # AL-2.8: turn 3 ("Why is this event important?") is planned by
+        # the deterministic explain branch (explain_signal + retrieve_policy,
+        # contract-checked) and consumes NO script; turn 5's artifact
+        # request is likewise deterministic. Only turns 2 and 4 reach the
+        # scripted planner.
         client, store, _ = build_client(
-            [PLAN_TIMELINE, PLAN_SIGNAL, PLAN_POLICY, PLAN_ARTIFACT])
+            [PLAN_TIMELINE, PLAN_POLICY, PLAN_ARTIFACT])
         inv_id = client.post("/api/v2/investigations",
                              json={"case_id": "U00299"}).json()[
             "investigation"]["investigation_id"]

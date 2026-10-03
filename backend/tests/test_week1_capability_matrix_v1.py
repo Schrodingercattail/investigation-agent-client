@@ -108,7 +108,10 @@ class TestDocumentedUnsupportedPaths:
 
     def test_unknown_capability_finds_only_case_level_skills(self):
         eligible = [s.skill_id for s in eligible_skills_for_finding(None)]
-        assert eligible == ["case_intake"]
+        # AL-2.6: case_trade_analysis is case-level by design (no finding
+        # capability required); finding-level skills stay gated.
+        assert eligible == ["case_intake", "case_trade_analysis",
+                            "case_related_accounts"]
 
 
 class TestCapabilityDifferentiationByFinding:
@@ -121,12 +124,17 @@ class TestCapabilityDifferentiationByFinding:
         caps_b = FindingCapability.model_validate(["timeline", "signal_explain"])
         skills_a = {s.skill_id for s in eligible_skills_for_finding(caps_a)}
         skills_b = {s.skill_id for s in eligible_skills_for_finding(caps_b)}
-        assert skills_a == {"case_intake", "timeline_investigation"}
+        # AL-2.6: case_trade_analysis is case-level (always eligible);
+        # the FINDING-level differentiation this test pins is unchanged.
+        assert skills_a == {"case_intake", "timeline_investigation",
+                            "case_trade_analysis",
+                            "case_related_accounts"}
         assert skills_b == skills_a        # timeline is the gate; both pass
         # a finding WITHOUT timeline cannot reach the investigation skill
         caps_c = FindingCapability.model_validate(["policy_lookup"])
         skills_c = {s.skill_id for s in eligible_skills_for_finding(caps_c)}
-        assert skills_c == {"case_intake"}
+        assert skills_c == {"case_intake", "case_trade_analysis",
+                            "case_related_accounts"}
 
     def test_derivation_grants_conditionally(self):
         from app.adapters.risk_platform import derive_capabilities

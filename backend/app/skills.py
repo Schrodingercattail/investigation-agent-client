@@ -85,6 +85,12 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
         tool_name="cross_account_trade_analysis",
         parameter_locks={"analysis_type": "cross_account_opposite_trade"},
     ),
+    # AL-2.10: case-level related-account analysis (RP network
+    # attribution echo). analysis_type is locked the same way.
+    "analyze_related_accounts": StepToolBinding(
+        tool_name="related_account_analysis",
+        parameter_locks={"analysis_type": "related_account_analysis"},
+    ),
     "explain_signal": StepToolBinding(tool_name="signal_explain"),
     "retrieve_policy": StepToolBinding(tool_name="policy_lookup"),
 }
@@ -113,6 +119,10 @@ _TOOL_SUPPORTED_PARAMETERIZATIONS: dict[str, set[tuple[tuple[str, Any], ...]]] =
     # analysis (baseline §12b).
     "cross_account_trade_analysis": {
         (("analysis_type", "cross_account_opposite_trade"),),
+    },
+    # AL-2.10: the one registered related-account analysis.
+    "related_account_analysis": {
+        (("analysis_type", "related_account_analysis"),),
     },
 }
 
@@ -266,6 +276,67 @@ SKILLS: dict[str, SkillDefinition] = {
             "finding_drilldown is locked to view='self_opposite_trades' "
             "(opposite-side trading by the SAME account); any other view "
             "is invalid under this skill.",
+        ],
+    ),
+    # AL-2.6: the CASE-LEVEL analytical route. The same governed analysis
+    # step as trade_investigation's primary step, but scoped to the whole
+    # case's transaction universe — the underlying tool needs only the
+    # case_id (executor-injected), so no focused finding is required.
+    # Deliberately SEPARATE from trade_investigation (whose finding-level
+    # capability contract is unchanged): this is the governed answer to a
+    # supported case-level cross-account trade investigation intent, not a
+    # relaxation of finding-level routing.
+    "case_trade_analysis": SkillDefinition(
+        skill_id="case_trade_analysis",
+        name="Case Trade Analysis",
+        description=(
+            "Case-level analytical investigation: candidate cross-account "
+            "opposite-trade relationships across the case's transaction "
+            "universe, with the analyzed account scope reported."
+        ),
+        required_capabilities=[],
+        allowed_tools=[
+            "cross_account_trade_analysis",
+            "artifact_bundle",
+        ],
+        planning_steps=[
+            "analyze_cross_account_trades",
+            "generate_artifact",
+        ],
+        constraints=[
+            "Case-level skill: executes against the investigation's own "
+            "case_id; no focused finding required and none is selected.",
+            "analyze_cross_account_trades is registry-locked to "
+            "analysis_type='cross_account_opposite_trade'; results are "
+            "candidate relationships plus the analyzed account scope — "
+            "never confirmed coordinated trading.",
+            "generate_artifact composes the analysis (including an "
+            "insufficient-data result with its analyzed scope) into the "
+            "user-visible evidence bundle.",
+        ],
+    ),
+    # AL-2.10: the CASE-LEVEL related-account capability. Answers "which
+    # accounts are related to this account" from the Risk Platform's own
+    # network attribution — never routed through finding resolution.
+    "case_related_accounts": SkillDefinition(
+        skill_id="case_related_accounts",
+        name="Related Account Analysis",
+        description=(
+            "Case-level related-account analysis: the Risk Platform's "
+            "network attribution for the case's subject account (related "
+            "accounts, shared devices, cluster facts)."
+        ),
+        required_capabilities=[],
+        allowed_tools=["related_account_analysis"],
+        planning_steps=["analyze_related_accounts"],
+        constraints=[
+            "Case-level skill: executes against the investigation's own "
+            "case_id; no focused finding required and none is selected.",
+            "analyze_related_accounts is registry-locked to "
+            "analysis_type='related_account_analysis'; the payload is an "
+            "authoritative Risk Platform echo (cluster, related accounts, "
+            "shared devices) — never derived relationships or intent "
+            "claims.",
         ],
     ),
 }

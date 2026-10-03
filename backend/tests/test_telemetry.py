@@ -57,6 +57,19 @@ SIGNAL_PLAN = ('{"skill_id": "timeline_investigation", "goal": "g", '
 BAD_PLAN = '{"skill_id": null, "goal": null, "steps": []}'
 
 
+def run_one_turn_with_request(service, sink, request):
+    findings = [ml_finding()]
+    ctx = InvestigationContext(case_id="U00299", focused_finding_id="F1",
+                               focus_source=FocusSource.USER_SELECTED)
+    with patch(
+        "app.domain_tools.risk_case_fetch.RiskPlatformAdapter.fetch_case",
+        new=lambda self, uid: (
+            fx.rp_evidence_payload(uid), fx.rp_explanation_payload())):
+        result = service.run_turn(request, ctx, findings)
+    events = list(sink.events) if hasattr(sink, "events") else []
+    return result, events
+
+
 def run_one_turn(service, sink):
     findings = [ml_finding()]
     ctx = InvestigationContext(case_id="U00299", focused_finding_id="F1",
@@ -130,13 +143,19 @@ class TestPlannerAndExecutorEvents:
             assert "planner.completed" in types
             assert "execution.completed" in types
             planner_done = events[types.index("planner.completed")]
-            assert planner_done.plan_step_types == ["explain_signal"]
-            assert planner_done.plan_arguments == [{}]
+            # AL-2.8: the deterministic explain branch plans the policy
+            # continuation alongside the signal explanation (the scripted
+            # planner is never reached for this intent).
+            assert planner_done.plan_step_types == \
+                ["explain_signal", "retrieve_policy"]
+            assert planner_done.plan_arguments == [{}, {}]
             assert planner_done.planner_status == "completed"
             assert planner_done.planner_latency_ms is not None
             execution_done = events[types.index("execution.completed")]
-            assert execution_done.executed_step_types == ["explain_signal"]
-            assert execution_done.tool_names == ["signal_explain"]
+            assert execution_done.executed_step_types == \
+                ["explain_signal", "retrieve_policy"]
+            assert execution_done.tool_names == ["signal_explain",
+                                                 "policy_lookup"]
             assert execution_done.execution_latency_ms is not None
             # identity fields
             assert planner_done.case_id == "U00299"
@@ -146,10 +165,18 @@ class TestPlannerAndExecutorEvents:
             set_sink(NoopTelemetrySink())
 
     def test_planner_failure_emits_failed_event(self):
+        # AL-2.8: "Why…?" is deterministically planned (explain branch) —
+        # to exercise the SCRIPTED planner's failure path, use a request
+        # that no deterministic branch captures and no governed concept
+        # grounds (resolver unresolved would stop earlier, so give the
+        # request an explicit focus + rely on the scripted planner LLM).
         sink = InMemoryTelemetrySink()
         set_sink(sink)
         try:
-            result, events = run_one_turn(eval_service(BAD_PLAN), sink)
+            result, events = run_one_turn_with_request(
+                eval_service(BAD_PLAN), sink,
+                "Summarize the detection mechanics of finding F1 in detail")
+
             failed = [e for e in events
                       if e.event_type == "planner.failed"]
             assert failed, "expected planner.failed event"

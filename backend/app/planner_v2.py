@@ -27,7 +27,9 @@ from pydantic import BaseModel, Field
 from app.llm_provider import ClaudeProvider
 from app.models import (InvestigationContext, Plan, PlanStep,
                         PlanStepStatus, RequestIntent)
-from app.context_resolution import _classify_request_intent
+from app.context_resolution import _classify_request_intent, \
+    _mentioned_case_ids
+from app import investigation_concepts
 from app.skills import (
     SKILLS,
     STEP_TOOL_MAP,
@@ -311,8 +313,15 @@ class PlannerV2:
         #     has an artifact to show).
         # Intake planning never consults the LLM; artifact generation is
         # PART of the accepted intake behavior, not an optional extra.
+        # AL-2.7 (Defect A): inside a bound conversation, an explicit
+        # mention of the CURRENT case id is the same Case Intake operation
+        # regardless of the intent verb ("展开一下00010案例情况" = its
+        # 调查/investigate phrasing twin). Mirrors the resolver's case-level
+        # route (shared entity matcher; no finding focus), so routing and
+        # planning can never disagree for this phrasing class.
         if request_intent == RequestIntent.INVESTIGATION \
-                and _is_plain_case_intake(user_request):
+                and (_is_plain_case_intake(user_request)
+                     or _is_bound_case_reference(user_request, context)):
             intake_skill = next(
                 (sid for sid in known_eligible
                  if "fetch_case" in SKILLS[sid].planning_steps),
@@ -400,6 +409,177 @@ class PlannerV2:
                                            for e in contract.errors]},
                     )
                 return plan
+
+        # 1a-1) Deterministic case-level cross-account trade analysis
+        # (AL-2.6): a SUPPORTED case-level analytical intent — recognized by
+        # the shared concept matcher (the SAME predicate the context
+        # resolver routed on) — plans directly, no LLM round-trip, exactly
+        # like the intake/artifact branches above. Steps come from the
+        # registry (STEP_TOOL_MAP locks); the executor injects case_id from
+        # the investigation context. The generate_artifact step keeps the
+        # run bounded even when the analysis honestly reports
+        # insufficient/truncated data (evidence_missing observations never
+        # satisfy question-answered criteria by design): the bundle carries
+        # the analysis AND the analyzed account scope to the user.
+        if investigation_concepts.is_cross_account_trade_analysis_request(
+                user_request):
+            analysis_skill = next(
+                (sid for sid in known_eligible
+                 if "analyze_cross_account_trades"
+                 in SKILLS[sid].planning_steps), None)
+            if analysis_skill is not None:
+                analysis_steps = []
+                for i, st in enumerate(
+                        (st for st in SKILLS[analysis_skill].planning_steps
+                         if st in ("analyze_cross_account_trades",
+                                   "generate_artifact")), 1):
+                    binding = STEP_TOOL_MAP[st]
+                    analysis_steps.append(PlanStep(
+                        step_id=f"S{i}", type=st,
+                        reason="case-level cross-account trade check",
+                        status=PlanStepStatus.PENDING,
+                        tool_name=binding.tool_name,
+                        arguments=dict(binding.parameter_locks),
+                    ))
+                plan = Plan(
+                    plan_id=f"PLAN-{uuid.uuid4().hex[:12]}",
+                    investigation_id=_investigation_ref(context),
+                    goal="Check the case for candidate cross-account "
+                         "opposite trades.",
+                    steps=analysis_steps,
+                    created_at=None,
+                )
+                # Same authoritative gate as every other path (never weaker).
+                contract = check_plan(
+                    analysis_skill, [s.model_copy() for s in analysis_steps],
+                    capabilities=finding_capabilities,
+                )
+                if not contract.valid:
+                    return PlanningFailure(
+                        code="PLAN_CONTRACT_VIOLATION",
+                        message="Deterministic case-level analysis plan "
+                                "failed contract validation.",
+                        detail={"errors": [e.model_dump()
+                                           for e in contract.errors]},
+                    )
+                return plan
+
+        # 1a-1b) Deterministic case-level related-account analysis
+        # (AL-2.10): the second supported case-level capability, routed on
+        # the SAME shared concept matcher the resolver used — evaluated
+        # AFTER the trade predicate (a cross-account TRADE request always
+        # wins), so "哪些账号是这个账号的关联账号" plans the governed
+        # related-account analysis directly, no LLM round-trip, and never
+        # enters finding resolution.
+        if investigation_concepts.is_related_account_analysis_request(
+                user_request):
+            ra_skill = next(
+                (sid for sid in known_eligible
+                 if "analyze_related_accounts" in SKILLS[sid].planning_steps),
+                None)
+            if ra_skill is not None:
+                binding = STEP_TOOL_MAP["analyze_related_accounts"]
+                ra_steps = [PlanStep(
+                    step_id="S1", type="analyze_related_accounts",
+                    reason="case-level related-account request",
+                    status=PlanStepStatus.PENDING,
+                    tool_name=binding.tool_name,
+                    arguments=dict(binding.parameter_locks),
+                )]
+                plan = Plan(
+                    plan_id=f"PLAN-{uuid.uuid4().hex[:12]}",
+                    investigation_id=_investigation_ref(context),
+                    goal="Identify the related accounts of the case's "
+                         "subject account.",
+                    steps=ra_steps,
+                    created_at=None,
+                )
+                contract = check_plan(
+                    ra_skill, [s.model_copy() for s in ra_steps],
+                    capabilities=finding_capabilities,
+                )
+                if not contract.valid:
+                    return PlanningFailure(
+                        code="PLAN_CONTRACT_VIOLATION",
+                        message="Deterministic related-account plan failed "
+                                "contract validation.",
+                        detail={"errors": [e.model_dump()
+                                           for e in contract.errors]},
+                    )
+                return plan
+
+        # 1a-2) Deterministic finding-level investigation planning
+        # (AL-2.8): a FOCUSED finding + an explicit investigation intent
+        # (explain-why / concrete-evidence — intent vocabulary mirrors the
+        # goal layer) plans the governed steps directly, like the
+        # intake/artifact/case-level branches above. The finding itself was
+        # identified by the resolver (explicit selection, title match, or
+        # the auditable alias lexicon) — this branch never guesses one.
+        # Steps come from STEP_TOOL_MAP locks; evidence-stream wording in
+        # the user's own words specializes the evidence step (P5).
+        # AL-2.9: identification and intent remain separate decisions, and
+        # ONE request may carry BOTH intents ("为什么说高频交易是风险项，
+        # 给我输出高频交易的具体交易明细" = explain + the transactions
+        # evidence stream). The two deterministic branches COMPOSE into one
+        # contract-checked plan in intent order; explain-only keeps its
+        # policy continuation; evidence-only is unchanged. Still no LLM
+        # round-trip and no invented steps.
+        if context.focused_finding_id \
+                and request_intent == RequestIntent.INVESTIGATION \
+                and not investigation_concepts.is_cross_account_trade_analysis_request(
+                    user_request):
+            explain = investigation_concepts.is_explain_finding_request(
+                user_request)
+            evidence = investigation_concepts.is_evidence_request(user_request)
+            spec: tuple[str, ...] | None = None
+            if explain or evidence:
+                intent_steps: list[str] = []
+                if explain:
+                    intent_steps.append("explain_signal")
+                if evidence:
+                    intent_steps.append(
+                        _explicit_stream_step(user_request)
+                        or "inspect_evidence")
+                elif explain:
+                    intent_steps.append("retrieve_policy")
+                spec = tuple(intent_steps)
+            if spec:
+                intent_skill = next(
+                    (sid for sid in known_eligible
+                     if all(st in SKILLS[sid].planning_steps
+                            for st in spec)), None)
+                if intent_skill is not None:
+                    intent_steps = []
+                    for i, st in enumerate(spec, 1):
+                        binding = STEP_TOOL_MAP[st]
+                        intent_steps.append(PlanStep(
+                            step_id=f"S{i}", type=st,
+                            reason="finding-level investigation intent",
+                            status=PlanStepStatus.PENDING,
+                            tool_name=binding.tool_name,
+                            arguments=dict(binding.parameter_locks),
+                        ))
+                    plan = Plan(
+                        plan_id=f"PLAN-{uuid.uuid4().hex[:12]}",
+                        investigation_id=_investigation_ref(context),
+                        goal=user_request[:200],
+                        steps=intent_steps,
+                        created_at=None,
+                    )
+                    # Same authoritative gate as every other path.
+                    contract = check_plan(
+                        intent_skill, [s.model_copy() for s in intent_steps],
+                        capabilities=finding_capabilities,
+                    )
+                    if not contract.valid:
+                        return PlanningFailure(
+                            code="PLAN_CONTRACT_VIOLATION",
+                            message="Deterministic finding-level plan "
+                                    "failed contract validation.",
+                            detail={"errors": [e.model_dump()
+                                               for e in contract.errors]},
+                        )
+                    return plan
 
         # 1) Ask the LLM within the closed vocabulary.
         try:
@@ -570,12 +750,10 @@ _TRANSACTION_RE = __import__("re").compile(
 # matched before the self-opposite regex because cross-account phrasing
 # ("opposite trades across accounts") CONTAINS "opposite trades" — the
 # cross-account intent must win.
-_CROSS_ACCOUNT_TRADE_RE = __import__("re").compile(
-    r"cross[\s-]*account|across[\s]+accounts|between[\s]+accounts|"
-    r"related[\s]+accounts|跨账户|跨賬戶|对倒|對倒",
-    __import__("re").IGNORECASE)
-# Same-account opposite-trade wording names the self-opposite drilldown —
-# never generic evidence, never another stream.
+# AL-2.6: the cross-account vocabulary itself moved to the shared concept
+# module (app/investigation_concepts.py) — the single source of truth also
+# used by the context resolver's case-level route and the goal layer. The
+# self-opposite regex stays local (it names a different, same-account step).
 _OPPOSITE_TRADE_RE = __import__("re").compile(
     r"opposite[\s-]*trades?|self[\s-]*opposite|both[\s-]+sides|"
     r"反向交易|对向交易",
@@ -583,11 +761,12 @@ _OPPOSITE_TRADE_RE = __import__("re").compile(
 
 
 def _is_cross_account_trade_request(user_request: str) -> bool:
-    """True when the user's own words name CROSS-ACCOUNT opposite-trade
-    analysis. Evaluated BEFORE the self-opposite route: cross-account
-    phrasing contains "opposite trades" and must never degrade into the
-    same-account step."""
-    return bool(_CROSS_ACCOUNT_TRADE_RE.search(user_request or ""))
+    """True when the user's own words name CROSS-ACCOUNT scope. Canonical
+    delegation to the shared concept matcher (behavior-preserving superset
+    of the former local regex). Evaluated BEFORE the self-opposite route:
+    cross-account phrasing contains "opposite trades" and must never
+    degrade into the same-account step."""
+    return investigation_concepts.mentions_cross_account(user_request or "")
 
 
 def _is_opposite_trade_request(user_request: str) -> bool:
@@ -640,6 +819,21 @@ def _is_plain_case_intake(user_request: str) -> bool:
     if not text or not _PLAIN_INTAKE_RE.search(text):
         return False
     return not _DEEPER_ASK_RE.search(text)
+
+
+def _is_bound_case_reference(user_request: str, context) -> bool:
+    """AL-2.7 (Defect A): True when a BOUND conversation's request
+    explicitly names the CURRENT case id (shared entity matcher — the same
+    recognition the context resolver routed on) with no finding focus.
+    Such a request is the Case Intake operation in the user's own words,
+    whatever the intent verb. Mirrors ContextResolver's case-level route
+    precedence (an explicit focus keeps Priority 1/2 and never lands
+    here)."""
+    if context is None or context.focused_finding_id:
+        return False
+    if not (context.case_id or "").strip():
+        return False
+    return bool(_mentioned_case_ids(user_request))
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$")

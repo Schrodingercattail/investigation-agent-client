@@ -102,14 +102,30 @@ def test_seed_provisions_full_universe():
     assert summary.coverage_complete             # scope A: no omission
     assert sorted(summary.candidates_seeded) == \
         ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"]
-    assert len(summary.concepts_seeded) == 6
+    # seed v3: WI-3 six + AL-2.8 F3 pair + AL-2.9 F7 pair
+    assert len(summary.concepts_seeded) == 10
     statuses = {c.candidate_id: c.status
                 for c in TaskStoreCatalogProvider(store).list_candidates()}
     assert statuses == {"F5": "UNVERIFIED", "F6": "UNVERIFIED",
                         "F8": "UNVERIFIED",
+                        "F3": "UNVERIFIED",          # AL-2.8 authored
+                        "F7": "UNVERIFIED",          # AL-2.9 authored
                         "F1": "INCOMPLETE", "F2": "INCOMPLETE",
-                        "F3": "INCOMPLETE", "F4": "INCOMPLETE",
-                        "F7": "INCOMPLETE"}
+                        "F4": "INCOMPLETE"}
+
+
+def test_seed_v2_f3_authoring_is_minimal_and_provenanced():
+    """AL-2.8: F3 carries the minimal authored semantics (core +
+    distinguishing + the pre-recorded F4 confusion) as UNVERIFIED —
+    conversational grounding data, NOT Safe-Select eligibility."""
+    store, doc, _ = fresh_store_with_repo_seed()
+    rec = TaskStoreCatalogProvider(store).get_candidate("F3")
+    assert rec.core_concepts == ["HIGH_WITHDRAWAL_FREQUENCY"]
+    assert rec.distinguishing_concepts == ["WITHDRAWAL_FREQUENCY"]
+    assert rec.potential_confusions == ["F4"]
+    assert rec.status == "UNVERIFIED"
+    assert rec.metadata_version == 1
+    assert rec.provenance["evidence_sources"]
 
 
 def test_seed_is_idempotent_and_never_overwrites():
@@ -124,7 +140,7 @@ def test_seed_is_idempotent_and_never_overwrites():
 
 def test_verify_transitions_evidence_backed_candidates_to_complete():
     store, doc, _ = fresh_store_with_repo_seed()
-    for cid in ("F5", "F6", "F8"):
+    for cid in ("F5", "F6", "F8", "F3", "F7"):   # F3/F7 authored
         rec = verify_candidate(store, cid, verified_by="qa-seed-review")
         assert rec.status == "COMPLETE"
         assert rec.verified_by == "qa-seed-review"
@@ -136,7 +152,7 @@ def test_verify_transitions_evidence_backed_candidates_to_complete():
 
 def test_verify_refuses_insufficient_evidence_candidates():
     store, doc, _ = fresh_store_with_repo_seed()
-    for cid in ("F1", "F2", "F3", "F4", "F7"):
+    for cid in ("F1", "F2", "F4"):       # F3/F7 authored (seed v2/v3)
         with pytest.raises(SeedConformanceError) as e:
             verify_candidate(store, cid, verified_by="qa")
         assert any("no core concepts" in err or "status" in err

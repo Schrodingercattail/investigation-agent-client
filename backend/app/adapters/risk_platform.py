@@ -993,6 +993,14 @@ def normalize_ml_signal(
     features = evidence.get("feature_evidence") or {}
     ml_score = risk_summary.get("ml_score")
     available_features = {k: v for k, v in features.items() if v is not None}
+    # AL-2.13: RP names its detection methods explicitly (e.g. LightGBM).
+    # Surfacing the ML method lets the composer explain "what ML means"
+    # from authoritative data instead of leaking raw field names.
+    detection_method = next(
+        (m for m in (risk_summary.get("detection_methods") or [])
+         if isinstance(m, str)
+         and m.lower() not in ("rule engine", "graph network")),
+        None)
 
     explanation: dict[str, Any] = {}
     evidence_missing = False
@@ -1006,6 +1014,9 @@ def normalize_ml_signal(
     else:
         evidence_missing = True
         next_data_needed.append("ML model score for this case")
+
+    if detection_method:
+        explanation["detection_method"] = detection_method
 
     if available_features:
         explanation["available_feature_values"] = available_features

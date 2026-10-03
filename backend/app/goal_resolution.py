@@ -30,6 +30,8 @@ from typing import Any, Callable, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from app import investigation_concepts
+
 logger = logging.getLogger(__name__)
 
 
@@ -157,7 +159,8 @@ _HEURISTIC_RULES = [
      re.compile(r"哪些交易|对应哪些|哪些记录|對應哪些|which[\s]+transactions",
                 re.IGNORECASE)),
     (GOAL_EXPAND_EVIDENCE,
-     re.compile(r"证据|證據|evidence|展开|展開|expand", re.IGNORECASE)),
+     re.compile(r"证据|證據|evidence|展开|展開|expand|明细|明細",
+                re.IGNORECASE)),
     (GOAL_EXPLAIN_FINDING,
      re.compile(r"为什么|為什麼|怎么会|怎麼|怎么来的|怎麼來的|why|explain|"
                 r"怎么出现|怎麼出現", re.IGNORECASE)),
@@ -170,6 +173,24 @@ def heuristic_goal(request_text: str, resolved_finding_id: str | None,
     the LLM output is unusable. Bounded — returns UNRESOLVED when no rule
     matches (never guesses between objectives)."""
     text = request_text or ""
+    # AL-2.6: the governed cross-account concept (shared matcher — the
+    # SAME predicate the context resolver and planner route on) leads the
+    # recognition table, so goal typing can never disagree with routing
+    # for this concept. The reason string is byte-identical to the table
+    # entries: the goal projection feeds downstream prompts (refinement
+    # stability tests pin it), and the table below remains a recognition
+    # SUPERSET (display-only; it never decides routing by itself).
+    if investigation_concepts.is_cross_account_trade_analysis_request(text):
+        return GoalRepresentation(
+            case_id=case_id,
+            goal_type=GOAL_CROSS_ACCOUNT_CHECK,
+            goal_resolution=GoalResolutionStatus.INFERRED.value,
+            subject_type="finding" if resolved_finding_id else "case",
+            subject_ref=resolved_finding_id or case_id,
+            reason="inferred from the request (deterministic fast path)",
+            source="heuristic",
+            request_text=text[:400],
+        )
     for goal_type, pattern in _HEURISTIC_RULES:
         if pattern.search(text):
             return GoalRepresentation(

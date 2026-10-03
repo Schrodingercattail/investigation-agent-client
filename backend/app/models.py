@@ -610,6 +610,10 @@ class ToolCallV2(BaseModel):
     task_id: str                         # denormalized for audit queries
     tool_name: str                       # must exist in TOOL_REGISTRY
     arguments: dict[str, Any] = Field(default_factory=dict)
+    # WP-M2-1 AL-2: per-argument provenance category (user_input /
+    # investigation_context / prior_observation / deterministic_system_value /
+    # planner). Observational only — never a decision input.
+    argument_sources: dict[str, str] | None = None
 
     status: ToolCallStatusV2 = ToolCallStatusV2.RUNNING
     started_at: str | None = None

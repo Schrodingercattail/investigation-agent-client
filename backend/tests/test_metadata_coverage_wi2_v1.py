@@ -213,7 +213,7 @@ def seeded_store():
     store = TaskStoreV2(tempfile.mkdtemp() + "/wi2_test.db")
     doc = json.loads(REPO_SEED.read_text(encoding="utf-8"))
     seed_from_document(store, doc)
-    for cid in ("F5", "F6", "F8"):
+    for cid in ("F5", "F6", "F8", "F3", "F7"):  # F3/F7 authored
         verify_candidate(store, cid, verified_by="seed-review")
     return store
 
@@ -230,7 +230,9 @@ def test_real_store_reconcile_idempotent_and_preserves_complete():
     assert statuses["F5"] == "COMPLETE"
     assert statuses["F6"] == "COMPLETE"
     assert statuses["F8"] == "COMPLETE"
-    assert sum(1 for s in statuses.values() if s == "INCOMPLETE") == 5
+    assert statuses["F3"] == "COMPLETE"                # AL-2.8 authored
+    assert statuses["F7"] == "COMPLETE"                # AL-2.9 authored
+    assert sum(1 for s in statuses.values() if s == "INCOMPLETE") == 3
     r2 = reconcile_coverage(provider, findings)        # idempotent
     assert r2.unchanged == [f.finding_id for f in findings]
     assert provider.get_candidate("F5").status == "COMPLETE"

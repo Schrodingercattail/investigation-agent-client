@@ -438,9 +438,21 @@ def artifact_bundle(
     artifact_type: ArtifactTypeV2
 
     if scope == "case":
-        title = f"Investigation Evidence Bundle — {case_id}"
+        # AL-2.12: the title names the run's PURPOSE — an analytical run's
+        # bundle is titled for its analysis, not as a generic evidence
+        # bundle (never a replacement for the conversational answer).
+        analyzed_cross_account = any(
+            tc.tool_name == "cross_account_trade_analysis" for tc in executed)
+        analyzed_related = any(
+            tc.tool_name == "related_account_analysis" for tc in executed)
+        if analyzed_cross_account:
+            title = f"Cross-Account Trade Evidence — {case_id}"
+        elif analyzed_related:
+            title = f"Related Account Evidence — {case_id}"
+        else:
+            title = f"Investigation Evidence Bundle — {case_id}"
         artifact_type = ArtifactTypeV2.FINDINGS_SUMMARY
-        lines.append(f"# Investigation Evidence Bundle")
+        lines.append(f"# {title}")
         lines.append("")
         lines.append(f"## Case")
         lines.append(f"- Case ID: {case_id}")

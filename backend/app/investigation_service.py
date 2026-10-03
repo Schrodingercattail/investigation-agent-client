@@ -373,6 +373,55 @@ def compose_response(
                         + ("s" if total != 1 else "")
                         + ", shown below in chronological order."
                     )
+            elif data.get("analysis") == "related_account_analysis":
+                # AL-2.10: authoritative Risk Platform network attribution
+                # echo — cluster facts, related accounts, shared devices,
+                # bounded lists, never derived relationships.
+                if data.get("analysis_status") == "RELATED_ACCOUNTS_FOUND":
+                    cluster = data.get("cluster") or {}
+                    parts = []
+                    if cluster.get("cluster_name"):
+                        parts.append(
+                            f"cluster 「{cluster['cluster_name']}」")
+                    if cluster.get("detection_type"):
+                        parts.append(
+                            f"detection type “{cluster['detection_type']}”")
+                    if cluster.get("member_count") is not None:
+                        parts.append(
+                            f"{cluster['member_count']} accounts in the "
+                            "cluster")
+                    if cluster.get("cluster_risk_score") is not None:
+                        parts.append(
+                            f"cluster risk score "
+                            f"{cluster['cluster_risk_score']}")
+                    if parts:
+                        prose.append(
+                            "Risk Platform network attribution: "
+                            + ", ".join(parts) + ".")
+                    accounts = data.get("related_accounts") or []
+                    count = data.get("related_accounts_count")
+                    if accounts:
+                        listing = ", ".join(str(a) for a in accounts)
+                        more = ""
+                        if count is not None and count > len(accounts):
+                            more = (f" (showing {len(accounts)} of "
+                                    f"{count})")
+                        prose.append(
+                            f"Related accounts: {listing}{more}.")
+                    devices = data.get("shared_devices") or []
+                    if devices:
+                        prose.append(
+                            "Shared devices linking these accounts: "
+                            + "; ".join(str(d) for d in devices) + ".")
+                elif data.get("evidence_missing"):
+                    prose.append(
+                        "The Risk Platform provides no network attribution "
+                        "for this case, so no related accounts can be "
+                        "listed.")
+                else:
+                    prose.append(
+                        "The Risk Platform attributes no related accounts "
+                        "to this account's network.")
             elif data.get("analysis") == "cross_account_trade_analysis":
                 # Candidate cross-account opposite-trade analysis (§6
                 # observation contract): candidate terminology only — the
@@ -489,8 +538,58 @@ def compose_response(
                         f"The model score is {ex['ml_score']}/100 "
                         f"({ex.get('score_interpretation', 'a system signal')})."
                     )
+            elif data.get("signal_type") == "Feature" \
+                    and "explanation" in data:
+                # AL-2.9: a feature-detected finding (no rule/ML/graph
+                # backing). The mechanism sentence names the detection
+                # class; the RP risk-feature facts ARE the grounded "why".
+                prose.append(detection_mechanism_sentence(data))
+                feats = (data.get("explanation") or {}).get("features") or []
+                if feats:
+                    observed = ", ".join(
+                        f"{_FEATURE_LABELS.get(f.get('name'), f.get('name'))}"
+                        f" = {f.get('value')}"
+                        for f in feats if f.get("name") is not None)
+                    if observed:
+                        prose.append(
+                            "The finding is based on the following Risk "
+                            f"Platform risk features: {observed}.")
             elif data.get("signal_type") == "Graph" and "explanation" in data:
                 prose.append(detection_mechanism_sentence(data))
+                # AL-2.8: the graph facts ARE the "why" — state them from
+                # RP's own network evidence (cluster, shared devices,
+                # related accounts), bounded lists, nothing synthesized.
+                ex = data.get("explanation") or {}
+                cluster = ex.get("cluster") or {}
+                facts = []
+                if cluster.get("detection_type"):
+                    facts.append(f"detection type “{cluster['detection_type']}”")
+                if cluster.get("member_count") is not None:
+                    facts.append(
+                        f"{cluster['member_count']} accounts in the cluster")
+                if cluster.get("cluster_risk_score") is not None:
+                    facts.append(
+                        f"cluster risk score "
+                        f"{cluster['cluster_risk_score']}")
+                if facts:
+                    prose.append(
+                        "Risk Platform graph data shows: " + ", ".join(facts)
+                        + ".")
+                devices = ex.get("shared_devices") or []
+                if devices:
+                    shown = "; ".join(str(d) for d in devices[:3])
+                    more = (f" (and {len(devices) - 3} more)"
+                            if len(devices) > 3 else "")
+                    prose.append(
+                        f"Shared devices linking these accounts: "
+                        f"{shown}{more}.")
+                related = ex.get("related_accounts") or []
+                if related:
+                    shown = ", ".join(str(a) for a in related[:5])
+                    more = (f" (and {len(related) - 5} more)"
+                            if len(related) > 5 else "")
+                    prose.append(
+                        f"Related accounts in the cluster: {shown}{more}.")
             elif data.get("signal_type") == "Rule" \
                     and "explanation" in data:
                 # rule requested but NO backing rule exists in RP data —
@@ -626,13 +725,11 @@ def compose_response(
                         f"ML score: {ex['ml_score']}/100 "
                         f"({ex.get('score_interpretation', 'system signal')})."
                     )
-            # Policy-lookup payload: two presentation contracts (P9) —
-            #   finding-level basis  → conversational answer shows at most 2
-            #     references (§12: finding-associated first, then relevance);
-            #   no finding-level basis → the COMPLETE authoritative case-level
-            #     citation set, explicitly labeled case-level (never silently
-            #     truncated: a finding limit is not a case-level limit).
-            # [n] stays because the mapping is rendered in this same response.
+            # Policy-lookup payload (AL-2.10 answer fidelity): only the
+            # FINDING-ASSOCIATED citations belong in a finding-explain
+            # answer. No finding-level basis → say exactly that (the
+            # investigation-wide citation dump never answers "why is THIS
+            # finding a risk" and is omitted).
             if isinstance(data.get("matches"), list) and data["matches"]:
                 matches = data["matches"]
                 associated_ids = {
@@ -641,8 +738,6 @@ def compose_response(
                 }
                 associated = [m for m in matches
                               if m.get("citation_id") in associated_ids]
-                others = [m for m in matches
-                          if m.get("citation_id") not in associated_ids]
                 # deterministic relevance order (normalize_policy_matches
                 # already sorts by relevance; associated first)
                 has_finding_basis = bool(associated)
@@ -660,16 +755,15 @@ def compose_response(
                         " directly:"
                     )
                 else:
-                    # case-level contract: the complete authoritative set —
-                    # a VALID DATA state (finding_policy_status=
-                    # "no_finding_level_basis"), never an execution failure.
-                    # These references support the investigation, not the
-                    # finding (P9/anti-pattern G).
-                    top = list(matches)
+                    # AL-2.10 answer fidelity: when the finding carries no
+                    # finding-level policy basis, SAY EXACTLY THAT — the
+                    # case-wide citation dump is omitted (it does not answer
+                    # "why is THIS finding a risk" and reads as padding).
+                    top = []
                     prose.append(
-                        "No finding-level policy basis is attached to "
-                        "this finding. The following case-level policy "
-                        "references apply to the investigation overall:"
+                        "The Risk Platform has attached no finding-level "
+                        "policy basis to this finding; the citations it "
+                        "holds are investigation-wide, not specific to it."
                     )
                 for i, m in enumerate(top, 1):
                     cite = (f" [{m['citation_id']}]"
@@ -678,24 +772,6 @@ def compose_response(
                         f"{i}. {m.get('document', '')} — "
                         f"{m.get('section', '')}{cite}"
                     )
-                if has_finding_basis and others:
-                    # Block 2 (explicit scope transition, own count, labeled
-                    # case-level): never counted as finding support
-                    # (P9/anti-pattern G). Emitted AFTER the finding-level
-                    # list so the two scopes read as separate blocks.
-                    lines.append(
-                        f"Additionally, {len(others)} case-level policy "
-                        f"reference"
-                        f"{'s apply' if len(others) != 1 else ' applies'}"
-                        " to the overall investigation:"
-                    )
-                    for i, m in enumerate(others, 1):
-                        cite = (f" [{m['citation_id']}]"
-                                if m.get("citation_id") is not None else "")
-                        lines.append(
-                            f"{i}. {m.get('document', '')} — "
-                            f"{m.get('section', '')}{cite}"
-                        )
                 if not matches or (data.get("evidence_missing") and not top):
                     lines.append(
                         "No directly relevant policy references are "
@@ -856,14 +932,19 @@ class InvestigationService:
         refinement_resolver: Callable | None = None,
         metadata_admissibility: Callable | None = None,
         clarification_ledger: Any | None = None,
+        semantic_catalog: Any | None = None,
     ):
         # Stage 1 (open-ended baseline): semantic target resolution is
         # ENABLED by default — natural-language requests resolve their
         # finding from the authoritative candidate set via the bounded,
         # candidate-restricted LLM assist (never free-form). Callers may
         # pass allow_llm_resolution=False for a deterministic-only resolver.
+        # AL-2.8: `semantic_catalog` (governed M2 CatalogProvider) enables
+        # the semantic-foundation stage inside the resolver; None keeps the
+        # legacy chain (used by tests / deterministic-only callers).
         self.resolver = resolver or ContextResolver(
-            llm_assist=allow_llm_resolution)
+            llm_assist=allow_llm_resolution,
+            semantic_catalog=semantic_catalog)
         self._allow_llm_resolution = allow_llm_resolution
         if resolver is None and not allow_llm_resolution:
             # deterministic-only: hard-disable the assist availability check
@@ -1063,6 +1144,12 @@ class InvestigationService:
             "kind": ("refined_select" if refined_target_id else "resolved"),
             "refinement": refinement_evidence,
         }
+        # AL-2.8: bounded evidence of the M2 semantic-foundation stage when
+        # it ran (normalization + grounding provenance; never an
+        # authorization fact).
+        if resolution.semantic_evidence:
+            target_resolution["semantic_grounding"] = \
+                resolution.semantic_evidence
 
         # Target-independent guidance (capability questions): a completed
         # informational turn — no planning, no tools, no failure (P12/P14).
@@ -1166,6 +1253,37 @@ class InvestigationService:
                     "candidates_considered": len(resolution.candidates),
                     "refinement": refinement_evidence,
                     "clarification": clarification_state,
+                    **({"semantic_grounding": resolution.semantic_evidence}
+                       if resolution.semantic_evidence else {}),
+                },
+            )
+            self._persist(store, result.task)
+            return result
+
+        if resolution.status == ResolutionStatus.SEMANTIC_RESOLUTION_UNAVAILABLE:
+            # AL-2.8: the M2 semantic foundation could not run (provider
+            # unconfigured / unreachable / malformed) after every
+            # deterministic stage failed. An honest OUTAGE terminal —
+            # deliberately distinct from unresolved_reference: no finding
+            # tool may run on an ungrounded target, nothing is fabricated,
+            # and the degraded state is named as what it is.
+            task.status = TaskStatusV2.FAILED
+            task.started_at = task.completed_at = _stamp()
+            task.error = "semantic_resolution_unavailable"
+            result = InvestigationTurnResult(
+                task=task,
+                response=resolution.clarification_message
+                or "The semantic resolution service is currently "
+                   "unavailable, so I cannot reliably determine which "
+                   "finding you mean. Please select the finding directly, "
+                   "or retry later.",
+                context=resolved_ctx,          # unchanged; no invented focus
+                follow_ups=[],
+                context_changed=False,
+                target_resolution={
+                    "kind": "semantic_resolution_unavailable",
+                    "semantic": resolution.semantic_evidence,
+                    "refinement": refinement_evidence,
                 },
             )
             self._persist(store, result.task)

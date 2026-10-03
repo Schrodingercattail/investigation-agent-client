@@ -344,4 +344,34 @@ describe('useAgentActivity polling', () => {
     expect(result.current.activity?.task_id).toBe('TASK-B')
     spy.mockRestore()
   })
+
+  it('AL-2.5: an early 404 (run not yet persisted) does not permanently kill polling', async () => {
+    // Race found by the real-RP browser E2E: the first poll can precede
+    // the loop thread's first state persistence. The hook must retry for
+    // a bounded grace window instead of showing "No Agent Loop run yet"
+    // forever while the run is actually executing.
+    const apiModule = await import('@/api/investigation')
+    const notFoundErr = new InvestigationApiError(
+      'No Agent Activity', 404, 'NO_AGENT_ACTIVITY',
+      '/tasks/TASK-R/activity')
+    const terminal = activityResponse({
+      task_id: 'TASK-R', agent_status: 'completed', is_terminal: true,
+      activity: [record(1, 'agent.started')],
+    })
+    const spy = vi
+      .spyOn(apiModule.investigationApi, 'getTaskActivity')
+      .mockRejectedValueOnce(notFoundErr)
+      .mockRejectedValueOnce(notFoundErr)
+      .mockResolvedValueOnce(terminal)
+
+    const { result } = renderHook(() =>
+      useAgentActivity('TASK-R', { poll: true }))
+    await waitFor(
+      () => expect(result.current.activity?.task_id).toBe('TASK-R'),
+      { timeout: 8000 })
+    // recovered: the transient 404s resolved into the real snapshot
+    expect(result.current.notFound).toBe(false)
+    expect(spy).toHaveBeenCalledTimes(3)
+    spy.mockRestore()
+  })
 })

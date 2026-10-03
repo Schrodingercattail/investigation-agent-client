@@ -163,8 +163,13 @@ class TestPositivePath:
     def session(self, store):
         """Runs all five turns; returns per-turn results + shared state."""
         findings = make_findings()
+        # AL-2.8: turn 3 ("Why is this event important?") is planned by the
+        # deterministic explain branch (explain_signal + retrieve_policy,
+        # same contract-checked signal_explain execution) and turn 5's
+        # bundle request by the deterministic artifact branch — neither
+        # consumes a script; only turns 2 and 4 reach the scripted planner.
         svc, p1, p2 = make_service(
-            store, [PLAN_T2, PLAN_T3, PLAN_T4, PLAN_T5])  # turn 1 is deterministic
+            store, [PLAN_T2, PLAN_T4, PLAN_T5])  # turn 1 is deterministic
 
         turns = []
         prior_calls: list[Any] = []   # session provenance pool (turns 1..n-1)
@@ -498,7 +503,11 @@ class TestNegativeUnsupportedCapability:
         from app.skills import eligible_skills_for_finding
         eligible = {s.skill_id for s in eligible_skills_for_finding(F3_CAPS)}
         assert "trade_investigation" not in eligible
-        assert eligible == {"case_intake", "timeline_investigation"}
+        # AL-2.6: case_trade_analysis is always eligible (case-level); the
+        # finding-level gate this test pins is trade_investigation, unchanged.
+        assert eligible == {"case_intake", "timeline_investigation",
+                            "case_trade_analysis",
+                            "case_related_accounts"}
 
 
 # ===========================================================================

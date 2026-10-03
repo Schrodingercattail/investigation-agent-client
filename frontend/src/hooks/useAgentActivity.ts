@@ -13,6 +13,10 @@ import { InvestigationApiError, investigationApi } from '@/api/investigation'
 import type { AgentActivityRecord, TaskActivityResponse } from '@/api/types'
 
 const POLL_INTERVAL_MS = 2000
+/** Consecutive empty (404/error) polls tolerated before the hook accepts
+ * notFound — grace for the goal-run startup race where the first poll can
+ * precede the loop thread's first state persistence (AL-2.5). */
+const MISSING_SNAPSHOT_RETRIES = 5
 
 export interface AgentActivityState {
   activity: TaskActivityResponse | null
@@ -82,6 +86,9 @@ export function useAgentActivity(
     if (!taskId) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
+    // consecutive empty polls before settling into notFound (grace for the
+    // goal-run startup race; see tick below)
+    let misses = 0
 
     const tick = async () => {
       if (cancelled) return
@@ -92,7 +99,23 @@ export function useAgentActivity(
       }
       const snapshot = await refresh()
       if (cancelled) return
-      if (poll && snapshot && !snapshot.is_terminal) {
+      if (!snapshot) {
+        // A 404/error here is usually TRANSIENT for a just-started goal:
+        // the loop thread persists its first agent state milliseconds
+        // after the HTTP response, so an immediate first poll can beat it
+        // (AL-2.5 browser E2E race: one early 404 used to permanently
+        // disable the live Activity view — "No Agent Loop run yet" while
+        // the run was actually executing). Keep polling for a bounded
+        // grace window instead; a genuinely non-loop task settles into
+        // notFound shortly after.
+        misses += 1
+        if (poll && misses <= MISSING_SNAPSHOT_RETRIES) {
+          timer = setTimeout(tick, POLL_INTERVAL_MS)
+        }
+        return
+      }
+      misses = 0
+      if (poll && !snapshot.is_terminal) {
         timer = setTimeout(tick, POLL_INTERVAL_MS)
       }
     }

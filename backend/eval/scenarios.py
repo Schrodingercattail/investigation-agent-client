@@ -45,8 +45,10 @@ def _C(name, *args, **kw):
 
 # --- scripted planner responses (deterministic planning targets) --------
 P_INTAKE = plan_json("case_intake", ["fetch_case", "generate_artifact"])
-P_SIGNAL_ML = plan_json("timeline_investigation", ["explain_signal"])
-P_SIGNAL_RULE = plan_json("timeline_investigation", ["explain_signal"])
+P_SIGNAL_ML = plan_json("timeline_investigation",
+                        ["explain_signal", "retrieve_policy"])
+P_SIGNAL_RULE = plan_json("timeline_investigation",
+                         ["explain_signal", "retrieve_policy"])
 P_POLICY = plan_json("case_intake", ["retrieve_policy"])
 P_WITHDRAWALS = plan_json("timeline_investigation", ["inspect_withdrawals"])
 P_TRANSACTIONS = plan_json("timeline_investigation", ["inspect_transactions"])
@@ -84,7 +86,9 @@ def build_scenarios():
         planner_scripts=[P_SIGNAL_ML],
         checks=[
             _C("expected_skill", skill="timeline_investigation"),
-            _C("expected_step", "explain_signal"),
+            # AL-2.8: explain intent deterministically plans the
+            # policy continuation alongside the signal explanation.
+            _C("expected_step", "explain_signal", "retrieve_policy"),
             _C("tool_called", tool_name="signal_explain"),
             _C("tool_argument", tool_name="signal_explain", key="finding_id",
                value="F1"),
@@ -108,10 +112,12 @@ def build_scenarios():
             _C("expected_step", "retrieve_policy"),
             _C("tool_called", tool_name="policy_lookup"),
             _C("expected_outcome", "policy_lookup", "success",),
-            _C("response_contains", "applies directly",
-               "case-level policy reference"),
+            _C("response_contains", "applies directly"),
+            # AL-2.10: the case-level supplement block no longer exists in
+            # the finding-explain answer (answer fidelity).
+            _C("response_not_contains", "Additionally,"),
         ],
-        notes="Two-block policy contract on an associated finding.",
+        notes="Finding-associated policy contract (AL-2.10: no case dump).",
     ))
 
     # E04 — F1 -> F2 focus switch
@@ -247,12 +253,12 @@ def build_scenarios():
         checks=[
             _C("response_contains",
                "For this finding, 1 policy reference applies directly:"),
-            _C("response_contains",
-               "Additionally,"),
             _C("response_not_contains",
                "2 policy references apply to this finding"),
+            _C("response_not_contains", "Additionally,"),
         ],
-        notes="Case-level refs are NOT counted as finding-level.",
+        notes="Case-level refs are NOT counted as finding-level and are "
+              "no longer listed (AL-2.10).",
     ))
 
     # E12 — no finding-level policy basis
@@ -263,10 +269,12 @@ def build_scenarios():
         planner_scripts=[P_POLICY],
         checks=[
             _C("response_contains",
-               "No finding-level policy basis is attached to this finding.",
-               "case-level"),
+               "The Risk Platform has attached no finding-level policy "
+               "basis to this finding"),
+            _C("response_not_contains", "case-level"),
         ],
-        notes="No-basis: explicit statement + labeled case-level references.",
+        notes="No-basis: explicit statement; case-wide citations omitted "
+              "(AL-2.10 answer fidelity).",
     ))
 
     # E13 — finding artifact after signal + timeline + policy
@@ -356,7 +364,10 @@ def build_scenarios():
                                    ["analyze_cross_account_trades"])],
         checks=[
             _C("expected_skill", skill="trade_investigation"),
-            _C("expected_step", "analyze_cross_account_trades"),
+            # AL-2.6: the deterministic plan appends the bounded bundle
+            # step after the governed analysis step.
+            _C("expected_step", "analyze_cross_account_trades",
+               "generate_artifact"),
             _C("tool_called", tool_name="cross_account_trade_analysis"),
             _C("tool_argument", tool_name="cross_account_trade_analysis",
                key="analysis_type", value="cross_account_opposite_trade"),

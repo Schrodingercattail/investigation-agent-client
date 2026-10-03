@@ -202,12 +202,12 @@ class TestPolicySemantics:
             user_request="有相关政策支持你的分析吗", skill_id=None, plan=None,
             tool_calls=[tc_from("TC-P", "policy_lookup", r)],
             execution_errors=[])
-        # the pinned product sentence — a data answer, not a failure
-        assert "No finding-level policy basis is attached to this finding." \
+        # AL-2.10: the pinned product sentence — a data answer, not a
+        # failure; the case-wide citation dump is omitted entirely.
+        assert "The Risk Platform has attached no finding-level policy basis " \
+           "to this finding" \
             in text
-        # case-level references are explicitly labeled case-level
-        assert "case-level policy references apply to the investigation " \
-            "overall" in text
+        assert "investigation-wide, not specific to it" in text
         # never capability/failure/availability semantics
         assert "not available for this type of finding" not in text
         assert "This investigation capability is not supported for the " \
@@ -283,8 +283,8 @@ class TestPolicySemantics:
         """The exact user-facing sentences for the reachable policy states
         must not share distinguishing phrases — each answer names its own
         meaning: no-basis (data), case-empty, integration failure."""
-        no_basis = ("No finding-level policy basis is attached to this "
-                    "finding.")
+        no_basis = ("The Risk Platform has attached no finding-level "
+                    "policy basis to this finding")
         found_none = "No directly applicable policy was found for this finding."
         unavailable = "could not be reached"
         trio = {no_basis, found_none, unavailable}
@@ -319,7 +319,7 @@ class TestPolicySemantics:
                 user_request="policy", skill_id=None, plan=None,
                 tool_calls=[tc_from("TC-P", "policy_lookup", r)],
                 execution_errors=[])
-            assert "No finding-level policy basis is attached" in text
+            assert "has attached no finding-level policy basis" in text
             assert "apply to this finding" not in text
 
     def test_finding_associated_matches_still_say_apply(self):
@@ -402,12 +402,12 @@ class TestPolicyPresentationScope:
         assert ("For this finding, 1 policy reference applies directly:") \
             in text
         assert "FindingDoc_7.md" in text
-        assert ("Additionally, 3 case-level policy references apply to "
-                "the overall investigation:") in text
+        # AL-2.10: the case-level supplement is omitted from the
+        # finding-explain answer entirely (answer fidelity).
+        assert "Additionally," not in text
         listed = [ln for ln in text.splitlines()
                   if ln[:2] in ("1.", "2.", "3.", "4.")]
-        assert len(listed) == 4                   # 1 associated + 3 case
-        # the case-level block is COMPLETE (no truncation at all)
+        assert len(listed) == 1                   # the associated ref only
         assert "No finding-level policy basis" not in text
 
     def test_two_finding_level_policies_unchanged(self):
@@ -419,33 +419,30 @@ class TestPolicyPresentationScope:
         assert "FindingDoc_7.md" in text and "FindingDoc_8.md" in text
         # an unassociated case-level reference appears only under the
         # explicit case-level transition — never as finding support
-        assert ("Additionally, 3 case-level policy references apply to "
-                "the overall investigation:") in text
+        assert "Additionally," not in text
         listed = [ln for ln in text.splitlines()
                   if ln[:2] in ("1.", "2.", "3.", "4.")]
-        assert len(listed) == 5   # 2 associated + 3 case (complete)
+        assert len(listed) == 2   # the two associated refs only
 
     def test_no_basis_three_case_citations_all_shown(self):
         # 3. zero finding-level policies + THREE case-level citations →
         # ALL three shown (the U00299/F2 live defect: [3],[2] shown, [1] lost).
         p = _policy_payload(associated_ids=(), n_case_citations=3)
         text = _compose_policy(p)
-        assert "No finding-level policy basis is attached to this finding." \
+        assert "The Risk Platform has attached no finding-level policy basis " \
+           "to this finding" \
             in text
-        assert "case-level policy references apply to the investigation " \
-            "overall" in text
-        listed = [ln for ln in text.splitlines()
-                  if ln[:2] in ("1.", "2.", "3.")]
-        assert len(listed) == 3
-        assert "100" in text and "101" in text and "102" in text
+        assert "investigation-wide, not specific to it" in text
 
-    def test_no_basis_one_case_citation_shown(self):
-        # 4. zero finding-level policies + ONE case-level citation → shown.
+    def test_no_basis_one_case_citation_not_listed(self):
+        # 4. (AL-2.10) zero finding-level policies + case citations → the
+        # answer states the no-basis fact; the case-wide listing is gone.
         p = _policy_payload(associated_ids=(), n_case_citations=1)
         text = _compose_policy(p)
-        assert "No finding-level policy basis is attached to this finding." \
+        assert "The Risk Platform has attached no finding-level policy basis " \
+           "to this finding" \
             in text
-        assert "Doc_X.md" in text
+        assert "Doc_X.md" not in text
 
     def test_no_basis_zero_case_citations_is_valid_empty(self):
         # 5. zero/zero → valid empty result (P20), no fabricated list.
@@ -471,7 +468,7 @@ class TestPolicyPresentationScope:
         p = _policy_payload(associated_ids=(), n_case_citations=3)
         text = _compose_policy(p)
         assert "apply to this finding" not in text
-        assert "apply to the investigation overall" in text
+        assert "investigation-wide, not specific to it" in text
 
     def test_case_scoped_artifact_still_renders_all_case_citations(self):
         # 7. artifact contract unchanged: all case citations render there.
@@ -819,7 +816,7 @@ class TestArtifactResponseScopeSemantics:
             tool_calls=[tc_from("TC-P", "policy_lookup", r)],
             execution_errors=[])
         assert "transaction" not in text
-        assert "No finding-level policy basis is attached" in text
+        assert "has attached no finding-level policy basis" in text
 
     @staticmethod
     def _unmarked_finding_id(case):
@@ -937,13 +934,10 @@ class TestArtifactResponseScopeSemantics:
             user_request="policy", skill_id=None, plan=None,
             tool_calls=[tc_from("TC-P", "policy_lookup", r)],
             execution_errors=[])
-        assert "No finding-level policy basis is attached" in text
-        # ALL authoritative case-level citations shown, not capped at 2 —
-        # the fixture carries [1] and [2]; both documents must appear
+        assert "has attached no finding-level policy basis" in text
+        # AL-2.10: no case-wide citation listing in the no-basis answer
         listed = [ln for ln in text.splitlines() if ln[:1].isdigit()]
-        assert len(listed) == len(fx.rp_explanation_payload()["citations"])
-        assert "AML_Suspicious_Indicators.md" in text
-        assert str(fx.rp_explanation_payload()["citations"][-1]["id"]) in text
+        assert listed == []
         # the associated path still caps at 2 (shared fixture: F2 marked [1])
         case2, cc2 = make_case()
         r2 = policy_lookup(topic="t", finding_id="F2", case_context=cc2)
@@ -986,8 +980,11 @@ class TestPolicyAssociationConsistency:
                   if m["citation_id"] not in
                   {p["citation_id"] for p in r.data["associated_policy_refs"]}]
         if others:
-            assert "Additionally," in text
-            assert "case-level policy reference" in text
+            # AL-2.10: non-associated citations are omitted from the
+            # finding-explain answer entirely (never finding support).
+            assert "Additionally," not in text
+            for cid in others:
+                assert f"[{cid}]" not in text
 
     def test_associated_plus_case_supplement_separately_labeled(self):
         # one associated [1] + case-level [2] present:
@@ -1002,9 +999,11 @@ class TestPolicyAssociationConsistency:
             execution_errors=[])
         assert "For this finding," in text and "applies directly" in text
         if r.data["matches"] and len(r.data["matches"]) > 1:
-            assert "Additionally," in text
-            assert "case-level policy reference" in text
-            assert "overall investigation" in text
+            # AL-2.10: only the ASSOCIATED citation is listed; the
+            # case-level supplement block no longer exists.
+            assert "Additionally," not in text
+            assert "[1]" in text
+            assert "[2]" not in text
 
     def test_artifact_policy_block_matches_conversation_association(self):
         # the artifact's finding citation line and the conversation's
@@ -1109,13 +1108,14 @@ class TestPolicyScopeClarity:
         assert "[1]" in finding_block
 
     def test_case_reference_introduced_explicitly(self):
+        # AL-2.10: the case-level citation is NOT introduced into the
+        # finding-explain conversation answer at all (it remains available
+        # in the artifact's case-wide policy section).
         p = self._payload_assoc1_case4()
         text = _compose_policy(p)
-        assert ("Additionally, 1 case-level policy reference applies to "
-                "the overall investigation:") in text
-        case_block = text.split("Additionally")[1]
-        assert "Investigation_and_Action_SOP.md" in case_block
-        assert "[4]" in case_block
+        assert "Additionally," not in text
+        assert "Investigation_and_Action_SOP.md" not in text
+        assert "[4]" not in text
 
     def test_case_reference_not_counted_as_finding_level(self):
         p = self._payload_assoc1_case4()

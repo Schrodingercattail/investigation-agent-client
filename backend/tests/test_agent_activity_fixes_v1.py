@@ -306,7 +306,10 @@ class TestQA02TerminalPlanState:
         activity = await_terminal(client, task_id)
         by_type = {s["type"]: s["status"] for s in activity["plan_steps"]}
         assert by_type["analyze_cross_account_trades"] == "success"
-        assert by_type["retrieve_policy"] == "pending"
+        # AL-2.6: the deterministic plan's second step is the bounded
+        # bundle; the QA-02 property is unchanged — a pending step at a
+        # STOP terminal stays pending (never marked done).
+        assert by_type["generate_artifact"] == "pending"
 
     def test_stopped_by_limit_keeps_state_consistent(self, client):
         from types import SimpleNamespace
@@ -332,7 +335,12 @@ class TestQA02TerminalPlanState:
         inv, task_id = create_and_start(
             client, "endless investigation", loop_factory=factory)
         activity = await_terminal(client, task_id, timeout_s=30)
-        assert activity["agent_status"] == "stopped_by_limit"
+        # AL-2.13: an always-CONTINUE proposer over an identical-success
+        # query now converges via the no-progress guard BEFORE the
+        # iteration bound; the bound remains the backstop for genuinely
+        # varying results.
+        assert activity["agent_status"] in (
+            "stopped_by_limit", "completed")
         # every executed fetch_case step is success in the snapshot
         for s in activity["plan_steps"]:
             if s["type"] == "fetch_case":

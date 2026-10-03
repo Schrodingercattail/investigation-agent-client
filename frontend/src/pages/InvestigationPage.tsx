@@ -7,7 +7,7 @@
  * provenance are all backend-owned).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -103,6 +103,11 @@ export function InvestigationPage() {
   const [activityTaskId, setActivityTaskId] = useState<string | null>(null)
   const [goalPhase, setGoalPhase] = useState<'idle' | 'running' | 'error'>('idle')
   const agentActivity = useAgentActivity(activityTaskId)
+  /** AL-2.7: loop tasks started in this session (live conversation
+   * absorption) vs restored ones (already rendered by the restore path),
+   * and which ones have been absorbed (once). */
+  const sessionLoopTasksRef = useRef<Set<string>>(new Set())
+  const absorbedLoopTasksRef = useRef<Set<string>>(new Set())
 
   const setPhase = (phase: TurnPhase, errorMessage: string | null = null) =>
     setState((s) => ({ ...s, phase, errorMessage }))
@@ -276,11 +281,15 @@ export function InvestigationPage() {
   }, [])
 
   /** Explicit New Investigation: fresh workspace; the previous investigation
-   * is untouched and remains in history. */
+   * is untouched and remains in history. The Activity binding is part of
+   * the previous conversation's state and MUST NOT survive it — a stale
+   * task id made the new conversation render the old conversation's
+   * investigation goal/activity (AL-2.12 Issue A). */
   const newInvestigation = useCallback(() => {
     setState(initialState)
     setPendingFocus(null)
     setInput('')
+    setActivityTaskId(null)
     persistInvestigationId(null)
     void refreshHistory()
   }, [refreshHistory])
@@ -471,6 +480,7 @@ export function InvestigationPage() {
       // the selection is now authoritative persisted context
       if (pendingFocus) setPendingFocus(null)
       setActivityTaskId(started.task_id)
+      sessionLoopTasksRef.current.add(started.task_id)
       setRightTab('activity')
     } catch (err) {
       setGoalPhase('error')
@@ -479,6 +489,65 @@ export function InvestigationPage() {
     }
     setGoalPhase('idle')
   }, [state.investigationId, input, goalPhase, pendingFocus, setPhase])
+
+  /** AL-2.7 (Defect B): when a goal run started in THIS session reaches
+   * its terminal state, the composed assistant response (persisted by the
+   * backend into the conversation read model) becomes a real conversation
+   * turn — WITHOUT a reload. The Activity panel remains the execution
+   * trace; this is the conversational answer. Also merges the run's
+   * artifacts into the live panel (dedup by id). Guards:
+   * - the terminal snapshot must belong to the task this page started
+   *   (a stale snapshot from the PREVIOUS task must never mark it —
+   *   observed live: between setActivityTaskId and the hook's first
+   *   reset fetch, agentActivity still holds the old run's terminal
+   *   snapshot);
+   * - only session-started runs are absorbed (restored/reopened runs are
+   *   already rendered by the conversation restore path, which serves the
+   *   same persisted response). */
+  useEffect(() => {
+    const activity = agentActivity.activity
+    const taskId = activityTaskId
+    if (!activity?.is_terminal || !taskId) return
+    if (activity.task_id !== taskId) return        // stale snapshot window
+    if (!sessionLoopTasksRef.current.has(taskId)) return
+    if (absorbedLoopTasksRef.current.has(taskId)) return
+    absorbedLoopTasksRef.current.add(taskId)
+    void (async () => {
+      try {
+        const detail = await investigationApi.getTask(taskId)
+        const responseText = (detail.task_response_text ?? '').trim()
+        setState((s) => {
+          if (s.turns.some((t) => t.id === `loop-${taskId}`)) return s
+          const known = new Set(s.artifacts.map((a) => a.artifact_id))
+          const freshArtifacts = detail.artifacts.filter(
+            (a) => !known.has(a.artifact_id),
+          )
+          return {
+            ...s,
+            artifacts: freshArtifacts.length
+              ? [...s.artifacts, ...freshArtifacts]
+              : s.artifacts,
+            turns: responseText
+              ? [
+                  ...s.turns,
+                  {
+                    id: `loop-${taskId}`,
+                    role: 'agent' as const,
+                    text: responseText,
+                    task: detail.task,
+                    artifacts: detail.artifacts,
+                  },
+                ]
+              : s.turns,
+          }
+        })
+      } catch {
+        // best-effort: the durable surfaces (Activity / reopen restore)
+        // still carry the response if this transient fetch fails
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentActivity.activity, activityTaskId])
 
   /** On reopen: restore the most recent loop task's Activity (completed
    * runs render read-only history from the durable projection). */

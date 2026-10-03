@@ -104,6 +104,9 @@ def open_activity_tab(b):
         const tabs = [...document.querySelectorAll('[role=tab]')];
         const t = tabs.find(t => t.textContent.trim() === 'Activity');
         if (!t) return 'NOT_FOUND';
+        // Radix TabsTrigger activates on MOUSEDOWN — a synthetic el.click()
+        // alone (CDP harness) never switches a controlled Radix tab.
+        t.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
         t.click(); return 'CLICKED';
     })()""")
     time.sleep(0.6)
