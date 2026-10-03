@@ -1,0 +1,450 @@
+{
+  "run_id": "al3-42c2e042",
+  "timestamp": "2026-10-03T08:20:30.450152+00:00",
+  "git_commit": "4d00ea4",
+  "model_name": "glm-5.3",
+  "scenario_version": "S01-S18.v1",
+  "rp_data_hash": "d9c3cd69cf18",
+  "baseline_ref": null,
+  "results": {
+    "S01": {
+      "scenario_id": "S01",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "case_intake",
+          "observed": "['risk_case_fetch', 'artifact_bundle', 'artifact_bundle', 'artifact_bundle']",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:8 findings",
+          "expected": "8 findings",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:U00010",
+          "expected": "U00010",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:wrong case",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:U00299",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:case overview",
+          "expected": "case overview",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": -1,
+          "rationale": "judge error: LLM response contained no text block"
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": -1,
+          "rationale": "judge error"
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": -1,
+          "rationale": "judge error"
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "risk_case_fetch",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success",
+            "data": {}
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-a78efafe62aa",
+        "task_id": "TASK-2bb7c89aff8a",
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 54170
+      },
+      "failure_taxonomy": "tool_selection_failure",
+      "failure_detail": null
+    },
+    "S03": {
+      "scenario_id": "S03",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F5",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "signal_explain",
+          "observed": "['signal_explain', 'policy_lookup', 'policy_lookup', 'policy_lookup']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:Cluster_device_sharing_1",
+          "expected": "Cluster_device_sharing_1",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:DEV8Z1O4A35QU",
+          "expected": "DEV8Z1O4A35QU",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:80.0",
+          "expected": "80.0",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:rule-based detection",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:例如",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:why explanation",
+          "expected": "why explanation",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:graph facts",
+          "expected": "graph facts",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": -1,
+          "rationale": "judge error: LLM response contained no text block"
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": -1,
+          "rationale": "judge error"
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": -1,
+          "rationale": "judge error"
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "signal_explain",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "policy_lookup",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "policy_lookup",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "policy_lookup",
+            "outcome": "success",
+            "data": {}
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-18af8fe0d334",
+        "task_id": "TASK-f2220dd7b9d0",
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 66158
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S05": {
+      "scenario_id": "S05",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F3",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "finding_drilldown",
+          "observed": "['signal_explain', 'finding_drilldown', 'finding_drilldown', 'finding_drilldown']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:7",
+          "expected": "7",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:W000087",
+          "expected": "W000087",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:W000089",
+          "expected": "W000089",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:withdrawal",
+          "expected": "withdrawal",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:例如",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:top 5",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:证据视图",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:保存在",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:F7",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:High Trading Frequency",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:evidence table",
+          "expected": "evidence table",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:all records",
+          "expected": "all records",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": -1,
+          "rationale": "judge error: LLM response contained no text block"
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": -1,
+          "rationale": "judge error"
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": -1,
+          "rationale": "judge error"
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "signal_explain",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success",
+            "data": {}
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-12d9cd1f7205",
+        "task_id": "TASK-7641f4016a23",
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 69220
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    }
+  },
+  "summary": {
+    "total_scenarios": 3,
+    "by_status": {
+      "FAIL": 3
+    },
+    "scenario_ids_by_status": {
+      "FAIL": [
+        "S01",
+        "S03",
+        "S05"
+      ]
+    },
+    "failure_taxonomy": {
+      "tool_selection_failure": 1,
+      "target_resolution_failure": 2
+    }
+  }
+}

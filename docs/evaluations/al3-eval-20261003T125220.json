@@ -1,0 +1,410 @@
+{
+  "run_id": "al3-499481a1",
+  "timestamp": "2026-10-03T12:52:20.908960+00:00",
+  "git_commit": "4d00ea4",
+  "model_name": "glm-5.3",
+  "scenario_version": "S01-S18.v1",
+  "rp_data_hash": "d9c3cd69cf18",
+  "baseline_ref": null,
+  "results": {
+    "S01": {
+      "scenario_id": "S01",
+      "status": "PASS",
+      "hard_gates": [
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "risk_case_fetch",
+          "observed": "['risk_case_fetch', 'artifact_bundle']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:findings",
+          "expected": "findings",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:U00010",
+          "expected": "U00010",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:wrong case",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:U00299",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:case overview",
+          "expected": "case overview",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "The response directly addresses the U00010 case request with a complete findings overview, explains each finding with concrete thresholds and evidence (e.g., 34.38% opposite-trade ratio below the 40% rule threshold), and honestly qualifies what signals do and do not demonstrate (ML score is a system signal, not calibrated probability), with no prohibited content."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "The response directly addresses the U00010 case request with a complete findings overview, explains each finding with concrete thresholds and evidence (e.g., 34.38% opposite-trade ratio below the 40% rule threshold), and honestly qualifies what signals do and do not demonstrate (ML score is a system signal, not calibrated probability), with no prohibited content."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The response directly addresses the U00010 case request with a complete findings overview, explains each finding with concrete thresholds and evidence (e.g., 34.38% opposite-trade ratio below the 40% rule threshold), and honestly qualifies what signals do and do not demonstrate (ML score is a system signal, not calibrated probability), with no prohibited content."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "risk_case_fetch",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success",
+            "data": {}
+          }
+        ],
+        "plan_steps": [
+          "fetch_case",
+          "generate_artifact"
+        ],
+        "iteration_count": 1,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-c76cc2d929f2",
+        "task_id": "TASK-e471a549b0ad",
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 69722
+      },
+      "failure_taxonomy": null,
+      "failure_detail": null
+    },
+    "S03": {
+      "scenario_id": "S03",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F5",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "signal_explain",
+          "observed": "[]",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:Cluster_device_sharing_1",
+          "expected": "Cluster_device_sharing_1",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:DEV8Z1O4A35QU",
+          "expected": "DEV8Z1O4A35QU",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:80.0",
+          "expected": "80.0",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:rule-based detection",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:例如",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:why explanation",
+          "expected": "why explanation",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:graph facts",
+          "expected": "graph facts",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 0,
+          "rationale": "The agent only returns a disambiguation prompt listing finding labels without any explanation of why shared devices are a risk, omitting the required graph facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0), though it avoids fabricating an answer."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 0,
+          "rationale": "The agent only returns a disambiguation prompt listing finding labels without any explanation of why shared devices are a risk, omitting the required graph facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0), though it avoids fabricating an answer."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 1,
+          "rationale": "The agent only returns a disambiguation prompt listing finding labels without any explanation of why shared devices are a risk, omitting the required graph facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0), though it avoids fabricating an answer."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 1,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "failed",
+        "investigation_id": "INV-4ab86eed101e",
+        "task_id": "TASK-b6b47deafe0b",
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 53063
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S05": {
+      "scenario_id": "S05",
+      "status": "PASS",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F3",
+          "observed": "F3",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "finding_drilldown",
+          "observed": "['signal_explain', 'finding_drilldown']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:7",
+          "expected": "7",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:W000087",
+          "expected": "W000087",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:W000089",
+          "expected": "W000089",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:withdrawal",
+          "expected": "withdrawal",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:例如",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:top 5",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:证据视图",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:保存在",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:F7",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:High Trading Frequency",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:evidence table",
+          "expected": "evidence table",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:all records",
+          "expected": "all records",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "Response explains the rule threshold (7 withdrawals in 24h exceeding normal pattern) as the reason for the risk flag and lists all 7 withdrawal records including W000087 and W000089, explicitly confirming all records are shown, with no prohibited content."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "Response explains the rule threshold (7 withdrawals in 24h exceeding normal pattern) as the reason for the risk flag and lists all 7 withdrawal records including W000087 and W000089, explicitly confirming all records are shown, with no prohibited content."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "Response explains the rule threshold (7 withdrawals in 24h exceeding normal pattern) as the reason for the risk flag and lists all 7 withdrawal records including W000087 and W000089, explicitly confirming all records are shown, with no prohibited content."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "signal_explain",
+            "outcome": "success",
+            "data": {}
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success",
+            "data": {}
+          }
+        ],
+        "plan_steps": [
+          "explain_signal",
+          "inspect_withdrawals"
+        ],
+        "iteration_count": 1,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-6d7488eb77f0",
+        "task_id": "TASK-a72f218f0391",
+        "focused_finding_id": "F3",
+        "artifacts": [],
+        "duration_ms": 29560
+      },
+      "failure_taxonomy": null,
+      "failure_detail": null
+    }
+  },
+  "summary": {
+    "total_scenarios": 3,
+    "by_status": {
+      "PASS": 2,
+      "FAIL": 1
+    },
+    "scenario_ids_by_status": {
+      "PASS": [
+        "S01",
+        "S05"
+      ],
+      "FAIL": [
+        "S03"
+      ]
+    },
+    "failure_taxonomy": {
+      "target_resolution_failure": 1
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "run_id": "al3-145275ef",
+  "timestamp": "2026-10-03T07:54:09.122591+00:00",
+  "git_commit": "4d00ea4",
+  "model_name": "glm-5.3",
+  "scenario_version": "S01-S18.v1",
+  "rp_data_hash": "d9c3cd69cf18",
+  "baseline_ref": null,
+  "results": {
+    "S01": {
+      "scenario_id": "S01",
+      "status": "ERROR",
+      "hard_gates": [],
+      "llm_judge": [],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": null,
+        "agent_status": null,
+        "investigation_id": null,
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": "name 'B' is not defined"
+    },
+    "S03": {
+      "scenario_id": "S03",
+      "status": "ERROR",
+      "hard_gates": [],
+      "llm_judge": [],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": null,
+        "agent_status": null,
+        "investigation_id": null,
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": "name 'B' is not defined"
+    },
+    "S05": {
+      "scenario_id": "S05",
+      "status": "ERROR",
+      "hard_gates": [],
+      "llm_judge": [],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": null,
+        "agent_status": null,
+        "investigation_id": null,
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": "name 'B' is not defined"
+    }
+  },
+  "summary": {
+    "total_scenarios": 3,
+    "by_status": {
+      "ERROR": 3
+    },
+    "scenario_ids_by_status": {
+      "ERROR": [
+        "S01",
+        "S03",
+        "S05"
+      ]
+    },
+    "failure_taxonomy": {}
+  }
+}
