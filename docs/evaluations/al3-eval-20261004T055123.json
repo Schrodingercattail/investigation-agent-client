@@ -1,0 +1,1889 @@
+{
+  "run_id": "al3-baseline-88353ca9",
+  "timestamp": "2026-10-04T05:51:23.284921+00:00",
+  "git_commit": "88e0494",
+  "model_name": "glm-5.3",
+  "scenario_version": "S01-S18.v1",
+  "rp_data_hash": "67dde9de7d50",
+  "baseline_ref": null,
+  "results": {
+    "S01": {
+      "scenario_id": "S01",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "risk_case_fetch",
+          "observed": "['risk_case_fetch', 'risk_case_fetch', 'risk_case_fetch', 'artifact_bundle', 'artifact_bundle', 'artifact_bundle']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:findings",
+          "expected": "findings",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:U00010",
+          "expected": "U00010",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:wrong case",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:U00299",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:case overview",
+          "expected": "case overview",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 1,
+          "rationale": "The response only reports runtime metadata (step statuses, finding count, artifact ID) without delivering the requested case 00010 overview or actual findings content, and it never acknowledges that the substantive case details are missing or why."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 0,
+          "rationale": "The response only reports runtime metadata (step statuses, finding count, artifact ID) without delivering the requested case 00010 overview or actual findings content, and it never acknowledges that the substantive case details are missing or why."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 1,
+          "rationale": "The response only reports runtime metadata (step statuses, finding count, artifact ID) without delivering the requested case 00010 overview or actual findings content, and it never acknowledges that the substantive case details are missing or why."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "risk_case_fetch",
+            "outcome": "success"
+          },
+          {
+            "name": "risk_case_fetch",
+            "outcome": "success"
+          },
+          {
+            "name": "risk_case_fetch",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-91cc4e463e46",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S02": {
+      "scenario_id": "S02",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "case_intake",
+          "observed": "['risk_case_fetch', 'risk_case_fetch', 'risk_case_fetch', 'artifact_bundle', 'artifact_bundle', 'artifact_bundle']",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:8 findings",
+          "expected": "8 findings",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:U00010",
+          "expected": "U00010",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:wrong case",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 1,
+          "rationale": "The response reports investigation completion with finding_count=8 (covering the '8 findings' fact) but omits the case identifier U00010, presents only runtime metadata (steps, statuses, artifact IDs) without explaining findings in user language, and does not acknowledge what information is unavailable."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 0,
+          "rationale": "The response reports investigation completion with finding_count=8 (covering the '8 findings' fact) but omits the case identifier U00010, presents only runtime metadata (steps, statuses, artifact IDs) without explaining findings in user language, and does not acknowledge what information is unavailable."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 1,
+          "rationale": "The response reports investigation completion with finding_count=8 (covering the '8 findings' fact) but omits the case identifier U00010, presents only runtime metadata (steps, statuses, artifact IDs) without explaining findings in user language, and does not acknowledge what information is unavailable."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "risk_case_fetch",
+            "outcome": "success"
+          },
+          {
+            "name": "risk_case_fetch",
+            "outcome": "success"
+          },
+          {
+            "name": "risk_case_fetch",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-b5873a97dc7a",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "tool_selection_failure",
+      "failure_detail": null
+    },
+    "S03": {
+      "scenario_id": "S03",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F5",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "signal_explain",
+          "observed": "[]",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "clarification_needed",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:Cluster_device_sharing_1",
+          "expected": "Cluster_device_sharing_1",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:DEV8Z1O4A35QU",
+          "expected": "DEV8Z1O4A35QU",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:80.0",
+          "expected": "80.0",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:rule-based detection",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:例如",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:why explanation",
+          "expected": "why explanation",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:graph facts",
+          "expected": "graph facts",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 0,
+          "rationale": "The agent honestly states the investigation is blocked and why (ambiguous match between two findings), but provides no answer or explanation for why shared devices are a risk item, omitting all required facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0)."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 0,
+          "rationale": "The agent honestly states the investigation is blocked and why (ambiguous match between two findings), but provides no answer or explanation for why shared devices are a risk item, omitting all required facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0)."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The agent honestly states the investigation is blocked and why (ambiguous match between two findings), but provides no answer or explanation for why shared devices are a risk item, omitting all required facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0)."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": "clarification_needed",
+        "agent_status": "blocked",
+        "investigation_id": "INV-ba20f929e310",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S04": {
+      "scenario_id": "S04",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F1",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "signal_explain",
+          "observed": "['signal_explain', 'signal_explain', 'signal_explain', 'policy_lookup', 'policy_lookup', 'policy_lookup']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:99.41",
+          "expected": "99.41",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:LightGBM",
+          "expected": "LightGBM",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:机器学习",
+          "expected": "机器学习",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:不是校准过的欺诈概率",
+          "expected": "不是校准过的欺诈概率",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:不能准确断言某一个具体特征贡献了多少分",
+          "expected": "不能准确断言某一个具体特征贡献了多少分",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:ML Factors",
+          "expected": "ML Factors",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:Investigation_and_Action_SOP",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:Links to Known Risky Clusters",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:因为共享设备所以99.41",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:因为高频交易所以99.41",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:ML definition",
+          "expected": "ML definition",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:score semantics",
+          "expected": "score semantics",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:feature context",
+          "expected": "feature context",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:attribution boundary",
+          "expected": "attribution boundary",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "The response covers all required facts (99.41, LightGBM, 机器学习, non-calibrated probability, attribution limitation, ML Factors), includes all expected elements (ML definition, score semantics, feature context, attribution boundary), and avoids prohibited content, while clearly stating what is and is not available and why."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "The response covers all required facts (99.41, LightGBM, 机器学习, non-calibrated probability, attribution limitation, ML Factors), includes all expected elements (ML definition, score semantics, feature context, attribution boundary), and avoids prohibited content, while clearly stating what is and is not available and why."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The response covers all required facts (99.41, LightGBM, 机器学习, non-calibrated probability, attribution limitation, ML Factors), includes all expected elements (ML definition, score semantics, feature context, attribution boundary), and avoids prohibited content, while clearly stating what is and is not available and why."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "policy_lookup",
+            "outcome": "success"
+          },
+          {
+            "name": "policy_lookup",
+            "outcome": "success"
+          },
+          {
+            "name": "policy_lookup",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-d7e838304d78",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S05": {
+      "scenario_id": "S05",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F3",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "finding_drilldown",
+          "observed": "['signal_explain', 'signal_explain', 'signal_explain', 'finding_drilldown', 'finding_drilldown', 'finding_drilldown']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:7",
+          "expected": "7",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:W000087",
+          "expected": "W000087",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:W000089",
+          "expected": "W000089",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:withdrawal",
+          "expected": "withdrawal",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:例如",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:top 5",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:证据视图",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:保存在",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:F7",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:High Trading Frequency",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:evidence table",
+          "expected": "evidence table",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:all records",
+          "expected": "all records",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "The response explains the causal reason (7 withdrawals in 24h exceeding the system threshold/rule), provides the complete evidence table with all 7 withdrawal records including W000087 and W000089, explicitly confirms these are all records from the Risk Platform, and contains no prohibited content."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "The response explains the causal reason (7 withdrawals in 24h exceeding the system threshold/rule), provides the complete evidence table with all 7 withdrawal records including W000087 and W000089, explicitly confirms these are all records from the Risk Platform, and contains no prohibited content."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The response explains the causal reason (7 withdrawals in 24h exceeding the system threshold/rule), provides the complete evidence table with all 7 withdrawal records including W000087 and W000089, explicitly confirms these are all records from the Risk Platform, and contains no prohibited content."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-4f646d6684b4",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S06": {
+      "scenario_id": "S06",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F7",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "signal_explain",
+          "observed": "['signal_explain', 'signal_explain', 'signal_explain', 'finding_drilldown', 'finding_drilldown', 'finding_drilldown']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:Trade frequency (24h) = 54",
+          "expected": "Trade frequency (24h) = 54",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:T00",
+          "expected": "T00",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:transaction record",
+          "expected": "transaction record",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:withdrawal record",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:W000087",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:F3",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:High Withdrawal Frequency",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:why explanation",
+          "expected": "why explanation",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:evidence table",
+          "expected": "evidence table",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "回答直接回应了两个要求：解释了高频交易风险项的原因（24小时内54笔交易属于异常活跃水平，且结合6天账龄的新账户作为佐证），并输出了带T00前缀记录ID的交易明细证据表；同时诚实说明了仅显示64条中的前20条及原因（对话显示上限），且未包含任何提现记录或W000087等禁用内容。"
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "回答直接回应了两个要求：解释了高频交易风险项的原因（24小时内54笔交易属于异常活跃水平，且结合6天账龄的新账户作为佐证），并输出了带T00前缀记录ID的交易明细证据表；同时诚实说明了仅显示64条中的前20条及原因（对话显示上限），且未包含任何提现记录或W000087等禁用内容。"
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "回答直接回应了两个要求：解释了高频交易风险项的原因（24小时内54笔交易属于异常活跃水平，且结合6天账龄的新账户作为佐证），并输出了带T00前缀记录ID的交易明细证据表；同时诚实说明了仅显示64条中的前20条及原因（对话显示上限），且未包含任何提现记录或W000087等禁用内容。"
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-048bae93c234",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S07": {
+      "scenario_id": "S07",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F5",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "clarification_needed",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:Cluster_device_sharing_1",
+          "expected": "Cluster_device_sharing_1",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:DEV8Z1O4A35QU",
+          "expected": "DEV8Z1O4A35QU",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:wrong finding",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:why explanation",
+          "expected": "why explanation",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 0,
+          "rationale": "The agent honestly acknowledged the ambiguity and stated exactly why it could not proceed (request matched multiple findings F5/F6), but it provided no substantive answer or why-explanation for why shared devices are a risk, omitting required facts like Cluster_device_sharing_1 and DEV8Z1O4A35QU."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 0,
+          "rationale": "The agent honestly acknowledged the ambiguity and stated exactly why it could not proceed (request matched multiple findings F5/F6), but it provided no substantive answer or why-explanation for why shared devices are a risk, omitting required facts like Cluster_device_sharing_1 and DEV8Z1O4A35QU."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The agent honestly acknowledged the ambiguity and stated exactly why it could not proceed (request matched multiple findings F5/F6), but it provided no substantive answer or why-explanation for why shared devices are a risk, omitting required facts like Cluster_device_sharing_1 and DEV8Z1O4A35QU."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": "clarification_needed",
+        "agent_status": "blocked",
+        "investigation_id": "INV-0337b74d250e",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S08": {
+      "scenario_id": "S08",
+      "status": "PASS",
+      "hard_gates": [
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "related_account_analysis",
+          "observed": "['related_account_analysis', 'related_account_analysis', 'related_account_analysis']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:18",
+          "expected": "18",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:U00004",
+          "expected": "U00004",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:U00337",
+          "expected": "U00337",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:DEV8Z1O4A35QU",
+          "expected": "DEV8Z1O4A35QU",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:不能证明这些账号之间存在违规或恶意意图",
+          "expected": "不能证明这些账号之间存在违规或恶意意图",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:10 个关联账号",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:只包含其中 5 个",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:showing 5 of 10",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:why explanation",
+          "expected": "why explanation",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:account list",
+          "expected": "account list",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:relationship boundary",
+          "expected": "relationship boundary",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "The response directly lists all 18 related accounts with the shared device DEV8Z1O4A35QU, explains why the relationship is flagged (device_sharing detection, cluster details, risk score), and explicitly acknowledges the data cannot prove wrongdoing or malicious intent, matching all key facts and avoiding prohibited content."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "The response directly lists all 18 related accounts with the shared device DEV8Z1O4A35QU, explains why the relationship is flagged (device_sharing detection, cluster details, risk score), and explicitly acknowledges the data cannot prove wrongdoing or malicious intent, matching all key facts and avoiding prohibited content."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The response directly lists all 18 related accounts with the shared device DEV8Z1O4A35QU, explains why the relationship is flagged (device_sharing detection, cluster details, risk score), and explicitly acknowledges the data cannot prove wrongdoing or malicious intent, matching all key facts and avoiding prohibited content."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "related_account_analysis",
+            "outcome": "success"
+          },
+          {
+            "name": "related_account_analysis",
+            "outcome": "success"
+          },
+          {
+            "name": "related_account_analysis",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 1,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-7b4ea9c767f8",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": null
+    },
+    "S09": {
+      "scenario_id": "S09",
+      "status": "PASS",
+      "hard_gates": [
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "cross_account_trade_analysis",
+          "observed": "['cross_account_trade_analysis', 'cross_account_trade_analysis', 'cross_account_trade_analysis', 'artifact_bundle', 'artifact_bundle', 'artifact_bundle']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:CATA-001",
+          "expected": "CATA-001",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:预算限制",
+          "expected": "预算限制",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:不构成对操纵或交易意图的结论",
+          "expected": "不构成对操纵或交易意图的结论",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:artifact_bundle: success",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:conclusion",
+          "expected": "conclusion",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:criteria",
+          "expected": "criteria",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:boundedness",
+          "expected": "boundedness",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:candidate table",
+          "expected": "candidate table",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": -1,
+          "rationale": "judge unavailable"
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": -1,
+          "rationale": "judge unavailable"
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": -1,
+          "rationale": "judge unavailable"
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "cross_account_trade_analysis",
+            "outcome": "success"
+          },
+          {
+            "name": "cross_account_trade_analysis",
+            "outcome": "success"
+          },
+          {
+            "name": "cross_account_trade_analysis",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          },
+          {
+            "name": "artifact_bundle",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-994e607f72e7",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": null
+    },
+    "S10": {
+      "scenario_id": "S10",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F5",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "bounded_data",
+          "observed": "goal_satisfied",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:数据边界",
+          "expected": "数据边界",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:不能把现有摘要",
+          "expected": "不能把现有摘要",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:全部明细",
+          "expected": "全部明细",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:conclusive empty",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:全部明细已提供",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:graph facts",
+          "expected": "graph facts",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:data boundary",
+          "expected": "data boundary",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "The response directly answers why device sharing is a risk (account linkage via graph cluster detection with score 80.0), provides the confirmed device DEV8Z1O4A35QU and related accounts, and explicitly states the data boundary—that record-level evidence returned zero records so the summary cannot be described as '全部明细'—covering all required facts without prohibited claims."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "The response directly answers why device sharing is a risk (account linkage via graph cluster detection with score 80.0), provides the confirmed device DEV8Z1O4A35QU and related accounts, and explicitly states the data boundary—that record-level evidence returned zero records so the summary cannot be described as '全部明细'—covering all required facts without prohibited claims."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The response directly answers why device sharing is a risk (account linkage via graph cluster detection with score 80.0), provides the confirmed device DEV8Z1O4A35QU and related accounts, and explicitly states the data boundary—that record-level evidence returned zero records so the summary cannot be described as '全部明细'—covering all required facts without prohibited claims."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 3,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-70d5a981ab4e",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S11": {
+      "scenario_id": "S11",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "context_unresolved",
+          "observed": "clarification_needed",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:finding_drilldown",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:signal_explain",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:artifact_bundle",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:honest unresolved message",
+          "expected": "honest unresolved message",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": "clarification_needed",
+        "agent_status": "blocked",
+        "investigation_id": "INV-fca18554a675",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "convergence_failure",
+      "failure_detail": null
+    },
+    "S12": {
+      "scenario_id": "S12",
+      "status": "PASS",
+      "hard_gates": [
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_capability",
+          "expected": "related_account_analysis",
+          "observed": "['related_account_analysis', 'related_account_analysis', 'related_account_analysis']",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:18",
+          "expected": "18",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:为什么是风险信号",
+          "expected": "为什么是风险信号",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:不能证明这些账号之间存在违规或恶意意图",
+          "expected": "不能证明这些账号之间存在违规或恶意意图",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:10 个关联账号",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:why explanation",
+          "expected": "why explanation",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:account list",
+          "expected": "account list",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "The response directly answers both parts of the question by explaining why the relationship is a risk signal (device_sharing detection, cluster with risk score 80.0, shared device DEV8Z1O4A35QU), correctly lists all 18 related accounts, and explicitly acknowledges that the data cannot prove violations or malicious intent among these accounts."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "The response directly answers both parts of the question by explaining why the relationship is a risk signal (device_sharing detection, cluster with risk score 80.0, shared device DEV8Z1O4A35QU), correctly lists all 18 related accounts, and explicitly acknowledges that the data cannot prove violations or malicious intent among these accounts."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The response directly answers both parts of the question by explaining why the relationship is a risk signal (device_sharing detection, cluster with risk score 80.0, shared device DEV8Z1O4A35QU), correctly lists all 18 related accounts, and explicitly acknowledges that the data cannot prove violations or malicious intent among these accounts."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "related_account_analysis",
+            "outcome": "success"
+          },
+          {
+            "name": "related_account_analysis",
+            "outcome": "success"
+          },
+          {
+            "name": "related_account_analysis",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 1,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-72120ae37580",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": null
+    },
+    "S13": {
+      "scenario_id": "S13",
+      "status": "SKIPPED",
+      "hard_gates": [],
+      "llm_judge": [],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": null,
+        "agent_status": null,
+        "investigation_id": null,
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": "No-key scenario: requires no-key backend"
+    },
+    "S14": {
+      "scenario_id": "S14",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F3",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_stop_reason",
+          "expected": "goal_satisfied",
+          "observed": "goal_satisfied",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:7",
+          "expected": "7",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:W000087",
+          "expected": "W000087",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:withdrawal",
+          "expected": "withdrawal",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:例如",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "answer_element:evidence table",
+          "expected": "evidence table",
+          "observed": "expected",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 2,
+          "rationale": "The response directly answers both parts of the question by explaining that 7 withdrawals in 24 hours exceeded the rule threshold (citing the rule description) and providing a complete evidence table containing all 7 records including W000087, explicitly asserting these are all the authoritative Risk Platform records without prohibited content."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 2,
+          "rationale": "The response directly answers both parts of the question by explaining that 7 withdrawals in 24 hours exceeded the rule threshold (citing the rule description) and providing a complete evidence table containing all 7 records including W000087, explicitly asserting these are all the authoritative Risk Platform records without prohibited content."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The response directly answers both parts of the question by explaining that 7 withdrawals in 24 hours exceeded the rule threshold (citing the rule description) and providing a complete evidence table containing all 7 records including W000087, explicitly asserting these are all the authoritative Risk Platform records without prohibited content."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "signal_explain",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          },
+          {
+            "name": "finding_drilldown",
+            "outcome": "success"
+          }
+        ],
+        "plan_steps": [],
+        "iteration_count": 2,
+        "stop_reason": "goal_satisfied",
+        "agent_status": "completed",
+        "investigation_id": "INV-b35c29b94bd5",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S15": {
+      "scenario_id": "S15",
+      "status": "SKIPPED",
+      "hard_gates": [],
+      "llm_judge": [],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": null,
+        "agent_status": null,
+        "investigation_id": null,
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": "Deterministic scenario: requires fixture harness"
+    },
+    "S16": {
+      "scenario_id": "S16",
+      "status": "SKIPPED",
+      "hard_gates": [],
+      "llm_judge": [],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": null,
+        "agent_status": null,
+        "investigation_id": null,
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": "Deterministic scenario: requires fixture harness"
+    },
+    "S17": {
+      "scenario_id": "S17",
+      "status": "FAIL",
+      "hard_gates": [
+        {
+          "check_id": "expected_finding",
+          "expected": "F3",
+          "observed": "None",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "expected_case",
+          "expected": "U00010",
+          "observed": "U00010",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:Withdrawal frequency (24h) = 7",
+          "expected": "Withdrawal frequency (24h) = 7",
+          "observed": "ABSENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "key_fact:withdrawal",
+          "expected": "withdrawal",
+          "observed": "present",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:Trade frequency (24h)",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited:F7",
+          "expected": "absent",
+          "observed": "PRESENT",
+          "passed": false,
+          "detail": ""
+        },
+        {
+          "check_id": "prohibited_claim:graph-based risk detection",
+          "expected": "absent",
+          "observed": "absent",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "llm_judge": [
+        {
+          "dimension": "answer_addresses_question",
+          "score": 0,
+          "rationale": "The agent provides no answer to the risk-signal question (no mention of withdrawal frequency 24h = 7, and even surfaces prohibited F7/Trade Frequency content as a candidate), offering only runtime clarification metadata as explanation, but it is fully transparent that the investigation is blocked, why (ambiguous finding reference), and what candidates exist."
+        },
+        {
+          "dimension": "explanation_quality",
+          "score": 0,
+          "rationale": "The agent provides no answer to the risk-signal question (no mention of withdrawal frequency 24h = 7, and even surfaces prohibited F7/Trade Frequency content as a candidate), offering only runtime clarification metadata as explanation, but it is fully transparent that the investigation is blocked, why (ambiguous finding reference), and what candidates exist."
+        },
+        {
+          "dimension": "honesty_insufficiency",
+          "score": 2,
+          "rationale": "The agent provides no answer to the risk-signal question (no mention of withdrawal frequency 24h = 7, and even surfaces prohibited F7/Trade Frequency content as a candidate), offering only runtime clarification metadata as explanation, but it is fully transparent that the investigation is blocked, why (ambiguous finding reference), and what candidates exist."
+        }
+      ],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": "clarification_needed",
+        "agent_status": "blocked",
+        "investigation_id": "INV-4e4e5a922563",
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": "target_resolution_failure",
+      "failure_detail": null
+    },
+    "S18": {
+      "scenario_id": "S18",
+      "status": "SKIPPED",
+      "hard_gates": [],
+      "llm_judge": [],
+      "diagnostics": {},
+      "trace": {
+        "tool_calls": [],
+        "plan_steps": [],
+        "iteration_count": 0,
+        "stop_reason": null,
+        "agent_status": null,
+        "investigation_id": null,
+        "task_id": null,
+        "focused_finding_id": null,
+        "artifacts": [],
+        "duration_ms": 0
+      },
+      "failure_taxonomy": null,
+      "failure_detail": "Deterministic scenario: requires fixture harness"
+    }
+  },
+  "summary": {
+    "total_scenarios": 18,
+    "by_status": {
+      "FAIL": 11,
+      "PASS": 3,
+      "SKIPPED": 4
+    },
+    "scenario_ids_by_status": {
+      "FAIL": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S07",
+        "S10",
+        "S11",
+        "S14",
+        "S17"
+      ],
+      "PASS": [
+        "S08",
+        "S09",
+        "S12"
+      ],
+      "SKIPPED": [
+        "S13",
+        "S15",
+        "S16",
+        "S18"
+      ]
+    },
+    "failure_taxonomy": {
+      "target_resolution_failure": 9,
+      "tool_selection_failure": 1,
+      "convergence_failure": 1
+    }
+  }
+}

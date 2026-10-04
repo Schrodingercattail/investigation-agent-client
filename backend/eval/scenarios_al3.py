@@ -11,6 +11,11 @@ from eval.ground_truth import (
 QUALITY = "al3_quality"
 REGRESSION = "al2_regression"
 
+# AL-3.2: execution_mode is a formal execution contract, not metadata.
+# The runner MUST dispatch based on this field; invalid values must
+# produce a clear error, never a silent fallback to loop.
+VALID_EXECUTION_MODES = {"turn", "loop", "no_key_loop", "deterministic"}
+
 
 @dataclass
 class AL3Scenario:

@@ -71,8 +71,19 @@ class AL3Runner:
         }
 
     def execute(self, scenario) -> TraceSummary:
-        """Execute one scenario and capture the trace."""
+        """Execute one scenario and capture the trace.
+
+        AL-3.2: execution_mode is a formal dispatch contract. Invalid or
+        missing modes produce a clear error — never a silent fallback
+        to the loop path.
+        """
         start = time.time()
+        mode = getattr(scenario, "execution_mode", None)
+        if mode not in ("turn", "loop", "no_key_loop", "deterministic"):
+            raise ValueError(
+                f"scenario {scenario.scenario_id!r} has invalid "
+                f"execution_mode {mode!r}; expected one of "
+                f"['turn', 'loop', 'no_key_loop', 'deterministic']")
         ctx = scenario.initial_context
         case_id = ctx.get("case_id", "U00010")
         iid = self._create_investigation(case_id)
@@ -116,10 +127,16 @@ class AL3Runner:
         focus = None
         # try to get focus from context
         try:
-            inv_data = self.client.get(
-                f"{self.backend}/api/v2/investigations/{iid}", timeout=15).json()
-            ctx_data = inv_data.get("context") or {}
-            focus = ctx_data.get("focused_finding_id")
+            if loop_info.get("agent_status") in ("completed", "blocked",
+                                                  "failed",
+                                                  "stopped_by_limit"):
+                # AL-3.3: focus source of truth for loop scenarios is
+                # AgentLoopState (Activity projection), NOT the
+                # InvestigationContext.
+                act = self.client.get(
+                    f"{self.backend}/api/v2/tasks/{tid}/activity",
+                    timeout=15).json()
+                focus = act.get("focused_finding_id")
         except Exception:
             pass
 
