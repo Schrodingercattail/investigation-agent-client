@@ -318,6 +318,8 @@ def project_observation(
                     "attribution_available"),
                 "available_feature_values": dict(
                     list(features.items())[:12]),
+                # AL-2.14: Feature-type explanation fields (F7-class)
+                "feature_facts": explanation.get("features") or [],
                 # AL-2.12: graph facts belong to the answer too (F5-class)
                 "cluster_name": graph.get("cluster_name"),
                 "detection_type": graph.get("detection_type"),
@@ -1730,6 +1732,18 @@ def _signal_answer_lines(s: dict[str, Any]) -> list[str]:
         if accounts:
             lines.append("相关账号:" + ", ".join(str(a) for a in accounts)
                          + "。")
+        return lines
+    if s.get("feature_facts"):
+        feats = s["feature_facts"]
+        shown = ", ".join(
+            f"{_feature_label(f.get('name', ''))} = {f.get('value', '')}"
+            for f in feats[:5] if isinstance(f, dict) and f.get("name"))
+        more = (f"（共 {len(feats)} 项）" if len(feats) > 5 else "")
+        lines.append("风险信号:行为特征检测发现该账号存在异常行为模式 — "
+                     + (f"观测到 {shown}{more}。" if shown else ""))
+        lines.append("该账号的实际行为特征值是 Risk Platform 标记此风险"
+                     "发现的依据。当前 RP 数据不提供特征归因,因此不能"
+                     "断言某一个具体特征贡献了多少分。")
         return lines
     return lines
 
