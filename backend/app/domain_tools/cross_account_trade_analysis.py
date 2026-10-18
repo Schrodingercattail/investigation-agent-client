@@ -27,12 +27,25 @@ Matching (frozen V1): distinct accounts · same symbol · opposite side ·
 1_to_1 / 1_to_N / N_to_1 only (single anchor, greedy timestamp-order
 accumulation, leg cap, no backtracking) · every transaction id appears
 in at most one candidate.
+
+Target-account scope (Case-4 correction): the case account is the
+ANALYSIS TARGET. Its own transactions are retrieved completely (within
+budget) as the anchor universe; counterparty (cluster-connected)
+transactions are retrieved bounded to the time window matching can
+reach; and only target-anchored candidates are computed - every emitted
+candidate contains at least one target transaction, so global pairs
+between unrelated accounts can never be presented as the target
+account's cross-account evidence. The authoritative same-account
+opposite_trade_ratio feature is echoed (best-effort) so the same-account
+signal and the cross-account analysis stay explicitly distinct
+(baseline S8).
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta as _timedelta
 from typing import Any
 
+from app.adapters.risk_platform import RiskPlatformAdapter
 from app.models import (
     EvidenceRef,
     ToolError,
@@ -179,6 +192,7 @@ def _value_matches(v_anchor: float, v_sum: float, cfg: dict[str, float]) -> bool
 def find_candidates(
     records: list[AccountTransaction],
     config: dict[str, Any],
+    target_account: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Deterministic V1 matching over normalized records.
 
@@ -192,6 +206,16 @@ def find_candidates(
     individually, ≤ max_legs, no backtracking). Consumed transactions
     never anchor again and never join another candidate. Unparseable-
     timestamp records are excluded (surfaced in data quality).
+
+    ``target_account``: when set, only records of THIS account may
+    anchor a candidate (case-account-anchored analysis — every emitted
+    candidate then contains at least one target transaction by
+    construction, so unrelated global pairs can never be presented as
+    the target account's cross-account evidence). Legs may still come
+    from any other in-scope account; all §5 matching rules (distinct
+    accounts, same symbol, opposite side, time delta, value tolerance,
+    bounded aggregation, single-use consumption) are unchanged. None
+    keeps the legacy every-record-may-anchor behavior.
     """
     max_delta = float(config["max_time_delta_seconds"])
     max_legs = int(config["max_legs_per_candidate"])
@@ -213,6 +237,8 @@ def find_candidates(
     for anchor in ordered:
         if anchor.transaction_id in consumed:
             continue
+        if target_account is not None and anchor.account_id != target_account:
+            continue                     # target-anchored: only the target
         anchor_ts = _parse_ts(anchor.timestamp)
         anchor_side = _side_key(anchor.side)
         if not anchor_side:
@@ -296,10 +322,21 @@ def find_candidates(
 # Tool
 # ---------------------------------------------------------------------------
 
+# Governed analysis scopes (system-selected, never LLM-chosen):
+# - "target_account": Case-4 semantics — every candidate must contain the
+#   case account (the analysis target).
+# - "related_account_set": the user asked for hedging WITHIN a named
+#   related-account population. The analysis set is
+#   S = {case account} ∪ {authoritative related accounts}; candidate
+#   pairs may involve the case account or only two related members.
+ANALYSIS_SCOPES = ("target_account", "related_account_set")
+
+
 def cross_account_trade_analysis(
     case_id: str,
     finding_id: str | None = None,
     analysis_type: str = ANALYSIS_TYPE,
+    analysis_scope: str = "target_account",
     adapter: Any | None = None,
     config: Any | None = None,
 ) -> ToolResult:
@@ -333,6 +370,10 @@ def cross_account_trade_analysis(
         return _validation_error(
             f"analysis_type {analysis_type!r} is not supported; the only "
             f"registered analysis is {ANALYSIS_TYPE!r}.")
+    if analysis_scope not in ANALYSIS_SCOPES:
+        return _validation_error(
+            f"analysis_scope {analysis_scope!r} is not supported; the "
+            f"registered scopes are {list(ANALYSIS_SCOPES)}.")
     finding_id = finding_id.strip() if isinstance(finding_id, str) \
         and finding_id.strip() else None
 
@@ -365,55 +406,320 @@ def cross_account_trade_analysis(
             ),
         )
 
-    # --- bounded retrieval through the §12a contract ------------------------
-    retrieval: TradeEvidenceRetrieval = retrieve_trade_evidence(
+    # --- target-anchored bounded retrieval (two §12a streams) ---------------
+    # The analysis question is whether THE CASE ACCOUNT hedges with other
+    # accounts, so the case account is the ANALYSIS TARGET: its own
+    # transaction set is the anchor universe and must be retrieved
+    # COMPLETELY (within budget) — a shared global retrieval window can
+    # truncate the target's own records away and would let unrelated
+    # pairs stand in for target evidence. Two bounded streams:
+    #
+    # 1. the target account's own transactions (complete within budget);
+    # 2. the counterparty (cluster-connected) transactions, bounded to
+    #    the time window matching can reach: [min_target_ts − Δ,
+    #    max_target_ts + Δ] over the target's parseable timestamps. A leg
+    #    outside that window can never satisfy |Δt| ≤ Δ with any target
+    #    anchor, so the window loses zero reachable pairs while keeping
+    #    the counterparty retrieval complete-for-purpose in normal data.
+    target_account = case_id
+    target_retrieval: TradeEvidenceRetrieval = retrieve_trade_evidence(
         TradeEvidenceQuery(
             case_id=case_id,
-            account_ids=sorted(scope.allowed),
+            account_ids=[target_account],
         ),
         adapter=adapter,
         allowed_accounts=scope.allowed,
         config=config,
     )
 
-    def _payload(**extra: Any) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "analysis": "cross_account_trade_analysis",
-            "analysis_type": ANALYSIS_TYPE,
-            "case_id": case_id,
-            "finding_id": finding_id,
-            "accounts_analyzed": sorted(scope.allowed),
-            "config": matching_config,
-            "retrieval": {
-                "status": retrieval.status.value,
-                "truncated": retrieval.status == RetrievalStatus.TRUNCATED,
-                "truncated_reasons": list(retrieval.truncated_reasons),
-            },
-            "totals": {
-                "transactions_retrieved": len(retrieval.records),
-                "total_matched": retrieval.total_matched,
-                "pages_fetched": retrieval.pages_fetched,
-            },
-        }
-        payload.update(extra)
-        return payload
-
-    # Retrieval failure is an ERROR — never absence of data.
-    if retrieval.status == RetrievalStatus.ERROR:
-        err = retrieval.error
+    def _stream_error(stream: str, ret: TradeEvidenceRetrieval) -> ToolResult:
+        err = ret.error
         return ToolResult(
             outcome=ToolResultOutcome.INTEGRATION_ERROR,
             error=ToolError(
                 code=err.code if err else "RISK_PLATFORM_ERROR",
                 message=(
                     "The cross-account trade analysis could not retrieve "
-                    f"transaction evidence for case {case_id}: "
+                    f"the {stream} transaction evidence for case {case_id}: "
                     f"{err.message if err else 'unknown retrieval failure'}"),
                 detail=dict(err.detail) if err else {},
             ),
         )
 
-    if not retrieval.records:
+    if analysis_scope == "related_account_set":
+        # SET-INTERNAL analysis: every member of S = {case account} ∪
+        # {related accounts} is an equal analysis candidate — candidate
+        # pairs may involve the case account or only two related
+        # members. One bounded union retrieval over the whole set
+        # (truncation honestly flagged; a partial set can never support
+        # a set-wide no-match), then unanchored matching restricted to
+        # the retrieved set (both legs of every pair are S members by
+        # construction - accounts outside S are never retrieved).
+        set_retrieval: TradeEvidenceRetrieval = retrieve_trade_evidence(
+            TradeEvidenceQuery(
+                case_id=case_id,
+                account_ids=sorted(scope.allowed),
+            ),
+            adapter=adapter,
+            allowed_accounts=scope.allowed,
+            config=config,
+        )
+        if set_retrieval.status == RetrievalStatus.ERROR:
+            return _stream_error("account set", set_retrieval)
+
+        records = []
+        seen_ids: set[str] = set()
+        duplicates_dropped = 0
+        for r in set_retrieval.records:
+            if r.transaction_id in seen_ids:
+                duplicates_dropped += 1
+                continue
+            seen_ids.add(r.transaction_id)
+            records.append(r)
+        truncated_reasons = [
+            f"account_set:{reason}"
+            for reason in set_retrieval.truncated_reasons]
+        merged_truncated = (
+            set_retrieval.status == RetrievalStatus.TRUNCATED)
+        merged_status = (
+            RetrievalStatus.TRUNCATED if merged_truncated
+            else (RetrievalStatus.NO_DATA
+                  if not records
+                  and not (set_retrieval.total_matched or 0)
+                  else RetrievalStatus.COMPLETE))
+
+        def _set_stream_echo(ret: TradeEvidenceRetrieval) -> dict[str, Any]:
+            return {
+                "status": ret.status.value,
+                "truncated": ret.status == RetrievalStatus.TRUNCATED,
+                "transactions_retrieved": len(ret.records),
+                "total_matched": ret.total_matched,
+            }
+
+        def _payload(**extra: Any) -> dict[str, Any]:
+            payload: dict[str, Any] = {
+                "analysis": "cross_account_trade_analysis",
+                "analysis_type": ANALYSIS_TYPE,
+                "analysis_scope": analysis_scope,
+                "case_id": case_id,
+                "finding_id": finding_id,
+                "target_account": target_account,
+                "accounts_analyzed": sorted(scope.allowed),
+                "config": matching_config,
+                "retrieval": {
+                    "status": merged_status.value,
+                    "truncated": merged_truncated,
+                    "truncated_reasons": truncated_reasons,
+                    "account_set": {
+                        **_set_stream_echo(set_retrieval),
+                        "accounts_queried": len(scope.allowed),
+                    },
+                },
+                "totals": {
+                    "transactions_retrieved": len(records),
+                    "total_matched": (set_retrieval.total_matched or 0),
+                    "pages_fetched": set_retrieval.pages_fetched,
+                },
+            }
+            payload.update(extra)
+            return payload
+
+        warnings: list[str] = list(set_retrieval.warnings)
+        if not records:
+            payload = _payload(
+                analysis_status="INSUFFICIENT_DATA",
+                evidence_missing=True,
+                data_quality={"records_input": 0},
+                next_data_needed=[
+                    "account-attributed transaction evidence for the "
+                    f"related-account set of {target_account}",
+                ],
+            )
+            return ToolResult(
+                outcome=ToolResultOutcome.SUCCESS,
+                data=payload,
+                next_data_needed=list(payload["next_data_needed"]),
+                warnings=warnings,
+            )
+
+        candidates, engine_dq = find_candidates(records, matching_config)
+        data_quality = {**engine_dq,
+                        "records_duplicate_dropped": duplicates_dropped}
+        found = len(candidates)
+        emitted = candidates[:int(matching_config["max_candidates"])]
+        if found:
+            analysis_status = "MATCH_FOUND"
+        elif merged_truncated:
+            analysis_status = "INSUFFICIENT_DATA"
+        else:
+            analysis_status = "NO_MATCH"
+        payload = _payload(
+            analysis_status=analysis_status,
+            candidates=emitted if found else [],
+            candidates_found=found,
+            candidates_emitted=len(emitted),
+            data_quality=data_quality,
+        )
+        if found > len(emitted):
+            warnings.append(
+                f"{found} candidate relationships were found; the top "
+                f"{len(emitted)} are reported (TRADE_ANALYSIS_MAX_CANDIDATES="
+                f"{matching_config['max_candidates']}).")
+        if merged_truncated and found:
+            warnings.append(
+                "Retrieval was bounded (partial set coverage); candidates "
+                "are valid but absence of further set-internal matches is "
+                "not established.")
+        next_needed = None
+        if analysis_status == "INSUFFICIENT_DATA":
+            payload["evidence_missing"] = True
+            payload["next_data_needed"] = [
+                "complete (non-truncated) transaction evidence for the "
+                "related-account set",
+            ]
+            next_needed = list(payload["next_data_needed"])
+        return ToolResult(
+            outcome=ToolResultOutcome.SUCCESS,
+            data=payload,
+            evidence_refs=[
+                EvidenceRef(kind="transaction", id=tid)
+                for c in emitted
+                for tid in sorted(c["transaction_ids_a"]
+                                  + c["transaction_ids_b"])
+            ],
+            warnings=warnings,
+            next_data_needed=next_needed,
+        )
+
+    # Either stream's retrieval failure is an ERROR — never absence of data.
+    if target_retrieval.status == RetrievalStatus.ERROR:
+        return _stream_error("target account", target_retrieval)
+
+    delta = float(matching_config["max_time_delta_seconds"])
+    target_times = sorted(
+        t for t in (_parse_ts(r.timestamp)
+                    for r in target_retrieval.records)
+        if t is not None)
+    window_start = (target_times[0] - _timedelta(seconds=delta)).isoformat() \
+        if target_times else None
+    window_end = (target_times[-1] + _timedelta(seconds=delta)).isoformat() \
+        if target_times else None
+    counterparty_accounts = sorted(scope.allowed - {target_account})
+    counterparty_retrieval: TradeEvidenceRetrieval = retrieve_trade_evidence(
+        TradeEvidenceQuery(
+            case_id=case_id,
+            account_ids=counterparty_accounts,
+            start_time=window_start,
+            end_time=window_end,
+        ),
+        adapter=adapter,
+        allowed_accounts=scope.allowed,
+        config=config,
+    )
+    if counterparty_retrieval.status == RetrievalStatus.ERROR:
+        return _stream_error("counterparty accounts", counterparty_retrieval)
+
+    # --- merge (populations are disjoint by query; dedupe is a safety net) --
+    records: list[AccountTransaction] = []
+    seen_ids: set[str] = set()
+    duplicates_dropped = 0
+    for r in [*target_retrieval.records, *counterparty_retrieval.records]:
+        if r.transaction_id in seen_ids:
+            duplicates_dropped += 1
+            continue
+        seen_ids.add(r.transaction_id)
+        records.append(r)
+
+    truncated_reasons = [
+        f"target_account:{reason}"
+        for reason in target_retrieval.truncated_reasons
+    ] + [
+        f"counterparty_accounts:{reason}"
+        for reason in counterparty_retrieval.truncated_reasons
+    ]
+    # The stream STATUS is the authoritative truncation flag (§12a);
+    # truncated_reasons are detail and may be empty on a flagged stream.
+    merged_truncated = (
+        target_retrieval.status == RetrievalStatus.TRUNCATED
+        or counterparty_retrieval.status == RetrievalStatus.TRUNCATED)
+    if merged_truncated:
+        merged_status = RetrievalStatus.TRUNCATED
+    elif not records and not (target_retrieval.total_matched or 0) \
+            and not (counterparty_retrieval.total_matched or 0):
+        merged_status = RetrievalStatus.NO_DATA
+    else:
+        merged_status = RetrievalStatus.COMPLETE
+
+    def _stream_echo(ret: TradeEvidenceRetrieval) -> dict[str, Any]:
+        return {
+            "status": ret.status.value,
+            "truncated": ret.status == RetrievalStatus.TRUNCATED,
+            "transactions_retrieved": len(ret.records),
+            "total_matched": ret.total_matched,
+        }
+
+    def _payload(**extra: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "analysis": "cross_account_trade_analysis",
+            "analysis_type": ANALYSIS_TYPE,
+            "analysis_scope": analysis_scope,
+            "case_id": case_id,
+            "finding_id": finding_id,
+            "target_account": target_account,
+            "accounts_analyzed": sorted(scope.allowed),
+            "config": matching_config,
+            "retrieval": {
+                "status": merged_status.value,
+                "truncated": merged_truncated,
+                "truncated_reasons": truncated_reasons,
+                "target": _stream_echo(target_retrieval),
+                "counterparty": {
+                    **_stream_echo(counterparty_retrieval),
+                    "accounts_queried": len(counterparty_accounts),
+                    "time_window": (
+                        {"start": window_start, "end": window_end}
+                        if window_start and window_end else None),
+                },
+            },
+            "totals": {
+                "transactions_retrieved": len(records),
+                "total_matched":
+                    (target_retrieval.total_matched or 0)
+                    + (counterparty_retrieval.total_matched or 0),
+                "pages_fetched": target_retrieval.pages_fetched
+                + counterparty_retrieval.pages_fetched,
+            },
+        }
+        payload.update(extra)
+        return payload
+
+    # Best-effort authoritative account metric (the same-account
+    # opposite_trade_ratio feature): context that keeps the same-account
+    # signal and the cross-account analysis explicitly distinct (baseline
+    # §8). Never gates the analysis; unavailability is surfaced, not fatal.
+    target_metrics: dict[str, Any] | None = None
+    metrics_warning: str | None = None
+    try:
+        evidence = (adapter or RiskPlatformAdapter()).fetch_case_evidence(
+            case_id)
+        ratio = (evidence.get("feature_evidence") or {}).get(
+            "opposite_trade_ratio")
+        if isinstance(ratio, (int, float)):
+            target_metrics = {
+                "opposite_trade_ratio": float(ratio),
+                "source": "risk_platform.feature_evidence",
+            }
+    except Exception as exc:                      # noqa: BLE001 — bounded
+        metrics_warning = (
+            "The authoritative opposite_trade_ratio metric for account "
+            f"{target_account} could not be retrieved: "
+            f"{type(exc).__name__}.")
+
+    warnings: list[str] = []
+    if metrics_warning:
+        warnings.append(metrics_warning)
+
+    if not records:
         # Complete-and-empty or bounded-to-nothing: INSUFFICIENT_DATA —
         # never NO_MATCH (absence from nothing proves nothing) and never
         # an integration error (valid execution, insufficient evidence).
@@ -422,25 +728,34 @@ def cross_account_trade_analysis(
             evidence_missing=True,
             data_quality={"records_input": 0},
             next_data_needed=[
-                "account-attributed transaction evidence for the case's "
-                "connected accounts",
+                "account-attributed transaction evidence for the target "
+                f"account {target_account} and its connected accounts",
             ],
         )
+        if target_metrics:
+            payload["target_account_metrics"] = target_metrics
         return ToolResult(
             outcome=ToolResultOutcome.SUCCESS,
             data=payload,
             next_data_needed=list(payload["next_data_needed"]),
-            warnings=list(retrieval.warnings),
+            warnings=warnings,
         )
 
-    candidates, data_quality = find_candidates(
-        retrieval.records, matching_config)
+    candidates, engine_dq = find_candidates(
+        records, matching_config, target_account=target_account)
+    data_quality = {
+        **engine_dq,
+        "target_transactions_retrieved": len(target_retrieval.records),
+        "counterparty_transactions_retrieved":
+            len(counterparty_retrieval.records),
+        "records_duplicate_dropped": duplicates_dropped,
+    }
     found = len(candidates)
     emitted = candidates[:int(matching_config["max_candidates"])]
 
     if found:
         analysis_status = "MATCH_FOUND"
-    elif retrieval.status == RetrievalStatus.TRUNCATED:
+    elif merged_truncated:
         # Absence within a partial dataset proves nothing (§6 mapping).
         analysis_status = "INSUFFICIENT_DATA"
     else:
@@ -453,13 +768,16 @@ def cross_account_trade_analysis(
         candidates_emitted=len(emitted),
         data_quality=data_quality,
     )
-    warnings = list(retrieval.warnings)
+    if target_metrics:
+        payload["target_account_metrics"] = target_metrics
+    warnings = [*warnings,
+                *target_retrieval.warnings, *counterparty_retrieval.warnings]
     if found > len(emitted):
         warnings.append(
             f"{found} candidate relationships were found; the top "
             f"{len(emitted)} are reported (TRADE_ANALYSIS_MAX_CANDIDATES="
             f"{matching_config['max_candidates']}).")
-    if retrieval.status == RetrievalStatus.TRUNCATED and found:
+    if merged_truncated and found:
         warnings.append(
             "Retrieval was bounded (partial evidence); candidates are "
             "valid but absence of further matches is not established.")

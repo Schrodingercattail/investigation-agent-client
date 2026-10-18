@@ -1,0 +1,589 @@
+{
+ "S01": {
+  "plan_revisions": null,
+  "plan_steps": [],
+  "goal_repr": null,
+  "focus": null,
+  "events": []
+ },
+ "S02": {
+  "plan_revisions": 1,
+  "plan_steps": [
+   [
+    "fetch_case",
+    "success"
+   ],
+   [
+    "generate_artifact",
+    "success"
+   ]
+  ],
+  "goal_repr": null,
+  "focus": null,
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-10a4054d455d (['fetch_case', 'generate_artifact'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "risk_case_fetch",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Case retrieved: 8 findings identified."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "案件数据获取成功，8项发现和10条证据已就绪，下一步生成调查报告的计划仍然有效。",
+    "decision": "CONTINUE",
+    "why": "案件数据获取成功，8项发现和10条证据已就绪，下一步生成调查报告的计划仍然有效。"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "artifact_bundle",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Investigation bundle created (ART-c8e086fc39)."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "证据包已成功生成（10条证据引用、无警告、无待补数据），调查计划的全部步骤已执行完毕，目标达成。",
+    "decision": "STOP",
+    "why": "证据包已成功生成（10条证据引用、无警告、无待补数据），调查计划的全部步骤已执行完毕，目标达成。"
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S03": {
+  "plan_revisions": null,
+  "plan_steps": [],
+  "goal_repr": null,
+  "focus": null,
+  "events": []
+ },
+ "S04": {
+  "plan_revisions": 1,
+  "plan_steps": [
+   [
+    "explain_signal",
+    "success"
+   ],
+   [
+    "retrieve_policy",
+    "success"
+   ]
+  ],
+  "goal_repr": "explain_finding",
+  "focus": "F1",
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-6c337e8a6202 (['explain_signal', 'retrieve_policy'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "signal_explain",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "The available evidence was insufficient for this step."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "信号解释已返回ML分数(LightGBM 99.41)及关键特征值，但回答'为什么是风险'仍需执行剩余的retrieve_policy步骤获取依据。",
+    "decision": "CONTINUE",
+    "why": "信号解释已返回ML分数(LightGBM 99.41)及关键特征值，但回答'为什么是风险'仍需执行剩余的retrieve_policy步骤获取依据。"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "policy_lookup",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Policy review: 4 reference(s) found."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "The signal's meaning was explained and the policy lookup returned matching citat",
+    "decision": "STOP",
+    "why": "The signal's meaning was explained and the policy lookup returned matching citations (ML Factors, ri"
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S05": {
+  "plan_revisions": null,
+  "plan_steps": [],
+  "goal_repr": null,
+  "focus": null,
+  "events": []
+ },
+ "S06": {
+  "plan_revisions": 1,
+  "plan_steps": [
+   [
+    "explain_signal",
+    "success"
+   ],
+   [
+    "inspect_transactions",
+    "success"
+   ]
+  ],
+  "goal_repr": null,
+  "focus": "F7",
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-814b7d08a3c8 (['explain_signal', 'inspect_transactions'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "signal_explain",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Step completed successfully."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "信号解释已确认触发特征为24小时内54笔交易的高频行为，但还需执行inspect_transactions获取具体交易明细才能完整回答问题。",
+    "decision": "CONTINUE",
+    "why": "信号解释已确认触发特征为24小时内54笔交易的高频行为，但还需执行inspect_transactions获取具体交易明细才能完整回答问题。"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "finding_drilldown",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Complete record set reviewed: 64 records."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "The high-frequency trading risk explanation is complete and 64 matching transact",
+    "decision": "STOP",
+    "why": "The high-frequency trading risk explanation is complete and 64 matching transaction records with det"
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S07": {
+  "plan_revisions": 1,
+  "plan_steps": [
+   [
+    "explain_signal",
+    "success"
+   ],
+   [
+    "retrieve_policy",
+    "success"
+   ]
+  ],
+  "goal_repr": "explain_finding",
+  "focus": "F5",
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-eaa66db0afcc (['explain_signal', 'retrieve_policy'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "signal_explain",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Step completed successfully."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "信号解释已返回设备共享聚类数据但规则/评分归因为空，仍需执行策略检索步骤以完整回答共享设备为何构成风险。",
+    "decision": "CONTINUE",
+    "why": "信号解释已返回设备共享聚类数据但规则/评分归因为空，仍需执行策略检索步骤以完整回答共享设备为何构成风险。"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "policy_lookup",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Policy review: 4 reference(s) found."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "信号解释与政策依据（4条匹配引用，含AML可疑指标中设备关联风险集群条款）已足以结论性地回答共享设备为何列为风险项。",
+    "decision": "STOP",
+    "why": "信号解释与政策依据（4条匹配引用，含AML可疑指标中设备关联风险集群条款）已足以结论性地回答共享设备为何列为风险项。"
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S08": {
+  "plan_revisions": 1,
+  "plan_steps": [
+   [
+    "analyze_related_accounts",
+    "success"
+   ]
+  ],
+  "goal_repr": "identify_related_accounts",
+  "focus": null,
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-472ac94a7769 (['analyze_related_accounts'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "related_account_analysis",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Risk Platform network attribution: 18 related accounts for this account."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "关联账号分析已成功返回18个通过共享设备关联的账号及聚类证据，问题已得到解答。",
+    "decision": "STOP",
+    "why": "关联账号分析已成功返回18个通过共享设备关联的账号及聚类证据，问题已得到解答。"
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S09": {
+  "plan_revisions": 1,
+  "plan_steps": [
+   [
+    "analyze_cross_account_trades",
+    "success"
+   ],
+   [
+    "generate_artifact",
+    "success"
+   ]
+  ],
+  "goal_repr": "cross_account_check",
+  "focus": null,
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-aed8463233e5 (['analyze_cross_account_trades', 'generate_artifact'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "cross_account_trade_analysis",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Found 6 candidate cross-account opposite-trade relationships (candidates only, n"
+   },
+   {
+    "ev": "decision.made",
+    "sum": "Analysis found 6 matching hedge trade candidates, but the evidence artifact for ",
+    "decision": "CONTINUE",
+    "why": "Analysis found 6 matching hedge trade candidates, but the evidence artifact for the user has not yet"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "artifact_bundle",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Investigation bundle created (ART-6dda835f40)."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "跨账户对冲交易分析已完成，且证据已生成到工件 ART-6dda835f40 中（含 12 条交易证据引用），问题已得到回答。",
+    "decision": "STOP",
+    "why": "跨账户对冲交易分析已完成，且证据已生成到工件 ART-6dda835f40 中（含 12 条交易证据引用），问题已得到回答。"
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S10": {
+  "plan_revisions": 2,
+  "plan_steps": [
+   [
+    "explain_signal",
+    "success"
+   ],
+   [
+    "inspect_evidence",
+    "pending"
+   ]
+  ],
+  "goal_repr": null,
+  "focus": "F5",
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-37f37119399e (['explain_signal', 'inspect_evidence'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "signal_explain",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Step completed successfully."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "信号解释已识别出设备共享集群及风险评分，但还需执行下一步 inspect_evidence 获取与该账号共享设备的完整明细。",
+    "decision": "CONTINUE",
+    "why": "信号解释已识别出设备共享集群及风险评分，但还需执行下一步 inspect_evidence 获取与该账号共享设备的完整明细。"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "finding_drilldown",
+    "outcome": "empty"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "finding_drilldown:empty"
+   },
+   {
+    "ev": "decision.made",
+    "sum": "The evidence lookup returned no concrete device-sharing records in the Risk Plat",
+    "decision": "RE_PLAN",
+    "why": "The evidence lookup returned no concrete device-sharing records in the Risk Platform, so a new plan "
+   },
+   {
+    "ev": "plan.created",
+    "sum": "re-plan PLAN-888ab12aadc7 (['explain_signal', 'inspect_evidence'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "signal_explain",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Step completed successfully."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "the re-planned query reproduced an identical result with no new information; the",
+    "decision": "STOP",
+    "why": "the re-planned query reproduced an identical result with no new information; the available data has "
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S11": {
+  "plan_revisions": 2,
+  "plan_steps": [
+   [
+    "explain_signal",
+    "success"
+   ],
+   [
+    "inspect_evidence",
+    "pending"
+   ]
+  ],
+  "goal_repr": "explain_finding",
+  "focus": "F1",
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-16d69fe89548 (['explain_signal'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "signal_explain",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "The available evidence was insufficient for this step."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "解释步骤返回的证据不足（缺少归因和证据明细，仅有一个ML分数），需要重新制定计划以获取更多虚拟币洗钱相关的信息来回答问题。",
+    "decision": "RE_PLAN",
+    "why": "解释步骤返回的证据不足（缺少归因和证据明细，仅有一个ML分数），需要重新制定计划以获取更多虚拟币洗钱相关的信息来回答问题。"
+   },
+   {
+    "ev": "plan.created",
+    "sum": "re-plan PLAN-265667113069 (['explain_signal', 'inspect_evidence'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "signal_explain",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "The available evidence was insufficient for this step."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "the re-planned query reproduced an identical result with no new information; the",
+    "decision": "STOP",
+    "why": "the re-planned query reproduced an identical result with no new information; the available data has "
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S12": {
+  "plan_revisions": 1,
+  "plan_steps": [
+   [
+    "analyze_related_accounts",
+    "success"
+   ]
+  ],
+  "goal_repr": null,
+  "focus": null,
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-5e62ac6cc28e (['analyze_related_accounts'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "related_account_analysis",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Risk Platform network attribution: 18 related accounts for this account."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "The analysis conclusively answers both parts: the risk stems from device sharing",
+    "decision": "STOP",
+    "why": "The analysis conclusively answers both parts: the risk stems from device sharing (device DEV8Z1O4A35"
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S14": {
+  "plan_revisions": 1,
+  "plan_steps": [
+   [
+    "explain_signal",
+    "success"
+   ],
+   [
+    "inspect_withdrawals",
+    "success"
+   ]
+  ],
+  "goal_repr": null,
+  "focus": "F3",
+  "events": [
+   {
+    "ev": "plan.created",
+    "sum": "plan PLAN-087a14f029f1 (['explain_signal', 'inspect_withdrawals'])"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "signal_explain",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Step completed successfully."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "规则解释已确认（24小时内7笔提现超出正常模式），但还需执行 inspect_withdrawals 获取全部高频提现证据明细。",
+    "decision": "CONTINUE",
+    "why": "规则解释已确认（24小时内7笔提现超出正常模式），但还需执行 inspect_withdrawals 获取全部高频提现证据明细。"
+   },
+   {
+    "ev": "tool.completed",
+    "sum": "",
+    "tool": "finding_drilldown",
+    "outcome": "success"
+   },
+   {
+    "ev": "observation.recorded",
+    "sum": "Complete record set reviewed: 7 records."
+   },
+   {
+    "ev": "decision.made",
+    "sum": "风险解释已完成，且已检索到全部7条高频提现证据记录（W000084-W000090），问题已得到完整回答。",
+    "decision": "STOP",
+    "why": "风险解释已完成，且已检索到全部7条高频提现证据记录（W000084-W000090），问题已得到完整回答。"
+   },
+   {
+    "ev": "agent.completed",
+    "sum": ""
+   }
+  ]
+ },
+ "S17": {
+  "plan_revisions": 0,
+  "plan_steps": [],
+  "goal_repr": "explain_finding",
+  "focus": null,
+  "events": [
+   {
+    "ev": "agent.blocked",
+    "sum": "I couldn't safely determine the target of your question."
+   }
+  ]
+ }
+}

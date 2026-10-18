@@ -1,0 +1,78 @@
+{
+ "RM_A": {
+  "input": "这个账号有没有对冲交易？另外把它的关联账号也列出来。",
+  "loop_click": "CLICKED",
+  "page_has_completion_claim": false,
+  "task_id": "TASK-7e7034bc0717",
+  "resolution": "COMPOUND",
+  "decision": "contract_accepted",
+  "contract_claims": [
+   "hedging_trade_existence",
+   "related_accounts_list"
+  ],
+  "satisfactions": [
+   "pending",
+   "satisfied"
+  ],
+  "goal_outcome": "(derived at compose)",
+  "error": "'set' object is not subscriptable",
+  "classification": "ENVIRONMENT_BLOCKED"
+ },
+ "RM_B": {
+  "input": "把这个账号的关联账号列出来，并检查它有没有对冲交易。",
+  "loop_click": "CLICKED",
+  "page_has_completion_claim": false,
+  "task_id": "TASK-664eb2893d51",
+  "resolution": "COMPOUND",
+  "decision": "contract_accepted",
+  "contract_claims": [
+   "账号U00010的关联账号",
+   "该账号是否存在对冲交易"
+  ],
+  "satisfactions": [
+   "satisfied",
+   "pending"
+  ],
+  "goal_outcome": "(derived at compose)",
+  "error": "'set' object is not subscriptable",
+  "classification": "ENVIRONMENT_BLOCKED"
+ },
+ "RM_C": {
+  "input": "请分别回答两项：第一，这个账号是否存在不同账户之间的对冲交易；第二，请列出它的关联账号。两项都要单独给出结果，无法判断时请明确说明。",
+  "loop_click": "CLICKED",
+  "page_has_completion_claim": false,
+  "task_id": "TASK-8212241884de",
+  "resolution": "COMPOUND",
+  "decision": "contract_accepted",
+  "contract_claims": [
+   "Cross-account hedging trades existence",
+   "Related accounts list"
+  ],
+  "satisfactions": [
+   "partially_supported",
+   "pending"
+  ],
+  "goal_outcome": "(derived at compose)",
+  "error": "'set' object is not subscriptable",
+  "classification": "ENVIRONMENT_BLOCKED"
+ },
+ "RM_D": {
+  "input": "调查这个账号的跨账户对冲交易，同时整理它的关联账号清单。",
+  "loop_click": "CLICKED",
+  "page_has_completion_claim": false,
+  "task_id": "TASK-b7a7611e4a34",
+  "resolution": "COMPOUND",
+  "decision": "contract_accepted",
+  "contract_claims": [
+   "Cross-account hedging trades exist",
+   "Related accounts list"
+  ],
+  "satisfactions": [
+   "partially_supported",
+   "pending"
+  ],
+  "goal_outcome": "(derived at compose)",
+  "error": "'set' object is not subscriptable",
+  "classification": "ENVIRONMENT_BLOCKED"
+ }
+}

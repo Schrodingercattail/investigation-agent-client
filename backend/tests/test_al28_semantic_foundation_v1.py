@@ -161,6 +161,10 @@ def test_shared_core_concept_is_ambiguous_not_guessed():
     for cid in ("F3", "F5"):
         provider.upsert_candidate(CandidateMetadataRecord(
             candidate_id=cid, candidate_type="finding",
+            # candidate semantics are CASE-SCOPED: these belong to the
+            # same case the resolution context runs in (single-case
+            # isolation invariant B)
+            case_scope="U00010",
             core_concepts=["ACCOUNT_LINK"],
             distinguishing_concepts=["ACCOUNT_LINK"],
             potential_confusions=[], status="UNVERIFIED",
@@ -399,8 +403,11 @@ def test_api_scenario_b_semantic_evidence_request_full_chain():
     recs = views[0]["evidence_records"]["records"]
     assert recs and views[0]["evidence_records"]["streams"].get(
         "withdrawals_included") is True
-    # the user-facing answer names the records, not the runtime
-    assert "withdrawal record" in body["response"]
+    # the user-facing answer names the records, not the runtime —
+    # in the REQUEST's language (zh request → zh response; per-turn
+    # response language selection)
+    assert ("withdrawal record" in body["response"]
+            or "提现记录" in body["response"])
     assert "finding_drilldown:" not in body["response"]
     assert body["context"]["focused_finding_id"] == "F3"
 

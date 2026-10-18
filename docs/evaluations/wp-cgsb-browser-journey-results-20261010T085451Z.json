@@ -1,0 +1,23 @@
+{
+ "cgsb_J1_withdrawal_destinations": {
+  "input": "列出这个账号的全部提现记录。",
+  "focus_click": "CLICKED",
+  "loop_click": "CLICKED",
+  "browser": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "task_id": "TASK-e71b3466e232",
+  "state": {
+   "status": "completed",
+   "stop": "goal_satisfied",
+   "contract_goal_type": null,
+   "observations": [
+    {
+     "step": "inspect_withdrawals",
+     "has_destination_identity": true
+    }
+   ]
+  }
+ }
+}

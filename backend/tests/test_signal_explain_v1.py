@@ -418,3 +418,26 @@ class TestExecutorAndFollowUpIntegration:
         assert provider.has(binding.tool_name), (
             "explain_finding must resolve to an implemented tool now"
         )
+
+
+class TestCrossSignalContamination:
+    """A finding with NO ML/Rule/Graph refs (feature observation) must
+    never receive ANOTHER signal's data when an explicit detector type is
+    requested — the previous guard skipped the check exactly for those
+    findings and attached the case's ML model data to them."""
+
+    def test_explicit_ml_on_feature_only_finding_is_unsupported(self):
+        case, cc = make_case()
+        f = finding_by_title(case, "High Withdrawal Frequency")
+        r = run(cc, f.finding_id, "ML")
+        assert r.outcome == ToolResultOutcome.UNSUPPORTED
+        assert r.error.code == "SIGNAL_TYPE_NOT_SUPPORTED"
+        # no model data leaked into the payload
+        assert r.data in (None, {})
+
+    def test_real_ml_finding_still_explains_via_ml(self):
+        case, cc = make_case()
+        f = finding_by_title(case, "ML Pattern")
+        r = run(cc, f.finding_id, "ML")
+        assert r.outcome == ToolResultOutcome.SUCCESS
+        assert r.data["signal_type"] == "ML"

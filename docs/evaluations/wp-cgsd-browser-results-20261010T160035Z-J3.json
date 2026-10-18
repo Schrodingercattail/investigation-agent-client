@@ -1,0 +1,13 @@
+{
+ "J3_partial_identity_partially_supported": {
+  "input": "9笔提现都提向同一个地址，还是每笔提向一个新地址？",
+  "focus": "F3",
+  "focus_click": "CLICKED",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "response_text": "Investigation Agent\n\n关于「关于 F3 的调查结果」:\n3/9 笔记录缺少目的地标识，仅能对可比子集给出分组结论；整体的比较尚未建立。\n目的地标识分组（记录中的标识，精确区分大小写）:\n- dest-1（0xshared00）: 记录 W000160\n- dest-2（0xshared01）: 记录 W000161\n- dest-3（0xshared02）: 记录 W000162\n- dest-4（0xshared03）: 记录 W000163\n- dest-5（0xother）: 记录 W000170, W000171\n| # | 记录 ID | 时间 | 目的地 | 明细 |\n|---|---|---|---|---|\n| 1 | W000160 | 2026-08-19T10:00:00Z | dest-1 (0xshared00) | Withdrawal of 0.5 BTC |\n| 2 | W000161 | 2026-08-19T10:01:00Z | dest-2 (0xshared01) | Withdrawal of 0.5 BTC |\n| 3 | W000162 | 2026-08-19T10:02:00Z | dest-3 (0xshared02) | Withdrawal of 0.5 BTC |\n| 4 | W000163 | 2026-08-19T10:03:00Z | dest-4 (0xshared03) | Withdrawal of 0.5 BTC |\n| 5 | W000170 | 2026-08-19T10:04:00Z | dest-5 (0xother) | Withdrawal of 0.5 BTC |\n| 6 | W000171 | 2026-08-19T10:05:00Z | dest-5 (0xother) | Withdrawal of 0.5 BTC |\n| 7 | W000180 | 2026-08-19T10:06:00Z | — | Withdrawal of 0.5 BTC |\n| 8 | W000181 | 2026-08-19T10:07:00Z | — | Withdrawal of 0.5 BTC |\n| 9 | W000182 | 2026-08-19T10:08:00Z | — | Withdrawal of 0.5 BTC |\n\n整体结果: 本次调查目标已部分回答（部分项目未能完整回答，见各项说明）。\nSteps completed: 1 (inspect_withdrawals).\n\nTask\ncompleted\n\n9笔提现都提向同一个地址，还是每笔提向一个新地址？"
+ }
+}

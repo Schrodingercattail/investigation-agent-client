@@ -7,9 +7,10 @@ explanation reads.
 
 Boundary (AL-2.10):
 
-- Pure authoritative echo: cluster facts, related accounts, and shared
-  devices are reported VERBATIM from RP — no derived relationships, no
-  scoring, no intent claims, nothing synthesized.
+- Pure authoritative echo: cluster facts, related accounts, shared
+  devices, and per-account shared-IP attributions are reported
+  VERBATIM from RP — no derived relationships, no scoring, no intent
+  claims, nothing synthesized.
 - Requires only the case_id (executor-injected; never planner/LLM-
   supplied in the live path) — a CASE-LEVEL capability, deliberately
   distinct from finding-level investigation.
@@ -174,6 +175,19 @@ def related_account_analysis(
         if not accounts:
             payload["next_data_needed"] = [
                 "related-account attribution for this case"]
+        # WP-GSP-1b: authoritative ECHO of the RP-recorded shared-IP
+        # attributions per connected account (pure pass-through from the
+        # network-signals detail endpoint; empty list = RP records no
+        # shared-IP attribution for that account). DATA ONLY — this is
+        # not a capability declaration: no binding declares
+        # shared_ip_evidence yet (GSP Slice 1; no nearest-capability
+        # substitution). Scope note: completeness is checkable via
+        # related_accounts_count == len(related_accounts).
+        payload["shared_ip_attributions"] = {
+            a["user_id"]: list(a.get("shared_ips") or [])
+            for a in (ns.get("connected_accounts") or [])
+            if isinstance(a, dict) and a.get("user_id")
+        }
     except (KeyError, TypeError, ValueError) as e:
         logger.error("related_account_analysis normalization failure: %s",
                      e)

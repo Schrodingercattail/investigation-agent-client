@@ -395,7 +395,9 @@ class RiskPlatformClient:
             feature_finding_names = {
                 "shared_device_count": "Shared Device Relationships",
                 "linked_account_count": "Linked Account Network",
-                "trade_frequency_24h": "High Trading Frequency",
+                # Cross-domain consistency: neutral feature-observation
+                # name (no F7 detector decision exists).
+                "trade_frequency_24h": "Trading Frequency (24h)",
                 "withdrawal_risk_score": "Abnormal Withdrawal Behavior",
             }
 

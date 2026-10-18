@@ -168,6 +168,7 @@ class InvestigationAPI:
                        outcome="focus_transition")
         message = self._resolve_followup(request)
 
+        from app.response_language import detect_response_language
         result = self.service.run_turn(
             user_request=message,
             context=context,
@@ -175,6 +176,7 @@ class InvestigationAPI:
             investigation_id=investigation_id,
             task_store=self.store,
             prior_tool_calls=self._prior_calls(investigation_id),
+            response_language=detect_response_language(message),
         )
 
         # Record session artifacts/calls for later task/artifact retrieval
@@ -440,9 +442,11 @@ class InvestigationAPI:
 
         def _run() -> None:
             try:
+                from app.response_language import detect_response_language
                 result = runner.run(goal, context, [],
                                     investigation_id=investigation_id,
                                     task_id=task_id,
+                                    response_language=detect_response_language(goal),
                                     findings_provider=runner.findings_provider)
             except Exception:                     # noqa: BLE001 — the runner
                 logger.exception(                 # already bounds its own
@@ -491,9 +495,15 @@ class InvestigationAPI:
         run from its agent_states document. Same runner factory, same
         caps/policy — nothing is reset. Terminal runs are refused."""
         runner = self.loop_runner_factory(self.store)
+        # findings for the recovered run come from the run's OWN case
+        # (persisted on the loop state) — the previous spelling both
+        # called a nonexistent store accessor and fed the investigation
+        # id where a case id is required, so every HTTP resume degraded
+        # to a false dependency-unavailable BLOCKED.
+        recovered_state = self.store.get_agent_state(task_id)
+        recovered_case = recovered_state.case_id if recovered_state else ""
         runner.findings_provider = lambda: self._findings_strict(
-            self.store.get_task(task_id).investigation_id
-            if self.store.get_task(task_id) else "")
+            recovered_case)
         result = runner.resume(task_id,
                                findings_provider=runner.findings_provider)
         # AL-2.5/2.7: same read-model parity as a fresh goal run
@@ -766,15 +776,19 @@ def _default_loop_runner(store: TaskStoreV2):
 
 def _default_goal_resolver():
     """Stage 2.1 goal-understanding callable (request_text,
-    focused_finding_id, case_id) -> GoalRepresentation, LLM-backed with
-    deterministic heuristic fallback."""
+    focused_finding_id, case_id[, diagnostics]) -> GoalRepresentation,
+    LLM-backed with deterministic heuristic fallback. The optional
+    diagnostics dict receives goal-understanding provenance (WP-CG-3)."""
     from app.goal_resolution import understand_goal
 
     def resolve(request_text: str, focused_finding_id: str | None,
-                case_id: str | None):
+                case_id: str | None, diagnostics: dict | None = None,
+                case_findings: list | None = None):
         return understand_goal(request_text,
                                resolved_finding_id=focused_finding_id,
-                               case_id=case_id, use_llm=True)
+                               case_id=case_id, use_llm=True,
+                               diagnostics=diagnostics,
+                               case_findings=case_findings)
     return resolve
 
 

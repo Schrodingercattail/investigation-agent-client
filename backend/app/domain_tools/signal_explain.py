@@ -54,7 +54,16 @@ def _feature_signal_payload(finding: Any, evidence: dict[str, Any]) \
     the RP risk features; only values that ACTUALLY exist in the case's
     feature_evidence are reported — nothing is synthesized. None when no
     named feature is present in the evidence (caller falls back to the
-    bounded missing-evidence outcome)."""
+    bounded missing-evidence outcome).
+
+    When RP's risk_factor_evidence carries the factor THIS finding is
+    named after (RP's own evidence-merging convention: factor_name equals
+    the finding name — exact match, never a keyword guess), its
+    authoritative entry (observed value, severity, and the platform's own
+    threshold/trigger-state description) is echoed verbatim under
+    explanation.risk_factor. That entry is where RP states the rule and
+    threshold semantics for threshold-based features; the tool never
+    reconstructs or re-derives them."""
     features = (evidence or {}).get("feature_evidence") or {}
     named: list[dict[str, Any]] = []
     for ref in (finding.signal_refs or []):
@@ -66,10 +75,33 @@ def _feature_signal_payload(finding: Any, evidence: dict[str, Any]) \
             named.append({"name": name, "value": features[name]})
     if not named:
         return None
+    explanation: dict[str, Any] = {"features": named}
+    title = (getattr(finding, "title", "") or "").strip()
+    if title:
+        for factor in (evidence or {}).get("risk_factor_evidence") or []:
+            if not isinstance(factor, dict):
+                continue
+            if factor.get("factor_name") == title:
+                explanation["risk_factor"] = {
+                    "name": factor.get("factor_name"),
+                    "value": factor.get("factor_value"),
+                    "severity": factor.get("severity"),
+                    # RP's own threshold/trigger-state wording — echoed
+                    # verbatim, never paraphrased or re-derived
+                    "description": factor.get("factor_description"),
+                }
+                break
+    # The platform's own complete statement about this risk finding (the
+    # explanation key-finding text the finding was built from) — carries
+    # the rule/threshold/trigger-state semantics when RP states them.
+    # Verbatim echo, never re-derived.
+    finding_statement = (getattr(finding, "summary", "") or "").strip()
+    if finding_statement:
+        explanation["finding_summary"] = finding_statement
     return {
         "finding_id": finding.finding_id,
         "signal_type": "Feature",
-        "explanation": {"features": named},
+        "explanation": explanation,
         "evidence_refs": [],
         "signal_refs": [
             s.model_dump() if hasattr(s, "model_dump") else dict(s)
@@ -184,7 +216,17 @@ def signal_explain(
         else:
             signal_type = "Rule"   # no structured signal: rule lookup below
             # reports evidence_missing if nothing backs it (bounded)
-    elif finding_detector_types and signal_type not in finding_detector_types:
+    elif (signal_type == "ML" and "ML" not in finding_detector_types
+          and "ml pattern detection" not in finding.title.lower()):
+        # ML is CASE-LEVEL model data (one model score per case): attaching
+        # it to a finding the model did not produce is cross-signal
+        # contamination — the previous `finding_detector_types and ...`
+        # guard skipped the check exactly for findings with NO structured
+        # refs, letting a caller-supplied ML type (e.g. derived from the
+        # focus finding) stamp the case's model score onto a feature
+        # observation. Rule/Graph lookups are finding-filtered by name and
+        # cannot attach another finding's data, so they keep their
+        # lookup-then-miss-honestly path.
         return ToolResult(
             outcome=ToolResultOutcome.UNSUPPORTED,
             error=ToolError(

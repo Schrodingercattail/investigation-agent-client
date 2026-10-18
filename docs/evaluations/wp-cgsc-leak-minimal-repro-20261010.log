@@ -1,0 +1,43 @@
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+__________ TestCompletionSafetyAcrossModes.test_flag_off_contractless __________
+
+self = <test_cg_gs_a_api_e2e_v1.TestCompletionSafetyAcrossModes object at 0x10c1583b0>
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-498/test_flag_off_contractless0')
+
+    def test_flag_off_contractless(self, tmp_path):
+        client = _client(tmp_path)
+        activity, resp = _journey(client, tmp_path, flag=False,
+                                  goal_llm_text=INFERRED_PAYLOAD)
+        assert activity["agent_status"] == "completed"
+>       assert activity["goal_contract"] is None
+E       AssertionError: assert {'contract_id': 'GC-a28c55d7', 'goal_type': 'policy_check', 'subject_ref': 'F3', 'outputs': [{'output_id': 'O1', 'claim': 'case_risk_overview', 'claim_kind': 'retrieval', 'claim_description': None, ...}]} is None
+
+tests/test_cg_gs_a_api_e2e_v1.py:110: AssertionError
+=============================== warnings summary ===============================
+app/config.py:5
+  /Users/vv/investigation-agent-client/backend/app/config.py:5: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class Settings(BaseSettings):
+
+tests/test_cg_gs_a_api_e2e_v1.py::TestCompletionSafetyAcrossModes::test_flag_off_contractless
+  /Users/vv/investigation-agent-client/backend/app/main.py:105: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/test_cg_gs_a_api_e2e_v1.py::TestCompletionSafetyAcrossModes::test_flag_off_contractless
+  /Users/vv/investigation-agent-client/backend/.venv/lib/python3.12/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_cg_gs_a_api_e2e_v1.py::TestCompletionSafetyAcrossModes::test_flag_off_contractless
+1 failed, 1 passed, 3 warnings in 1.59s

@@ -276,20 +276,35 @@ def get_candidate(conn, candidate_id: str) -> CandidateMetadataRecord | None:
     return _record_from_row(row) if row is not None else None
 
 
-def list_candidates(conn, status: str | None = None) \
+def list_candidates(conn, status: str | None = None,
+                    case_scope: str | None = None) \
         -> list[CandidateMetadataRecord]:
+    """List candidate metadata records.
+
+    `case_scope` enforces SINGLE-CASE ISOLATION: candidate semantics are
+    CASE-SCOPED facts (finding identity is (case_id, finding_id)), so a
+    query for one case must never return another case's records. Exact
+    case_scope match only — records with a missing/NULL scope are
+    excluded here as well: the current data contract has NO global-record
+    form (a record without a confirmed scope cannot be treated as
+    globally valid), so an unscoped record must not ground any case.
+    Callers that genuinely need every record (admin/seed tooling) omit
+    the argument."""
+    clauses: list[str] = []
+    params: list[Any] = []
     if status is not None:
         validate_candidate_status(status)
-        rows = conn.execute(
-            f"SELECT {_CANDIDATE_COLUMNS} FROM candidate_metadata "
-            "WHERE status = ? ORDER BY candidate_id",
-            (status,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"SELECT {_CANDIDATE_COLUMNS} FROM candidate_metadata "
-            "ORDER BY candidate_id",
-        ).fetchall()
+        clauses.append("status = ?")
+        params.append(status)
+    if case_scope is not None:
+        clauses.append("case_scope = ?")
+        params.append(case_scope)
+    where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    rows = conn.execute(
+        f"SELECT {_CANDIDATE_COLUMNS} FROM candidate_metadata "
+        f"{where}ORDER BY candidate_id",
+        params,
+    ).fetchall()
     return [_record_from_row(r) for r in rows]
 
 
@@ -386,7 +401,8 @@ class CatalogProvider(Protocol):
         -> CandidateMetadataRecord: ...
     def get_candidate(self, candidate_id: str) \
         -> CandidateMetadataRecord | None: ...
-    def list_candidates(self, status: str | None = None) \
+    def list_candidates(self, status: str | None = None,
+                        case_scope: str | None = None) \
         -> list[CandidateMetadataRecord]: ...
     def update_status(self, candidate_id: str, status: str, **kw) \
         -> CandidateMetadataRecord: ...
@@ -412,9 +428,9 @@ class TaskStoreCatalogProvider:
         with self._store.metadata_write() as conn:
             return get_candidate(conn, candidate_id)
 
-    def list_candidates(self, status=None):
+    def list_candidates(self, status=None, case_scope=None):
         with self._store.metadata_write() as conn:
-            return list_candidates(conn, status)
+            return list_candidates(conn, status, case_scope=case_scope)
 
     def update_status(self, candidate_id, status, **kw):
         with self._store.metadata_write() as conn:

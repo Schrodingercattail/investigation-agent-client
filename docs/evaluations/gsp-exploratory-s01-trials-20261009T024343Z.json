@@ -1,0 +1,8 @@
+{
+ "A_original_compound": {
+  "trial": "A_original_compound",
+  "input": "这个账号有没有对冲交易？另外把它的关联账号也列出来。",
+  "loop_click": "CLICKED",
+  "error": "socket is already closed."
+ }
+}

@@ -9,6 +9,46 @@ class Settings(BaseSettings):
     APP_NAME: str = "Investigation Agent API"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
+    # Q2: GU-specific model-call configuration (restored after accidental
+    # truncation; values from the approved Token-Budget experiment closure).
+    # Output-token ceiling for the GOAL UNDERSTANDING model call only.
+    # Default 8192 (raised from 4096 after the bounded Token-Budget
+    # experiment confirmed thinking-only truncation at 4096 for the Q2
+    # request shape: usage_output_tokens=4096 exactly, all failures).
+    # Decision Proposer and all other LLM stages are unaffected. Must be
+    # a positive integer — invalid values fail loudly at call time
+    # instead of silently misconfiguring calls. Env override
+    # GOAL_UNDERSTANDING_MAX_TOKENS continues to work.
+    GOAL_UNDERSTANDING_MAX_TOKENS: int = 8192
+    # Q2: GU-specific single-request timeout (seconds) and SDK transport
+    # retry policy, applied ONLY to the Goal Understanding model call via
+    # the SDK's request-scoped with_options (the shared client is never
+    # mutated). Default 240s lets the observed ~190s long-thinking requests
+    # complete; SDK retries are disabled for GU so a failed long request
+    # fails fast instead of multiplying the wait.
+    GOAL_UNDERSTANDING_TIMEOUT_SECONDS: float = 240.0
+    GOAL_UNDERSTANDING_SDK_MAX_RETRIES: int = 0
+
+    def validate_goal_understanding_runtime(self) -> None:
+        """Call-time guard (Q2 closure): invalid values fail loudly instead
+        of silently misconfiguring the GU model call."""
+        if not isinstance(self.GOAL_UNDERSTANDING_MAX_TOKENS, int) \
+                or self.GOAL_UNDERSTANDING_MAX_TOKENS <= 0:
+            raise ValueError(
+                "GOAL_UNDERSTANDING_MAX_TOKENS must be a positive integer, "
+                f"got {self.GOAL_UNDERSTANDING_MAX_TOKENS!r}")
+        if not isinstance(self.GOAL_UNDERSTANDING_TIMEOUT_SECONDS,
+                          (int, float)) \
+                or self.GOAL_UNDERSTANDING_TIMEOUT_SECONDS <= 0:
+            raise ValueError(
+                "GOAL_UNDERSTANDING_TIMEOUT_SECONDS must be a positive "
+                "number, got "
+                f"{self.GOAL_UNDERSTANDING_TIMEOUT_SECONDS!r}")
+        if not isinstance(self.GOAL_UNDERSTANDING_SDK_MAX_RETRIES, int) \
+                or self.GOAL_UNDERSTANDING_SDK_MAX_RETRIES < 0:
+            raise ValueError(
+                "GOAL_UNDERSTANDING_SDK_MAX_RETRIES must be a non-negative "
+                f"integer, got {self.GOAL_UNDERSTANDING_SDK_MAX_RETRIES!r}")
 
     # LLM Configuration
     ANTHROPIC_API_KEY: str = ""
@@ -59,6 +99,8 @@ class Settings(BaseSettings):
     # Declared here as the baseline contract requires both to default OFF;
     # NO runtime behavior reads them yet — they gate later work items
     # (coverage check / admissibility gate respectively).
+    ENABLE_GOAL_SEMANTIC_CONTRACT: bool = False   # GSP WP-GSP-2
+    ENABLE_TARGET_VALIDITY_GUARD: bool = False    # GSP-7/QA
     ENABLE_CANDIDATE_METADATA_COVERAGE: bool = False   # WI-2
     ENABLE_SAFE_SELECT_ADMISSIBILITY: bool = False     # WI-5
 

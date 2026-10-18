@@ -1,0 +1,26 @@
+{
+ "task_id": "TASK-4af31070183d",
+ "agent_status": "completed",
+ "goal_outcome": "partial",
+ "stop_reason": "goal_satisfied",
+ "satisfaction": "partially_supported",
+ "polarity": null,
+ "facets": [
+  "destination_address_identity"
+ ],
+ "detail": "3/9 笔记录缺少目的地标识，仅能对可比子集给出分组结论；整体的比较尚未建立。",
+ "decision": {
+  "outcome": "contract_accepted",
+  "reason": null
+ },
+ "cross_checks": {
+  "M/N detail consistent (3/9)": true,
+  "partial outcome line in page": true,
+  "whole-claim absent from page": true,
+  "subset groups in page": true,
+  "missing rows visible": true,
+  "served response matches page": true,
+  "terminal completed + goal_satisfied chip consistent": true
+ },
+ "all_pass": true
+}

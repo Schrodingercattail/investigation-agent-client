@@ -277,6 +277,7 @@ def test_case_c_cross_account_answer_unchanged():
         "tool_name": "cross_account_trade_analysis", "outcome": "success",
         "semantic_status": "MATCH_FOUND",
         "summary": {"candidates_found": 1,
+                    "target_account": "U00307",
                     "max_time_delta_seconds": 30.0,
                     "value_tolerance_relative": 0.05,
                     "retrieval": {"truncated": False},
@@ -292,6 +293,8 @@ def test_case_c_cross_account_answer_unchanged():
     }])
     st.agent_status = "completed"
     response = compose_loop_response(st)
-    assert "发现 1 个候选跨账户对冲交易关系" in response
+    assert "发现 1 个涉及 U00307 的候选跨账户对冲交易关系" in response
+    # Case-4 correction: the answer binds every candidate to the target
+    assert "每个候选都包含该账户的一笔交易" in response
     assert "| CATA-001 |" in response
     assert "不构成对操纵或交易意图的结论" in response

@@ -776,14 +776,17 @@ class TestRealU00010Case:
             evidence, policies, "Investigate case U00010"
         )
 
-        # Expected canonical finding names from Risk Platform
+        # Expected canonical finding names from Risk Platform.
+        # "High Trading Frequency" was renamed to the neutral
+        # "Trading Frequency (24h)" (a nonzero feature value is an
+        # observation, not a detector-confirmed risk finding).
         expected_canonical_names = [
             "ML Pattern Detection Signal",
             "New account with high activity",
             "High withdrawal frequency",
             "First withdrawal to new address",
             "Abnormal Withdrawal Behavior",
-            "High Trading Frequency",
+            "Trading Frequency (24h)",
             "Shared Device Relationships",
             "Linked Account Network",
             "Opposite Trade Ratio"
@@ -994,3 +997,67 @@ class TestLegacyBackwardsCompatibility:
         # Should still work with legacy structure
         assert "supported_count" in result
         assert "source_grounded_count" in result
+
+
+class TestDedupeCanonicalNameBoundaries:
+    """Deduplication identity boundaries: canonical_name is OPTIONAL —
+    findings lacking it are deduped by their own stable id (finding_id /
+    source_evidence_id) and are never merged merely because they share a
+    missing name."""
+
+    def _evidence(self, unified_findings):
+        return {"case_id": "U00010", "evidence": [],
+                "unified_findings": unified_findings,
+                "risk_summary": {"risk_level": "HIGH", "risk_score": 72.0}}
+
+    def _finding(self, fid, claim, canonical_name="__ABSENT__"):
+        f = {"finding_id": fid, "type": "risk_factor",
+             "description": claim, "source_evidence_id": f"EV-{fid}"}
+        if canonical_name != "__ABSENT__":
+            f["canonical_name"] = canonical_name
+        return f
+
+    def _compose(self, findings):
+        from app.tools import compose_structured_result
+        return compose_structured_result(
+            self._evidence(findings), [], "test")["findings"]
+
+    def test_missing_key_no_crash(self):
+        out = self._compose([self._finding("F-1", "claim a")])
+        assert len(out) == 1
+
+    def test_none_value_no_crash(self):
+        out = self._compose([self._finding("F-1", "claim a",
+                                           canonical_name=None)])
+        assert len(out) == 1
+
+    def test_two_nameless_findings_not_merged(self):
+        """Same claim, both lacking canonical_name, DIFFERENT finding ids
+        → distinct identities → both preserved (never merged by the
+        shared empty name)."""
+        out = self._compose([
+            self._finding("F-1", "claim a"),
+            self._finding("F-2", "claim a")])
+        assert len(out) == 2
+
+    def test_empty_string_names_not_merged(self):
+        """Empty-string canonical names do not merge distinct findings."""
+        out = self._compose([
+            self._finding("F-1", "claim a", canonical_name=""),
+            self._finding("F-2", "claim a", canonical_name="")])
+        assert len(out) == 2
+
+    def test_same_finding_id_same_claim_dedupes(self):
+        """Same finding_id + claim (a repeated pass) → deduped even
+        without a canonical name."""
+        out = self._compose([
+            self._finding("F-1", "claim a"),
+            self._finding("F-1", "claim a")])
+        assert len(out) == 1
+
+    def test_normal_canonical_dedupe_unchanged(self):
+        """Existing behavior: same claim + same canonical name → deduped."""
+        out = self._compose([
+            self._finding("F-1", "claim a", canonical_name="Alpha"),
+            self._finding("F-2", "claim a", canonical_name="Alpha")])
+        assert len(out) == 1

@@ -62,6 +62,20 @@ class RiskPlatformAdapter:
     DEFAULT_TIMEOUT = 30.0
 
     def __init__(self, base_url: str | None = None, timeout: float | None = None):
+        # TEST INFRASTRUCTURE seam: when the serving process is started
+        # with AGENT_SYNTHETIC_RP_FIXTURE=<fixture.json>, this instance
+        # serves controlled synthetic data so acceptance runs can exercise
+        # the REAL downstream pipeline without touching RP or real cases.
+        # Without the env var this is never active. See
+        # app.testing_synthetic_rp for the fixture contract.
+        import os as _os
+        _fixture = _os.environ.get("AGENT_SYNTHETIC_RP_FIXTURE")
+        if _fixture:
+            from app import testing_synthetic_rp as _synth
+            _synth.install(self, _fixture)
+            self.base_url = f"synthetic://{_fixture}"
+            self.timeout = timeout if timeout is not None else 30.0
+            return
         self.base_url = (
             base_url
             or getattr(settings, "RISK_PLATFORM_BASE_URL", "http://localhost:8000")
@@ -257,6 +271,12 @@ _FEATURE_TO_SIGNAL = {
     "linked_account_count": "linked_account_count",
     "trade_frequency_24h": "trade_frequency_24h",
     "withdrawal_risk_score": "withdrawal_risk_score",
+    # RP's threshold-based feature (evidence_service "Threshold-based
+    # findings" block sets supporting_feature="opposite_trade_ratio" on
+    # both naming forms — the below-threshold observation AND the
+    # rule-triggered finding). Mirroring it here is the same
+    # data-driven echo as the four entries above.
+    "opposite_trade_ratio": "opposite_trade_ratio",
 }
 
 
@@ -594,6 +614,13 @@ def _finding_uses_signal(
         return "trading frequency" in fl or "trading" in fl
     if sl == "withdrawal_risk_score":
         return "withdrawal" in fl
+    if sl == "opposite_trade_ratio":
+        # RP names this feature's finding "Opposite Trade Ratio" when the
+        # value is the below-threshold contextual observation and
+        # "Coordinated Trading Pattern" when the rule triggered
+        # (evidence_service "Threshold-based findings") — both forms draw
+        # on the same authoritative feature.
+        return "opposite trade" in fl or "coordinated trading" in fl
     return False
 
 
@@ -868,14 +895,32 @@ def normalize_evidence_records(
     # aggregate counts ("7 withdrawals in 24h") are never conflated with the
     # concrete record list.
     features = evidence.get("feature_evidence") or {}
+    # Stream-scoped feature relevance (scope integrity): an explicitly
+    # scoped evidence request carries only the features of its own stream —
+    # a withdrawal-scoped payload must not silently attach trade/opposite-
+    # ratio/network features (and vice versa). Unscoped requests keep the
+    # full reported feature vector.
+    _WITHDRAWAL_FEATURES = (
+        "withdrawal_frequency_24h", "withdrawal_volume_24h",
+        "withdrawal_risk_score",
+    )
+    _TRANSACTION_FEATURES = (
+        "trade_frequency_24h", "trade_frequency_7d", "trade_volume_24h",
+        "opposite_trade_ratio",
+    )
+    if wants_withdrawals and not wants_transactions:
+        relevant_keys = _WITHDRAWAL_FEATURES
+    elif wants_transactions and not wants_withdrawals:
+        relevant_keys = _TRANSACTION_FEATURES
+    else:
+        relevant_keys = (
+            _WITHDRAWAL_FEATURES + _TRANSACTION_FEATURES
+            + ("shared_device_count", "linked_account_count",
+               "account_age_days")
+        )
     relevant_features = {
-        k: features[k] for k in (
-            "withdrawal_frequency_24h", "withdrawal_volume_24h",
-            "withdrawal_risk_score", "trade_frequency_24h",
-            "trade_frequency_7d", "trade_volume_24h",
-            "opposite_trade_ratio", "shared_device_count",
-            "linked_account_count", "account_age_days",
-        ) if features.get(k) is not None
+        k: features[k] for k in relevant_keys
+        if features.get(k) is not None
     }
 
     return {
@@ -1024,12 +1069,25 @@ def normalize_ml_signal(
         evidence_missing = True
         next_data_needed.append("feature values for this case")
 
-    if ml_score is not None and not evidence_missing:
-        # Score and features exist, but per-feature attribution does not.
-        evidence_missing = True
-        next_data_needed.append("transaction-level feature attribution")
-
+    # Score + features ARE the ML explanation the platform provides.
+    # Per-feature contribution attribution does not exist in RP data
+    # (attribution_available is structurally False) — its absence is a
+    # BOUNDARY the answer must state, never "missing evidence": marking
+    # it evidence_missing used to force every ML explanation into
+    # partial-evidence re-plans that could never acquire more.
     explanation["attribution_available"] = False
+    if ml_score is not None and available_features:
+        explanation["attribution_note"] = (
+            "transaction-level feature attribution")
+
+    if ml_score is None:
+        evidence_missing = True
+        if "ML model score for this case" not in next_data_needed:
+            next_data_needed.append("ML model score for this case")
+    if not available_features:
+        evidence_missing = True
+        if "feature values for this case" not in next_data_needed:
+            next_data_needed.append("feature values for this case")
 
     return {
         "signal_type": "ML",
@@ -1057,15 +1115,31 @@ def normalize_graph_signal(
     next_data_needed: list[str] = []
 
     if network:
+        member_count = network.get("member_count")
         explanation["cluster"] = {
             "cluster_id": network.get("cluster_id"),
             "cluster_name": network.get("cluster_name"),
             "detection_type": network.get("detection_type"),
-            "member_count": network.get("member_count"),
+            # RP cluster membership INCLUDES the case account itself —
+            # the related-account total is member_count - 1 (verified
+            # against the network-signals surface). Carried so answers
+            # can state each count under its own authoritative
+            # definition instead of conflating them.
+            "member_count_includes_case": True,
+            "member_count": member_count,
             "cluster_risk_score": network.get("cluster_risk_score"),
         }
         if network.get("related_accounts"):
-            explanation["related_accounts"] = list(network["related_accounts"])
+            # RP returns this field as a SERVER-SIDE LIMITED preview
+            # (LIMIT 10 upstream, further display caps downstream) —
+            # never the full membership. Explicit metadata so no
+            # renderer can present the preview as a complete list.
+            explanation["related_accounts"] = list(
+                network["related_accounts"])
+            explanation["related_accounts_preview"] = True
+            if isinstance(member_count, int):
+                explanation["related_accounts_total"] = max(
+                    member_count - 1, 0)
         if network.get("shared_devices"):
             explanation["shared_devices"] = list(network["shared_devices"])
     else:

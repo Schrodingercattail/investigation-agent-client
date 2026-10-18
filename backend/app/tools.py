@@ -328,10 +328,19 @@ def compose_structured_result(
     seen_findings = set()
     deduplicated_findings = []
     for finding in findings:
-        # Create a deduplication key from claim and canonical_name
-        claim = finding.get("claim", "")
-        canonical_name = finding.get("canonical_name", "")
-        dedupe_key = (claim.lower(), canonical_name.lower())
+        # Dedupe identity: the canonical name when present; otherwise the
+        # finding's own stable id. Findings that merely SHARE a missing
+        # canonical_name must never be merged into one — without a
+        # reliable identity, records are kept separate.
+        claim = (finding.get("claim") or "").lower()
+        canonical_name = finding.get("canonical_name")
+        if canonical_name:
+            name_key = str(canonical_name).lower()
+        else:
+            name_key = str(finding.get("finding_id")
+                           or finding.get("source_evidence_id")
+                           or id(finding))
+        dedupe_key = (claim, name_key)
 
         if dedupe_key not in seen_findings:
             seen_findings.add(dedupe_key)

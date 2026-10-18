@@ -18,6 +18,7 @@ Boundary (enforced by structure):
   plan validation never pretends a Risk Platform tool ran.
 """
 
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -37,6 +38,40 @@ def _supports(capabilities: Any, capability: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# GSP evidence vocabulary (WP-GSP-1) — frozen, executable-backed
+# ---------------------------------------------------------------------------
+# Each value names a kind of evidence an EXECUTABLE tool binding actually
+# produces today. Authoritative source for capability admission is the
+# StepToolBinding declaration (below) — never SkillDefinition prose
+# (SKILL_MODEL_V1: Skill = discoverability; Tool binding = executable
+# contract). Closed set: adding a value REQUIRES a binding declaration
+# plus a payload test proving the tool really returns it
+# (implementation plan §10). Claims/assessments (e.g.
+# "money_laundering_assessment") deliberately have NO entry here —
+# they are user-side judgments, not evidence kinds.
+class EvidenceType(str, Enum):
+    CASE_SUMMARY = "case_summary"
+    NETWORK_RELATIONS = "network_relations"
+    SHARED_DEVICE_EVIDENCE = "shared_device_evidence"
+    # Reserved (WP-GSP-1b echoes the RP field); INTENTIONALLY UNDECLARED by
+    # every binding in Slice 1 — the runtime contract for turning this data
+    # into an answered output lands with the postcondition evaluator.
+    # Declaring it now would imply a capability the runtime cannot yet
+    # honor end-to-end (no nearest-capability fallback, ever).
+    SHARED_IP_EVIDENCE = "shared_ip_evidence"
+    OPPOSITE_TRADE_RELATIONS = "opposite_trade_relations"
+    WITHDRAWAL_RECORDS = "withdrawal_records"
+    TRANSACTION_RECORDS = "transaction_records"
+    ML_SIGNAL_EXPLANATION = "ml_signal_explanation"
+    RULE_EXPLANATION = "rule_explanation"
+    GRAPH_CLUSTER_FACTS = "graph_cluster_facts"
+    POLICY_REFERENCES = "policy_references"
+
+
+EVIDENCE_TYPES: frozenset = frozenset(t.value for t in EvidenceType)
+
+
+# ---------------------------------------------------------------------------
 # Static step → tool mapping (single source of truth; no arbitrary mappings)
 # ---------------------------------------------------------------------------
 
@@ -46,37 +81,66 @@ class StepToolBinding(BaseModel):
     `parameter_locks` pin tool arguments the Planner may not change,
     e.g. finding_drilldown under timeline_investigation is locked to
     view="timeline".
+
+    `supported_evidence_types` (GSP WP-GSP-1) is the AUTHORITATIVE
+    capability declaration: which EvidenceType values this executable
+    path really produces, verified against actual tool payloads. Empty
+    list = this path declares no evidence type (must never be selected
+    to answer an evidence requirement). Declarations are static registry
+    data — never inferred from tool names or skill descriptions.
     """
 
     tool_name: str
     parameter_locks: dict[str, Any] = Field(default_factory=dict)
+    supported_evidence_types: list[EvidenceType] = Field(default_factory=list)
 
 
 STEP_TOOL_MAP: dict[str, StepToolBinding] = {
-    "fetch_case": StepToolBinding(tool_name="risk_case_fetch"),
-    "generate_artifact": StepToolBinding(tool_name="artifact_bundle"),
+    # Declarations (GSP WP-GSP-1) state what each executable path REALLY
+    # produces today, verified against actual tool payloads. Empty list =
+    # declares nothing (explicit, never a guess). shared_ip is deliberately
+    # NOT declared anywhere in Slice 1 (see EvidenceType note).
+    "fetch_case": StepToolBinding(
+        tool_name="risk_case_fetch",
+        supported_evidence_types=[EvidenceType.CASE_SUMMARY],
+    ),
+    "generate_artifact": StepToolBinding(
+        tool_name="artifact_bundle",
+        supported_evidence_types=[EvidenceType.CASE_SUMMARY],
+    ),
+    # Event-level evidence type intentionally deferred (no declared type in
+    # this vocabulary slice; timeline records are not a declared kind yet).
     "inspect_timeline": StepToolBinding(
         tool_name="finding_drilldown",
         parameter_locks={"view": "timeline"},
     ),
+    # view=evidence returns the finding's COMPLETE record streams — both
+    # withdrawal and transaction records appear depending on the finding.
     "inspect_evidence": StepToolBinding(
         tool_name="finding_drilldown",
         parameter_locks={"view": "evidence"},
+        supported_evidence_types=[EvidenceType.WITHDRAWAL_RECORDS,
+                                  EvidenceType.TRANSACTION_RECORDS],
     ),
     "inspect_withdrawals": StepToolBinding(
         tool_name="finding_drilldown",
         parameter_locks={"view": "evidence", "stream": "withdrawals"},
+        supported_evidence_types=[EvidenceType.WITHDRAWAL_RECORDS],
     ),
     "inspect_transactions": StepToolBinding(
         tool_name="finding_drilldown",
         parameter_locks={"view": "evidence", "stream": "transactions"},
+        supported_evidence_types=[EvidenceType.TRANSACTION_RECORDS],
     ),
     # Canonical self-opposite step: opposite-side trading by the SAME
-    # account (view stays registered-but-unimplemented; bounded
-    # unsupported at runtime — never a substitute for other views).
+    # account. Verified live (WP-GSP-3): the view executes and produces
+    # same-account opposite-side transaction records + RP ratio echo;
+    # finding-level capability gates can still return UNSUPPORTED
+    # (capability ≠ data availability). Declares the records it emits.
     "inspect_self_opposite_trades": StepToolBinding(
         tool_name="finding_drilldown",
         parameter_locks={"view": "self_opposite_trades"},
+        supported_evidence_types=[EvidenceType.TRANSACTION_RECORDS],
     ),
     # Derived analytical tool: candidate cross-account opposite-trade
     # relationships (baseline §12b). analysis_type is locked — the planner
@@ -84,15 +148,44 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
     "analyze_cross_account_trades": StepToolBinding(
         tool_name="cross_account_trade_analysis",
         parameter_locks={"analysis_type": "cross_account_opposite_trade"},
+        supported_evidence_types=[EvidenceType.OPPOSITE_TRADE_RELATIONS],
+    ),
+    # Set-internal cross-account analysis: the user named a related-account
+    # POPULATION and asked for hedging WITHIN it — candidate pairs may
+    # involve the case account or only two related members. The analysis
+    # scope is registry-locked (system-selected, never LLM-chosen).
+    "analyze_related_account_set_trades": StepToolBinding(
+        tool_name="cross_account_trade_analysis",
+        parameter_locks={
+            "analysis_type": "cross_account_opposite_trade",
+            "analysis_scope": "related_account_set",
+        },
+        supported_evidence_types=[EvidenceType.OPPOSITE_TRADE_RELATIONS],
     ),
     # AL-2.10: case-level related-account analysis (RP network
     # attribution echo). analysis_type is locked the same way.
+    # GSP: shared_ip_evidence is deliberately NOT declared — the payload
+    # echo (WP-GSP-1b) is data pass-through; the executable
+    # answer-contract for shared-IP questions is not landed yet
+    # (no nearest-capability substitution: shared_device ≠ shared_ip).
     "analyze_related_accounts": StepToolBinding(
         tool_name="related_account_analysis",
         parameter_locks={"analysis_type": "related_account_analysis"},
+        supported_evidence_types=[EvidenceType.NETWORK_RELATIONS,
+                                  EvidenceType.SHARED_DEVICE_EVIDENCE],
     ),
-    "explain_signal": StepToolBinding(tool_name="signal_explain"),
-    "retrieve_policy": StepToolBinding(tool_name="policy_lookup"),
+    # signal_explain handles all three detector families (ML / Rule /
+    # Graph), each rendering its own explanation payload.
+    "explain_signal": StepToolBinding(
+        tool_name="signal_explain",
+        supported_evidence_types=[EvidenceType.ML_SIGNAL_EXPLANATION,
+                                  EvidenceType.RULE_EXPLANATION,
+                                  EvidenceType.GRAPH_CLUSTER_FACTS],
+    ),
+    "retrieve_policy": StepToolBinding(
+        tool_name="policy_lookup",
+        supported_evidence_types=[EvidenceType.POLICY_REFERENCES],
+    ),
 }
 
 
@@ -119,6 +212,8 @@ _TOOL_SUPPORTED_PARAMETERIZATIONS: dict[str, set[tuple[tuple[str, Any], ...]]] =
     # analysis (baseline §12b).
     "cross_account_trade_analysis": {
         (("analysis_type", "cross_account_opposite_trade"),),
+        (("analysis_type", "cross_account_opposite_trade"),
+         ("analysis_scope", "related_account_set")),
     },
     # AL-2.10: the one registered related-account analysis.
     "related_account_analysis": {
@@ -272,7 +367,9 @@ SKILLS: dict[str, SkillDefinition] = {
             "cross-account opposite-trade analysis; its analysis_type is "
             "locked by the registry and its thresholds are system "
             "configuration — results are candidate relationships, never "
-            "confirmed coordinated trading.",
+            "confirmed coordinated trading. The analysis is anchored on "
+            "the case account: every candidate contains a case-account "
+            "transaction.",
             "finding_drilldown is locked to view='self_opposite_trades' "
             "(opposite-side trading by the SAME account); any other view "
             "is invalid under this skill.",
@@ -297,10 +394,13 @@ SKILLS: dict[str, SkillDefinition] = {
         required_capabilities=[],
         allowed_tools=[
             "cross_account_trade_analysis",
+            "related_account_analysis",
             "artifact_bundle",
         ],
         planning_steps=[
             "analyze_cross_account_trades",
+            "analyze_related_account_set_trades",
+            "analyze_related_accounts",
             "generate_artifact",
         ],
         constraints=[
@@ -309,7 +409,16 @@ SKILLS: dict[str, SkillDefinition] = {
             "analyze_cross_account_trades is registry-locked to "
             "analysis_type='cross_account_opposite_trade'; results are "
             "candidate relationships plus the analyzed account scope — "
-            "never confirmed coordinated trading.",
+            "never confirmed coordinated trading. The analysis is "
+            "anchored on the case account (its own transactions are "
+            "retrieved completely within budget; every candidate "
+            "contains a case-account transaction). "
+            "analyze_related_account_set_trades is the SET-INTERNAL "
+            "variant (analysis_scope='related_account_set'): when the "
+            "user names a related-account population and asks about "
+            "hedging WITHIN it, candidate pairs may involve the case "
+            "account or only two related members — the analyzed set is "
+            "{case account} ∪ {authoritative related accounts}.",
             "generate_artifact composes the analysis (including an "
             "insufficient-data result with its analyzed scope) into the "
             "user-visible evidence bundle.",

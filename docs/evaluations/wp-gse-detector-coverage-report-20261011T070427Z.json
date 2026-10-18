@@ -1,0 +1,147 @@
+{
+ "generated_at": "20261011T070427Z",
+ "worktree": "HEAD 58881a9 + GS-A..GS-E working tree",
+ "detector": "assess_comparison_intent (frozen vocabulary; AND of comparison-alternative connective + destination-identity object)",
+ "cases": 19,
+ "mismatches": 2,
+ "paraphrase_coverage": "REPORTED not asserted complete (OQ-6); real-model session probes recorded separately",
+ "gs_e_notes": [
+  "C1: is_new_address-class questions are outside the vocabulary AND outside retrieval deliverables — no structured answer exists for them today (finding F-02, known design boundary).",
+  "Listing phrasings without a comparison connective are correctly not detected."
+ ],
+ "results": [
+  {
+   "text": "9笔提现都提向同一个地址，还是每笔提向一个新地址？",
+   "expected": true,
+   "detected": true,
+   "matches_design": true,
+   "note": "audited request"
+  },
+  {
+   "text": "这些提现的地址是不是相同的？",
+   "expected": true,
+   "detected": true,
+   "matches_design": true,
+   "note": "positive: 是否相同"
+  },
+  {
+   "text": "这几笔交易的地址是否不同？",
+   "expected": true,
+   "detected": true,
+   "matches_design": true,
+   "note": "positive: 是否不同"
+  },
+  {
+   "text": "Did all withdrawals go to the same address or different addresses?",
+   "expected": true,
+   "detected": true,
+   "matches_design": true,
+   "note": "en same-or-different"
+  },
+  {
+   "text": "Are the destination addresses identical?",
+   "expected": true,
+   "detected": true,
+   "matches_design": true,
+   "note": "en identical"
+  },
+  {
+   "text": "请分别列出每笔提现的目的地地址，看是否相同。",
+   "expected": true,
+   "detected": true,
+   "matches_design": true,
+   "note": "paraphrase: 分别+是否相同"
+  },
+  {
+   "text": "这批提现的目的地是同一个钱包吗？",
+   "expected": true,
+   "detected": true,
+   "matches_design": true,
+   "note": "paraphrase: 同一个钱包"
+  },
+  {
+   "text": "这些提现是不是都发到了一个地址？",
+   "expected": true,
+   "detected": false,
+   "matches_design": false,
+   "note": "paraphrase: 都发到一个地址"
+  },
+  {
+   "text": "Withdrawals: same wallet or not?",
+   "expected": true,
+   "detected": false,
+   "matches_design": false,
+   "note": "en short form"
+  },
+  {
+   "text": "列出这个账号的全部提现记录。",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "near-negative: retrieval"
+  },
+  {
+   "text": "把所有高频提现证据发给我。",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "near-negative: evidence"
+  },
+  {
+   "text": "帮我梳理一下这个账号目前的情况。",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "near-negative: overview"
+  },
+  {
+   "text": "给出这个账号的时间线。",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "near-negative: timeline"
+  },
+  {
+   "text": "这9笔提现是不是都提到了新地址？",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "GS-E C1: is_new_address class — OUTSIDE comparison vocabulary (by design)"
+  },
+  {
+   "text": "每笔提现都到一个新地址了吗？",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "GS-E C1 variant"
+  },
+  {
+   "text": "这个账号最近有哪些新地址？",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "GS-E C1: new-address listing"
+  },
+  {
+   "text": "对比一下这两个账户的交易模式。",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "comparison verb, cross-account object — not destination identity"
+  },
+  {
+   "text": "不用比较，直接列出所有提现地址。",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "negation"
+  },
+  {
+   "text": "请分别列出每笔提现的目的地。",
+   "expected": false,
+   "detected": false,
+   "matches_design": true,
+   "note": "listing without comparison connective — correctly NOT detected"
+  }
+ ]
+}

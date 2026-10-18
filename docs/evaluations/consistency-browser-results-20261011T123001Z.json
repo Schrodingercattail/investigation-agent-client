@@ -1,0 +1,22 @@
+{
+ "K1_consistent_premise": {
+  "input": "7笔提现都提向同一个地址，还是每笔提向一个新地址？",
+  "focus_click": "CLICKED",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "response_text": "Investigation Agent\n\n关于「确定 7 笔提现是全部指向同一个目的地地址，还是每笔提现指向一个新的唯一地址」:\n7 笔提现共指向 7 个不同目的地（记录中的目的地标识）。\n目的地标识分组（记录中的标识，精确区分大小写）:\n- dest-1（0xywghvxr5cxbpvon7qjcbls2e2q09tp7n7ek587x5）: 记录 W000087\n- dest-2（0xdz5fvhggj62mbuswm4jdebbazrl4de7yalg0fesk）: 记录 W000084\n- dest-3（1yh604i0eoolv1n0z9c2o8rj2uxxwh2iuy3wvr0b）: 记录 W000088\n- dest-4（0xm7a661pdckqek4945irouhyj471fd4zlyhrp3nxb）: 记录 W000086\n- dest-5（0xob8hkb80ts5dl409ni84w5qpscca2z4y4swn85r4）: 记录 W000090\n- dest-6（spygsyz2o7yp0z0u5ue820wgy4yzys1g6f5gc0ts）: 记录 W000085\n- dest-7（0x6t4gfobj31eubj183j8lw0x9l0ivioo4nfvmx3mx）: 记录 W000089\n| # | 记录 ID | 时间 | 目的地 | 明细 |\n|---|---|---|---|---|\n| 1 | W000087 | 2026-07-21T01:31:49.892750+00:00 | dest-1 (0xywghvxr5cxbpvon7qjcbls2e2q09tp7n7ek587x5) | Withdrawal of 4.141117 USDT to a newly encountered address |\n| 2 | W000084 | 2026-07-21T02:22:49.892750+00:00 | dest-2 (0xdz5fvhggj62mbuswm4jdebbazrl4de7yalg0fesk) | Withdrawal of 0.90031 USDC to a newly encountered address |\n| 3 | W000088 | 2026-07-21T03:01:49.892750+00:00 | dest-3 (1yh604i0eoolv1n0z9c2o8rj2uxxwh2iuy3wvr0b) | Withdrawal of 4.283497 BTC to a newly encountered address |\n| 4 | W000086 | 2026-07-21T04:30:49.892750+00:00 | dest-4 (0xm7a661pdckqek4945irouh"
+ },
+ "K2_mismatched_premise_reconciled": {
+  "input": "9笔提现都提向同一个地址，还是每笔提向一个新地址？",
+  "focus_click": "CLICKED",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "response_text": "Investigation Agent\n\n关于「判定该发现涉及的9笔提现是否全部指向同一个地址，还是每笔提现指向一个新地址」:\n7 笔提现共指向 7 个不同目的地（记录中的目的地标识）。\n说明：您的请求提及 9 笔提现；权威证据共 7 笔提现（检索完整，无缺页），以下比较与结论已覆盖全部 7 笔提现记录。\n目的地标识分组（记录中的标识，精确区分大小写）:\n- dest-1（0xywghvxr5cxbpvon7qjcbls2e2q09tp7n7ek587x5）: 记录 W000087\n- dest-2（0xdz5fvhggj62mbuswm4jdebbazrl4de7yalg0fesk）: 记录 W000084\n- dest-3（1yh604i0eoolv1n0z9c2o8rj2uxxwh2iuy3wvr0b）: 记录 W000088\n- dest-4（0xm7a661pdckqek4945irouhyj471fd4zlyhrp3nxb）: 记录 W000086\n- dest-5（0xob8hkb80ts5dl409ni84w5qpscca2z4y4swn85r4）: 记录 W000090\n- dest-6（spygsyz2o7yp0z0u5ue820wgy4yzys1g6f5gc0ts）: 记录 W000085\n- dest-7（0x6t4gfobj31eubj183j8lw0x9l0ivioo4nfvmx3mx）: 记录 W000089\n| # | 记录 ID | 时间 | 目的地 | 明细 |\n|---|---|---|---|---|\n| 1 | W000087 | 2026-07-21T01:31:49.892750+00:00 | dest-1 (0xywghvxr5cxbpvon7qjcbls2e2q09tp7n7ek587x5) | Withdrawal of 4.141117 USDT to a newly encountered address |\n| 2 | W000084 | 2026-07-21T02:22:49.892750+00:00 | dest-2 (0xdz5fvhggj62mbuswm4jdebbazrl4de7yalg0fesk) | Withdrawal of 0.90031 USDC to a newly encountered address |\n| 3 | W000088 | 2026-07-21T03:01:49.892750+00:00 | dest-3 (1yh604i0eoolv1n0z9c2o8rj2uxxwh2iuy3wvr0b) | Withdrawal of 4.283497 BTC to a newly encountered address |\n| 4 | W000086 | 2026-07-"
+ }
+}

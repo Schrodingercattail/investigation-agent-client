@@ -72,6 +72,244 @@ def _validation_error(message: str) -> ToolResult:
     )
 
 
+def _destination_identity_block(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """WP-GS-B: deterministic destination-identity comparison facts over
+    the withdrawal records of an evidence payload.
+
+    Identity = the record's `address` string, trimmed. Comparison is
+    EXACT and case-sensitive: RP supplies no chain/network context, so
+    no case folding or chain-aware normalization is assumed (case
+    variants count as different RECORDED identifiers; the block records
+    the applied rule). Shape annotations are descriptive metadata only —
+    they never alter equality, and the system claims record-identifier
+    equality only, not on-chain destination identity.
+
+    Returns None when the payload contains no withdrawal records (the
+    block is a withdrawal-stream fact; transaction-only payloads carry
+    no destination identity). Groups preserve first-occurrence order of
+    the (timestamp, record_id)-sorted records and carry their
+    authoritative withdrawal record IDs as provenance.
+    """
+    withdrawals = [r for r in records
+                   if isinstance(r, dict)
+                   and r.get("record_kind") == "withdrawal"]
+    if not withdrawals:
+        return None
+    groups: dict[str, dict[str, Any]] = {}
+    with_identity = 0
+    without_identity = 0
+    for r in withdrawals:
+        ident = str(r.get("address") or "").strip()
+        if not ident:
+            without_identity += 1
+            continue
+        with_identity += 1
+        g = groups.setdefault(ident, {
+            "destination_ref": f"dest-{len(groups) + 1}",
+            "address": ident,
+            "shape": _address_shape(ident),
+            "record_ids": [],
+        })
+        g["record_ids"].append(str(r.get("record_id") or ""))
+    return {
+        "basis": "withdrawal.address",
+        "records_total": len(withdrawals),
+        "records_with_identity": with_identity,
+        "records_without_identity": without_identity,
+        "unique_destinations": len(groups),
+        "groups": [
+            {"destination_ref": g["destination_ref"],
+             "address": g["address"],
+             "shape": g["shape"],
+             "record_ids": list(g["record_ids"])}
+            for g in groups.values()
+        ],
+        "normalization": "trim; exact case-sensitive (shape descriptive)",
+    }
+
+
+def _population_reconciliation_block(
+        evidence: dict[str, Any],
+        records: list[dict[str, Any]],
+        stream: str | None,
+        finding_title: str | None = None) -> dict[str, Any] | None:
+    """Cross-domain summary-detail consistency (facts only): reconcile a
+    governed 24h-frequency summary metric against the record population
+    this evidence view actually exposes, under RP's exposed feature
+    reference anchor.
+
+    The metric and the detail table can legitimately disagree in SCOPE:
+    e.g. trade_frequency_24h counts trades within 24h before RP's
+    reference anchor, while the evidence view exposes the account's full
+    stored history. The block makes that scope explicit and
+    machine-checkable (claimed vs window-recomputed), so downstream
+    presentation can reconcile instead of silently substituting.
+    Returns None when the anchor or the governed metric is unavailable
+    (older RP payloads) — absence is never treated as consistency.
+    """
+    feats = (evidence or {}).get("feature_evidence") or {}
+    anchor = feats.get("feature_reference_time")
+    metric_key = ("withdrawal_frequency_24h" if stream == "withdrawals"
+                  else "trade_frequency_24h" if stream == "transactions"
+                  else None)
+    claimed = feats.get(metric_key) if metric_key else None
+    if not anchor or claimed is None:
+        return None
+    from datetime import datetime, timedelta
+    try:
+        anchor_dt = datetime.fromisoformat(str(anchor))
+        window_start = anchor_dt - timedelta(hours=24)
+        in_window = 0
+        for r in records:
+            ts = r.get("timestamp")
+            if not ts:
+                continue
+            t = datetime.fromisoformat(str(ts))
+            if t.tzinfo is None and anchor_dt.tzinfo is not None:
+                t = t.replace(tzinfo=anchor_dt.tzinfo)
+            if window_start <= t <= anchor_dt:
+                in_window += 1
+    except (ValueError, TypeError):
+        return None
+    entries = []
+    if in_window == len(records) == claimed:
+        # metric, window and detail population all agree — nothing to
+        # reconcile (no scope difference exists)
+        pass
+    else:
+        entries.append({
+            "type": "window_count",
+            "metric": metric_key,
+            "claimed": claimed,
+            "observed_in_window": in_window,
+            "exposed_total": len(records),
+            "outside_window": len(records) - in_window,
+            "verdict": ("consistent_scoped_window" if in_window == claimed
+                        else "population_mismatch"),
+        })
+    # Non-numeric rule claims over the exposed records (frozen RP rule
+    # catalog names → deterministic record predicates). A governed rule
+    # claim without a registered predicate is reported as unmapped.
+    title = (finding_title or "").strip().lower()
+    registered_claims = set()
+    if stream == "withdrawals" and records \
+            and title == "first withdrawal to new address.":
+        registered_claims.add("first_withdrawal_new_address")
+        ordered = sorted(
+            (r for r in records if r.get("timestamp")),
+            key=lambda r: str(r.get("timestamp")))
+        first_new = (ordered[0].get("is_new_address") is True)
+        entries.append({
+            "type": "rule_claim",
+            "claim": "first_withdrawal_new_address",
+            "observed": first_new,
+            "verdict": ("claim_supported" if first_new
+                        else "claim_contradicted"),
+        })
+    if stream == "transactions" and records:
+        registered_claims.add("opposite_trade_ratio")
+        sides = [str(r.get("side")).upper() for r in records
+                 if r.get("side")]
+        ratio_claimed = feats.get("opposite_trade_ratio")
+        if len(sides) >= 2 and "BUY" in sides and "SELL" in sides \
+                and ratio_claimed is not None:
+            observed = min(sides.count("BUY"),
+                           sides.count("SELL")) / len(sides)
+            agrees = abs(float(ratio_claimed) - observed) <= 0.0005
+            entries.append({
+                "type": "ratio_recompute",
+                "metric": "opposite_trade_ratio",
+                "claimed": float(ratio_claimed),
+                "observed": round(observed, 4),
+                "denominator": len(sides),
+                "verdict": ("claim_supported" if agrees
+                            else "population_mismatch"),
+            })
+    unmapped = []
+    # governed frequency/ratio metrics are stream-scoped: the withdrawal
+    # evidence view answers withdrawal metrics; the transaction view
+    # answers trade metrics + the ratio. A governed metric present in
+    # feature_evidence but with no registered verification for THIS
+    # view is reported unmapped (never silently "verified").
+    if stream == "transactions":
+        governed = ("trade_frequency_24h", "trade_frequency_7d",
+                    "opposite_trade_ratio")
+        registered = {metric_key, "opposite_trade_ratio"}
+    elif stream == "withdrawals":
+        governed = ("withdrawal_frequency_24h",
+                    "withdrawal_new_address_share")
+        registered = {metric_key} | registered_claims
+    else:
+        governed, registered = (), set()
+    for k in governed:
+        if feats.get(k) is not None and k not in registered:
+            unmapped.append(k)
+    if not entries and not unmapped:
+        return None
+    worst = "claim_supported"
+    for e in entries:
+        if e["verdict"] in ("population_mismatch", "claim_contradicted"):
+            worst = e["verdict"]
+            break
+        if e["verdict"] == "consistent_scoped_window":
+            worst = "consistent_scoped_window"
+    if unmapped and worst in ("claim_supported",
+                              "consistent_scoped_window"):
+        worst = "unmapped_metrics_present"
+    return {
+        "reference_time": str(anchor),
+        "window_start": window_start.isoformat() if window_start else None,
+        "metrics": entries,
+        "unmapped_metrics": unmapped,
+        "verdict": worst,
+    }
+
+
+def _new_address_status_block(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Authoritative per-record is_new_address status over the
+    withdrawal records (facts only — RP's is_new_address field is the
+    ONLY novelty authority; destination distinctness is NEVER used to
+    infer it). Missing/blank values are counted as unverified."""
+    withdrawals = [r for r in records
+                   if isinstance(r, dict)
+                   and r.get("record_kind") == "withdrawal"]
+    if not withdrawals:
+        return None
+    rows = []
+    true_n = false_n = missing_n = 0
+    for r in withdrawals:
+        raw = r.get("is_new_address")
+        rid = str(r.get("record_id") or "")
+        if raw is True:
+            status = True
+            true_n += 1
+        elif raw is False:
+            status = False
+            false_n += 1
+        else:
+            status = None                       # missing/unverifiable
+            missing_n += 1
+        rows.append({"record_id": rid, "is_new_address": status})
+    return {"basis": "withdrawal.is_new_address",
+            "records_total": len(withdrawals),
+            "true_count": true_n, "false_count": false_n,
+            "missing_count": missing_n,
+            "records": rows}
+
+
+def _address_shape(ident: str) -> str:
+    """Descriptive shape annotation (never used for equality)."""
+    low = ident.lower()
+    if low.startswith("0x") and len(ident) >= 3 \
+            and all(c in "0123456789abcdef" for c in low[2:]):
+        return "hex_0x"
+    if low.startswith(("bc1", "tb1")):
+        return "bech32"
+    if len(ident) >= 26 and not any(c in ident for c in "0OIl"):
+        return "base58"
+    return "unclassified"
+
+
 def finding_drilldown(
     finding_id: str,
     view: str = "timeline",
@@ -392,6 +630,33 @@ def finding_drilldown(
         payload["complete"] = True   # completeness is this view's contract
         payload["finding_id"] = finding_id
         payload["view"] = view
+        # WP-GS-B: deterministic destination-identity comparison facts
+        # over the withdrawal records (facts only — the same/different
+        # conclusion is drawn downstream by the GSP-4 evaluator).
+        identity_block = _destination_identity_block(payload["records"])
+        if identity_block is not None:
+            payload["destination_identity"] = identity_block
+        # Cross-domain consistency: authoritative per-record
+        # is_new_address status for the withdrawal population (F4-class /
+        # 哪些笔提现是新地址 deliverables — keyed by withdrawal record ID).
+        new_addr_block = _new_address_status_block(payload["records"])
+        if new_addr_block is not None:
+            payload["new_address_status"] = new_addr_block
+        # Cross-domain consistency: the case's actually-triggered rule
+        # evidence (rule_name/severity/trigger/threshold/contribution) —
+        # source-backed detection-decision provenance for rule-backed
+        # explanations.
+        rule_ev = evidence.get("rule_evidence") or []
+        if rule_ev:
+            payload["rule_evidence"] = rule_ev
+        # Cross-domain summary-detail consistency: reconcile the governed
+        # 24h-frequency summary metrics against the exposed record
+        # population, using RP's exposed feature reference anchor.
+        reconciliation = _population_reconciliation_block(
+            evidence, payload["records"], stream,
+            finding_title=getattr(finding, "title", None))
+        if reconciliation is not None:
+            payload["population_reconciliation"] = reconciliation
         # Provenance: finding-level citations ride along, as in the timeline.
         return ToolResult(
             outcome=ToolResultOutcome.SUCCESS,

@@ -1,0 +1,548 @@
+{
+ "inv_id": "INV-611f79858053",
+ "task_id": "TASK-a8c72ed01c08",
+ "snapshots": [
+  {
+   "t": 0.002,
+   "status": "running",
+   "revisions": 0,
+   "decisions": [],
+   "plan_steps": [],
+   "contract": null,
+   "outcome": null,
+   "stop": null,
+   "iter": 0
+  },
+  {
+   "t": 0.057,
+   "status": "running",
+   "revisions": 0,
+   "decisions": [],
+   "plan_steps": [],
+   "contract": null,
+   "outcome": null,
+   "stop": null,
+   "iter": 0
+  },
+  {
+   "t": 0.115,
+   "status": "running",
+   "revisions": 1,
+   "decisions": [],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "pending"
+    ],
+    [
+     "inspect_self_opposite_trades",
+     "pending"
+    ]
+   ],
+   "contract": {
+    "contract_id": "GC-41fb9e9e",
+    "goal_type": "policy_check",
+    "subject_ref": "U00299",
+    "outputs": [
+     {
+      "output_id": "O1",
+      "claim": "money_laundering_assessment",
+      "claim_kind": "assessment",
+      "claim_description": null,
+      "subject_ref": "U00299",
+      "scope": "account_level",
+      "evidence_requirements": [
+       "transaction_records",
+       "withdrawal_records",
+       "network_relations",
+       "policy_references",
+       "ml_signal_explanation"
+      ],
+      "satisfaction": "pending",
+      "polarity": null,
+      "detail": null
+     }
+    ]
+   },
+   "outcome": "unanswerable",
+   "stop": null,
+   "iter": 1
+  },
+  {
+   "t": 0.169,
+   "status": "running",
+   "revisions": 1,
+   "decisions": [
+    "CONTINUE"
+   ],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "success"
+    ],
+    [
+     "inspect_self_opposite_trades",
+     "pending"
+    ]
+   ],
+   "contract": {
+    "contract_id": "GC-41fb9e9e",
+    "goal_type": "policy_check",
+    "subject_ref": "U00299",
+    "outputs": [
+     {
+      "output_id": "O1",
+      "claim": "money_laundering_assessment",
+      "claim_kind": "assessment",
+      "claim_description": null,
+      "subject_ref": "U00299",
+      "scope": "account_level",
+      "evidence_requirements": [
+       "transaction_records",
+       "withdrawal_records",
+       "network_relations",
+       "policy_references",
+       "ml_signal_explanation"
+      ],
+      "satisfaction": "unresolved",
+      "polarity": null,
+      "detail": "The gathered evidence is recorded for analyst review; this system does not adjudicate this judgment."
+     }
+    ]
+   },
+   "outcome": "unanswerable",
+   "stop": null,
+   "iter": 2
+  },
+  {
+   "t": 0.225,
+   "status": "failed",
+   "revisions": 1,
+   "decisions": [
+    "CONTINUE",
+    "RE_PLAN"
+   ],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "success"
+    ],
+    [
+     "inspect_self_opposite_trades",
+     "failed"
+    ]
+   ],
+   "contract": {
+    "contract_id": "GC-41fb9e9e",
+    "goal_type": "policy_check",
+    "subject_ref": "U00299",
+    "outputs": [
+     {
+      "output_id": "O1",
+      "claim": "money_laundering_assessment",
+      "claim_kind": "assessment",
+      "claim_description": null,
+      "subject_ref": "U00299",
+      "scope": "account_level",
+      "evidence_requirements": [
+       "transaction_records",
+       "withdrawal_records",
+       "network_relations",
+       "policy_references",
+       "ml_signal_explanation"
+      ],
+      "satisfaction": "unresolved",
+      "polarity": null,
+      "detail": "The gathered evidence is recorded for analyst review; this system does not adjudicate this judgment."
+     }
+    ]
+   },
+   "outcome": "unanswerable",
+   "stop": "replan_failure",
+   "iter": 2
+  }
+ ],
+ "terminal": {
+  "task_id": "TASK-a8c72ed01c08",
+  "investigation_id": "INV-611f79858053",
+  "case_id": "U00299",
+  "goal": "这个账号是否有洗钱情况？",
+  "criteria_kind": "question_answered",
+  "focused_finding_id": "F1",
+  "agent_status": "failed",
+  "stop_reason": "replan_failure",
+  "iteration": 2,
+  "max_iterations": 8,
+  "plan_revisions": 1,
+  "plan_steps": [
+   {
+    "step_id": "S1",
+    "type": "explain_signal",
+    "status": "success",
+    "tool_name": "signal_explain"
+   },
+   {
+    "step_id": "S2",
+    "type": "inspect_self_opposite_trades",
+    "status": "failed",
+    "tool_name": "finding_drilldown"
+   }
+  ],
+  "artifact_ids": [],
+  "activity": [
+   {
+    "seq": 1,
+    "event_type": "agent.started",
+    "timestamp": "2026-10-08T13:54:23.129889+00:00",
+    "iteration": null,
+    "step_id": null,
+    "step_type": null,
+    "tool_name": null,
+    "outcome": null,
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": "Goal: 这个账号是否有洗钱情况？",
+    "artifact_ids": []
+   },
+   {
+    "seq": 2,
+    "event_type": "context.resolved",
+    "timestamp": "2026-10-08T13:54:23.188195+00:00",
+    "iteration": null,
+    "step_id": null,
+    "step_type": null,
+    "tool_name": null,
+    "outcome": null,
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": "focus=F1",
+    "artifact_ids": []
+   },
+   {
+    "seq": 3,
+    "event_type": "plan.created",
+    "timestamp": "2026-10-08T13:54:23.191633+00:00",
+    "iteration": null,
+    "step_id": null,
+    "step_type": null,
+    "tool_name": null,
+    "outcome": null,
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": "plan PLAN-23971c28b355 (['explain_signal', 'inspect_self_opposite_trades'])",
+    "artifact_ids": []
+   },
+   {
+    "seq": 4,
+    "event_type": "step.started",
+    "timestamp": "2026-10-08T13:54:23.192243+00:00",
+    "iteration": 1,
+    "step_id": "S1",
+    "step_type": "explain_signal",
+    "tool_name": null,
+    "outcome": null,
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": null,
+    "artifact_ids": []
+   },
+   {
+    "seq": 5,
+    "event_type": "tool.called",
+    "timestamp": "2026-10-08T13:54:23.192692+00:00",
+    "iteration": 1,
+    "step_id": "S1",
+    "step_type": "explain_signal",
+    "tool_name": "signal_explain",
+    "outcome": null,
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": null,
+    "artifact_ids": []
+   },
+   {
+    "seq": 6,
+    "event_type": "tool.completed",
+    "timestamp": "2026-10-08T13:54:23.260210+00:00",
+    "iteration": 1,
+    "step_id": "S1",
+    "step_type": "explain_signal",
+    "tool_name": "signal_explain",
+    "outcome": "success",
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": null,
+    "artifact_ids": []
+   },
+   {
+    "seq": 7,
+    "event_type": "observation.recorded",
+    "timestamp": "2026-10-08T13:54:23.260287+00:00",
+    "iteration": 1,
+    "step_id": "S1",
+    "step_type": "explain_signal",
+    "tool_name": "signal_explain",
+    "outcome": "success",
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": "The available evidence was insufficient for this step.",
+    "artifact_ids": []
+   },
+   {
+    "seq": 8,
+    "event_type": "decision.made",
+    "timestamp": "2026-10-08T13:54:23.261242+00:00",
+    "iteration": 1,
+    "step_id": null,
+    "step_type": null,
+    "tool_name": null,
+    "outcome": null,
+    "decision": "CONTINUE",
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": "scripted session",
+    "artifact_ids": []
+   },
+   {
+    "seq": 9,
+    "event_type": "step.completed",
+    "timestamp": "2026-10-08T13:54:23.261965+00:00",
+    "iteration": 1,
+    "step_id": "S1",
+    "step_type": "explain_signal",
+    "tool_name": null,
+    "outcome": null,
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": null,
+    "artifact_ids": []
+   },
+   {
+    "seq": 10,
+    "event_type": "step.started",
+    "timestamp": "2026-10-08T13:54:23.262865+00:00",
+    "iteration": 2,
+    "step_id": "S2",
+    "step_type": "inspect_self_opposite_trades",
+    "tool_name": null,
+    "outcome": null,
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": null,
+    "artifact_ids": []
+   },
+   {
+    "seq": 11,
+    "event_type": "tool.called",
+    "timestamp": "2026-10-08T13:54:23.263350+00:00",
+    "iteration": 2,
+    "step_id": "S2",
+    "step_type": "inspect_self_opposite_trades",
+    "tool_name": "finding_drilldown",
+    "outcome": null,
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": null,
+    "artifact_ids": []
+   },
+   {
+    "seq": 12,
+    "event_type": "tool.completed",
+    "timestamp": "2026-10-08T13:54:23.308829+00:00",
+    "iteration": 2,
+    "step_id": "S2",
+    "step_type": "inspect_self_opposite_trades",
+    "tool_name": "finding_drilldown",
+    "outcome": "unsupported",
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": null,
+    "artifact_ids": []
+   },
+   {
+    "seq": 13,
+    "event_type": "observation.recorded",
+    "timestamp": "2026-10-08T13:54:23.308885+00:00",
+    "iteration": 2,
+    "step_id": "S2",
+    "step_type": "inspect_self_opposite_trades",
+    "tool_name": "finding_drilldown",
+    "outcome": "unsupported",
+    "decision": null,
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": "finding_drilldown:unsupported error=CAPABILITY_NOT_SUPPORTED",
+    "artifact_ids": []
+   },
+   {
+    "seq": 14,
+    "event_type": "decision.made",
+    "timestamp": "2026-10-08T13:54:23.309868+00:00",
+    "iteration": 2,
+    "step_id": null,
+    "step_type": null,
+    "tool_name": null,
+    "outcome": null,
+    "decision": "RE_PLAN",
+    "agent_status": null,
+    "stop_reason": null,
+    "summary": "scripted session",
+    "artifact_ids": []
+   },
+   {
+    "seq": 15,
+    "event_type": "agent.failed",
+    "timestamp": "2026-10-08T13:54:23.310536+00:00",
+    "iteration": null,
+    "step_id": null,
+    "step_type": null,
+    "tool_name": null,
+    "outcome": null,
+    "decision": null,
+    "agent_status": "failed",
+    "stop_reason": "replan_failure",
+    "summary": "The investigation could not re-plan within the supported surface after the latest observation.",
+    "artifact_ids": []
+   }
+  ],
+  "goal_representation": {
+   "goal_type": "policy_check",
+   "goal_resolution": "INFERRED",
+   "subject_type": "case",
+   "subject_ref": "U00299",
+   "ambiguous_goal_types": [],
+   "reason": "canonical Scenario F scripted session",
+   "source": "llm"
+  },
+  "goal_contract": {
+   "contract_id": "GC-41fb9e9e",
+   "goal_type": "policy_check",
+   "subject_ref": "U00299",
+   "outputs": [
+    {
+     "output_id": "O1",
+     "claim": "money_laundering_assessment",
+     "claim_kind": "assessment",
+     "claim_description": null,
+     "subject_ref": "U00299",
+     "scope": "account_level",
+     "evidence_requirements": [
+      "transaction_records",
+      "withdrawal_records",
+      "network_relations",
+      "policy_references",
+      "ml_signal_explanation"
+     ],
+     "satisfaction": "unresolved",
+     "polarity": null,
+     "detail": "The gathered evidence is recorded for analyst review; this system does not adjudicate this judgment."
+    }
+   ]
+  },
+  "goal_outcome": "unanswerable",
+  "observation_associations": [
+   {
+    "step_type": "explain_signal",
+    "tool_name": "signal_explain",
+    "outcome": "success",
+    "actual_evidence_types": [
+     "ml_signal_explanation"
+    ],
+    "for_outputs": [
+     "O1"
+    ],
+    "association_reason": "contract_step_mapping"
+   },
+   {
+    "step_type": "inspect_self_opposite_trades",
+    "tool_name": "finding_drilldown",
+    "outcome": "unsupported",
+    "actual_evidence_types": [],
+    "for_outputs": [
+     "O1"
+    ],
+    "association_reason": "contract_step_mapping"
+   }
+  ],
+  "is_terminal": true
+ },
+ "semantic_pre": [
+  {
+   "contract_id": "GC-41fb9e9e",
+   "goal_type": "policy_check",
+   "subject_ref": "U00299",
+   "outputs": [
+    {
+     "output_id": "O1",
+     "claim": "money_laundering_assessment",
+     "claim_kind": "assessment",
+     "subject_ref": "U00299",
+     "scope": "account_level",
+     "evidence_requirements": [
+      "ml_signal_explanation",
+      "network_relations",
+      "policy_references",
+      "transaction_records",
+      "withdrawal_records"
+     ],
+     "claim_description": null
+    }
+   ]
+  },
+  {
+   "contract_id": "GC-41fb9e9e",
+   "goal_type": "policy_check",
+   "subject_ref": "U00299",
+   "outputs": [
+    {
+     "output_id": "O1",
+     "claim": "money_laundering_assessment",
+     "claim_kind": "assessment",
+     "subject_ref": "U00299",
+     "scope": "account_level",
+     "evidence_requirements": [
+      "ml_signal_explanation",
+      "network_relations",
+      "policy_references",
+      "transaction_records",
+      "withdrawal_records"
+     ],
+     "claim_description": null
+    }
+   ]
+  }
+ ],
+ "semantic_final": {
+  "contract_id": "GC-41fb9e9e",
+  "goal_type": "policy_check",
+  "subject_ref": "U00299",
+  "outputs": [
+   {
+    "output_id": "O1",
+    "claim": "money_laundering_assessment",
+    "claim_kind": "assessment",
+    "subject_ref": "U00299",
+    "scope": "account_level",
+    "evidence_requirements": [
+     "ml_signal_explanation",
+     "network_relations",
+     "policy_references",
+     "transaction_records",
+     "withdrawal_records"
+    ],
+    "claim_description": null
+   }
+  ]
+ }
+}

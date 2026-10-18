@@ -1,0 +1,385 @@
+............................................................FFFF........ [ 23%]
+..............F...................FFFF.................................. [ 47%]
+........................................................................ [ 71%]
+........................................................................ [ 95%]
+..F...........                                                           [100%]
+=================================== FAILURES ===================================
+__________ TestCompletionSafetyAcrossModes.test_flag_off_contractless __________
+
+self = <test_cg_gs_a_api_e2e_v1.TestCompletionSafetyAcrossModes object at 0x108aaa780>
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-479/test_flag_off_contractless0')
+
+    def test_flag_off_contractless(self, tmp_path):
+        client = _client(tmp_path)
+        activity, resp = _journey(client, tmp_path, flag=False,
+                                  goal_llm_text=INFERRED_PAYLOAD)
+>       assert activity["agent_status"] == "completed"
+E       AssertionError: assert 'blocked' == 'completed'
+E         
+E         - completed
+E         + blocked
+
+tests/test_cg_gs_a_api_e2e_v1.py:109: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+WARNING  app.agent_loop:agent_loop.py:1350 Findings dependency unavailable: Risk Platform rejected request (429)
+__________ TestCompletionSafetyAcrossModes.test_flag_on_contractless ___________
+
+self = <test_cg_gs_a_api_e2e_v1.TestCompletionSafetyAcrossModes object at 0x108aaaab0>
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-479/test_flag_on_contractless0')
+
+    def test_flag_on_contractless(self, tmp_path):
+        client = _client(tmp_path)
+        activity, resp = _journey(client, tmp_path, flag=True,
+                                  goal_llm_text=EMPTY_PAYLOAD)
+>       assert activity["agent_status"] == "completed"
+E       AssertionError: assert 'blocked' == 'completed'
+E         
+E         - completed
+E         + blocked
+
+tests/test_cg_gs_a_api_e2e_v1.py:121: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  app.goal_resolution:goal_resolution.py:852 LLM goal understanding failed: Expecting value: line 1 column 1 (char 0)
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+WARNING  app.agent_loop:agent_loop.py:1350 Findings dependency unavailable: Risk Platform rejected request (429)
+__ TestValidContractSemanticOutcomes.test_case3_valid_contract_all_satisfied ___
+
+self = <test_cg_gs_a_api_e2e_v1.TestValidContractSemanticOutcomes object at 0x108a7a990>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108d7dd60>
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-479/test_case3_valid_contract_all_0')
+
+    def test_case3_valid_contract_all_satisfied(self, monkeypatch,
+                                                tmp_path):
+        """All outputs SATISFIED → contract-relative COMPLETE + full
+        outcome line; guard and coverage disclosure not applicable."""
+        monkeypatch.setattr(settings, "ENABLE_GOAL_SEMANTIC_CONTRACT",
+                            True)
+        client = _client(tmp_path)
+        activity, resp, task_id = _seam_journey(
+            client, tmp_path, payload=INFERRED_PAYLOAD,
+            plans=[PLAN_FETCH], decisions=["STOP"])
+        contract = activity["goal_contract"]
+        assert contract is not None
+>       assert all(o["satisfaction"] == "satisfied"
+                   for o in contract["outputs"])
+E       assert False
+E        +  where False = all(<generator object TestValidContractSemanticOutcomes.test_case3_valid_contract_all_satisfied.<locals>.<genexpr> at 0x108df7b90>)
+
+tests/test_cg_gs_a_api_e2e_v1.py:210: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+WARNING  app.agent_loop:agent_loop.py:1350 Findings dependency unavailable: Risk Platform rejected request (429)
+______ TestValidContractSemanticOutcomes.test_case4_partial_not_upgraded _______
+
+self = <test_cg_gs_a_api_e2e_v1.TestValidContractSemanticOutcomes object at 0x108a92120>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108d7f530>
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-479/test_case4_partial_not_upgrade0')
+
+    def test_case4_partial_not_upgraded(self, monkeypatch, tmp_path):
+        """One covered output (satisfied) + one output whose evidence the
+        plan never acquires (pending) → GoalOutcome PARTIAL; the
+        response must not claim whole-request completion despite the
+        successful execution termination."""
+        monkeypatch.setattr(settings, "ENABLE_GOAL_SEMANTIC_CONTRACT",
+                            True)
+        client = _client(tmp_path)
+        activity, resp, task_id = _seam_journey(
+            client, tmp_path, payload=TWO_OUT_PAYLOAD,
+            plans=[PLAN_FETCH], decisions=["STOP"])
+        contract = activity["goal_contract"]
+        states = {o["output_id"]: o["satisfaction"]
+                  for o in contract["outputs"]}
+>       assert "satisfied" in states.values()
+E       AssertionError: assert 'satisfied' in dict_values(['pending', 'pending'])
+E        +  where dict_values(['pending', 'pending']) = <built-in method values of dict object at 0x108e54d40>()
+E        +    where <built-in method values of dict object at 0x108e54d40> = {'O1': 'pending', 'O2': 'pending'}.values
+
+tests/test_cg_gs_a_api_e2e_v1.py:232: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+WARNING  app.agent_loop:agent_loop.py:1350 Findings dependency unavailable: Risk Platform rejected request (429)
+_______ TestEvidenceViewIntegration.test_drilldown_payload_carries_block _______
+
+self = <test_cg_gs_b_destination_identity_v1.TestEvidenceViewIntegration object at 0x108acee40>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108d9d610>
+
+    def test_drilldown_payload_carries_block(self, monkeypatch):
+        """Integration: the evidence view attaches the block over
+        withdrawal records (facts only — no conclusion drawn here)."""
+        from unittest.mock import patch
+    
+        evidence = {"withdrawal_evidence": [
+            {"withdrawal_id": f"W{i:03d}", "asset": "USDT",
+             "amount": 1.0 + i, "address": f"dest-{i % 2}",
+             "is_new_address": True,
+             "timestamp": f"2026-07-2{i}T01:00:00Z",
+             "risk_reason": "new address"} for i in range(4)],
+            "transaction_evidence": [],
+            "feature_evidence": {}}
+        monkeypatch.setattr(
+            "app.adapters.risk_platform.RiskPlatformAdapter."
+            "fetch_case_evidence", lambda self, cid, **kw: evidence)
+        finding = Finding(
+            finding_id="F3", case_id="U00010",
+            type="rule_signal", title="High withdrawal frequency.",
+            severity="high", summary="9 withdrawals",
+            evidence_refs=[], signal_refs=[], policy_refs=[],
+            capabilities={"timeline", "signal_explain"})
+        result = finding_drilldown(
+            finding_id="F3", case_id="U00010", view="evidence")
+>       assert result.outcome.value == "success"
+E       AssertionError: assert 'integration_error' == 'success'
+E         
+E         - success
+E         + integration_error
+
+tests/test_cg_gs_b_destination_identity_v1.py:193: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+______________________ test_coverage_incomplete_full_path ______________________
+
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-479/test_coverage_incomplete_full_0')
+
+    def test_coverage_incomplete_full_path(tmp_path):
+        """The exact audited scenario: user asks a comparison question, the
+        goal LLM proposes only a retrieval-only output (no comparison
+        facet), the contract IS accepted, the coverage detector marks
+        comparison_intent_uncovered, and the composer discloses the gap —
+        never claiming the comparison was answered."""
+        client = _client(tmp_path)
+        payload = json.dumps({
+            "goal_resolution": "INFERRED", "goal_type": "policy_check",
+            "ambiguous_goal_types": [], "reason": "r",
+            "required_outputs": [
+                {"claim": "case_risk_overview", "claim_kind": "retrieval",
+                 "subject_ref": "U00010", "scope": "case_level",
+                 "evidence_requirements": ["case_summary"]}]})
+        plans = [PLAN_FETCH]
+        decisions = ["STOP"]
+        goal = COMPARISON_GOAL
+    
+        activity, resp, task_id, diag = _journey(
+            client, tmp_path, flag=True, goal_llm_text=payload,
+            plans=plans, decisions=decisions, goal=goal)
+    
+        contract = activity["goal_contract"]
+        assert contract is not None
+        assert contract["goal_type"] == "policy_check"
+        assert len(contract["outputs"]) == 1
+        o = contract["outputs"][0]
+        assert o["postcondition_facets"] == []
+        decision = activity["goal_contract_decision"]
+        assert decision["coverage"] == "comparison_intent_uncovered"
+>       assert o["satisfaction"] == "satisfied"
+E       AssertionError: assert 'pending' == 'satisfied'
+E         
+E         - satisfied
+E         + pending
+
+tests/test_cg_gs_c_api_e2e_v1.py:155: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+WARNING  app.agent_loop:agent_loop.py:1350 Findings dependency unavailable: Risk Platform rejected request (429)
+__________________________ test_flag_off_guard_active __________________________
+
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-479/test_flag_off_guard_active0')
+
+    def test_flag_off_guard_active(tmp_path):
+        """Flag OFF: the completion-claim guard is flag-independent."""
+        client = _client(tmp_path)
+        payload = json.dumps({
+            "goal_resolution": "INFERRED", "goal_type": "policy_check",
+            "ambiguous_goal_types": [], "reason": "r",
+            "required_outputs": [
+                {"claim": "case_risk_overview", "claim_kind": "retrieval",
+                 "subject_ref": "U00010", "scope": "case_level",
+                 "evidence_requirements": ["case_summary"]}]})
+        plans = [PLAN_FETCH]
+        decisions = ["STOP"]
+        goal = COMPARISON_GOAL
+    
+        activity, resp, task_id, diag = _journey(
+            client, tmp_path, flag=False, goal_llm_text=payload,
+            plans=plans, decisions=decisions, goal=goal)
+    
+>       assert activity["agent_status"] == "completed"
+E       AssertionError: assert 'blocked' == 'completed'
+E         
+E         - completed
+E         + blocked
+
+tests/test_cg_gs_c_api_e2e_v1.py:183: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+WARNING  app.agent_loop:agent_loop.py:1350 Findings dependency unavailable: Risk Platform rejected request (429)
+_____________ test_coverage_incomplete_survives_replan_convergence _____________
+
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-479/test_coverage_incomplete_survi0')
+
+    def test_coverage_incomplete_survives_replan_convergence(tmp_path):
+        """The comparison intent is uncovered, the retrieval runs, and the
+        scripted proposer keeps CONTINUEing: the re-plan re-runs the same
+        retrieval, the no-progress convergence guard stops the loop, and the
+        closure still discloses the uncovered comparison — coverage survives
+        re-plan and re-admission (GSP-7 contract persistence)."""
+        client = _client(tmp_path)
+        payload = json.dumps({
+            "goal_resolution": "INFERRED", "goal_type": "policy_check",
+            "ambiguous_goal_types": [], "reason": "r",
+            "required_outputs": [
+                {"claim": "case_risk_overview", "claim_kind": "retrieval",
+                 "subject_ref": "U00010", "scope": "case_level",
+                 "evidence_requirements": ["case_summary"]}]})
+        fetch_plan = json.dumps({
+            "skill_id": "case_intake", "goal": "g",
+            "steps": [{"type": "fetch_case", "reason": "r"}]})
+    
+        activity, resp, task_id, diag = _journey(
+            client, tmp_path, flag=True, goal_llm_text=payload,
+            plans=[fetch_plan, fetch_plan, fetch_plan],
+            decisions=["CONTINUE", "CONTINUE", "CONTINUE"],
+            goal=COMPARISON_GOAL)
+    
+>       assert activity["agent_status"] == "completed"
+E       AssertionError: assert 'blocked' == 'completed'
+E         
+E         - completed
+E         + blocked
+
+tests/test_cg_gs_c_api_e2e_v1.py:214: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+WARNING  app.agent_loop:agent_loop.py:1350 Findings dependency unavailable: Risk Platform rejected request (429)
+__________ test_coverage_incomplete_not_upgraded_via_existence_output __________
+
+tmp_path = PosixPath('/private/var/folders/hm/gyxhpzgj42gd3jk7wkykcrvc0000gn/T/pytest-of-vv/pytest-479/test_coverage_incomplete_not_u0')
+
+    def test_coverage_incomplete_not_upgraded_via_existence_output(tmp_path):
+        """The same no-upgrade invariant with a NON-retrieval deliverable:
+        an existence-check output (hedge comparison naming) that IS
+        satisfied must not let the closure claim the same-or-different
+        comparison was answered."""
+        client = _client(tmp_path)
+        payload = json.dumps({
+            "goal_resolution": "INFERRED", "goal_type": "policy_check",
+            "ambiguous_goal_types": [], "reason": "r",
+            "required_outputs": [
+                {"claim": "hedge_comparison", "claim_kind": "existence_check",
+                 "subject_ref": "U00010", "scope": "case_level",
+                 "evidence_requirements": ["opposite_trade_relations"]}]})
+        plans = [json.dumps({
+            "skill_id": "case_trade_analysis", "goal": "g",
+            "steps": [{"type": "analyze_cross_account_trades",
+                       "reason": "r"}]})]
+    
+        activity, resp, task_id, diag = _journey(
+            client, tmp_path, flag=True, goal_llm_text=payload,
+            plans=plans, decisions=["STOP"], goal=COMPARISON_GOAL)
+    
+>       assert activity["goal_outcome"] in ("complete", "partial"), diag()
+E       AssertionError:  [terminal state: agent_status='blocked' stop_reason='dependency_unavailable' outcome='blocked' decision={"outcome": "contract_accepted", "reason": null, "coverage": "comparison_intent_uncovered"} response='关于「关于 U00010 的调查结果」:\n该项尚未产生可判定的结果。\n\n整体结果: 本次调查受阻（见上方说明）。\nThe investigation cannot start right now: the Risk Platform is unavailable. No investigation was fabricated — please retry later.']
+E       assert 'blocked' in ('complete', 'partial')
+
+tests/test_cg_gs_c_api_e2e_v1.py:246: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00010: Risk Platform rejected request (429)
+WARNING  app.agent_loop:agent_loop.py:1350 Findings dependency unavailable: Risk Platform rejected request (429)
+____________ TestResumeAdmission.test_resume_legacy_state_continues ____________
+
+self = <test_al351_target_validity_guard_v1.TestResumeAdmission object at 0x108bdd2b0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1063aca10>
+
+    def test_resume_legacy_state_continues(self, monkeypatch):
+        """A pre-guard persisted run (no evidence kind) resumes as
+        context continuation instead of being stranded."""
+        monkeypatch.setattr(settings, "ENABLE_TARGET_VALIDITY_GUARD", True)
+        two_step = ('{"skill_id": "timeline_investigation", "goal": "g", '
+                    '"steps": [{"type": "inspect_timeline", "reason": "r"}, '
+                    '{"type": "inspect_timeline", "reason": "r"}]}')
+        store = TaskStoreV2(tempfile.mkdtemp() + "/al351_g.db")
+        findings = make_findings()
+        runner = _build_runner(store, planner_scripts=[two_step],
+                               decisions=("CONTINUE", "CONTINUE", "STOP"))
+        # an ADMITTED focus (valid evidence kind) so timeline steps run
+        runner.resolver = _CustomResolver(
+            _resolved_outcome(evidence_kind="concept_grounding"))
+        runner.executor = None
+        from app.executor_v2 import ExecutorV2, default_tool_provider
+        runner.executor = ExecutorV2(default_tool_provider())
+        original = runner.executor.execute_one_step
+        calls = {"n": 0}
+    
+        def crashing_execute_one_step(*a, **kw):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise KeyboardInterrupt("simulated crash")
+            return original(*a, **kw)
+    
+        runner.executor.execute_one_step = crashing_execute_one_step
+        with pytest.raises(KeyboardInterrupt):
+            runner.run("goal-A", InvestigationContext(case_id="U00299"),
+                       findings, investigation_id="INV-G",
+                       task_id="TASK-G", findings_provider=lambda: findings)
+        state = store.get_agent_state("TASK-G")
+        assert state is not None and state.agent_status == "running"
+        # pre-guard style state: no evidence kind persisted
+        state.target_evidence_kind = None
+        store.save_agent_state(state)
+        runner.executor.execute_one_step = original
+        result = runner.resume("TASK-G", findings_provider=lambda: findings)
+>       assert result.state.agent_status == "completed"
+E       AssertionError: assert 'stopped_by_limit' == 'completed'
+E         
+E         - completed
+E         + stopped_by_limit
+
+tests/test_al351_target_validity_guard_v1.py:525: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00299: Risk Platform rejected request (429)
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00299: Risk Platform rejected request (429)
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00299: Risk Platform rejected request (429)
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00299: Risk Platform rejected request (429)
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00299: Risk Platform rejected request (429)
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00299: Risk Platform rejected request (429)
+ERROR    app.domain_tools.risk_case_fetch:risk_case_fetch.py:89 risk_case_fetch integration failure for U00299: Risk Platform rejected request (429)
+=============================== warnings summary ===============================
+app/config.py:5
+  /Users/vv/investigation-agent-client/backend/app/config.py:5: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class Settings(BaseSettings):
+
+tests/test_cg3_contractless_api_e2e_v1.py::TestScenarioA_AmbiguousBoundedStop::test_ambiguous_terminates_before_planning
+  /Users/vv/investigation-agent-client/backend/app/main.py:105: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/test_cg3_contractless_api_e2e_v1.py::TestScenarioA_AmbiguousBoundedStop::test_ambiguous_terminates_before_planning
+  /Users/vv/investigation-agent-client/backend/.venv/lib/python3.12/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+tests/test_gsp1_capability_declarations_v1.py::test_skill_prose_is_not_the_declaration_source
+  /Users/vv/investigation-agent-client/backend/tests/test_gsp1_capability_declarations_v1.py:123: PydanticDeprecatedSince211: Accessing the 'model_fields' attribute on the instance is deprecated. Instead, you should access this attribute from the model class. Deprecated in Pydantic V2.11 to be removed in V3.0.
+    "explain_signal"].model_fields
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_cg_gs_a_api_e2e_v1.py::TestCompletionSafetyAcrossModes::test_flag_off_contractless
+FAILED tests/test_cg_gs_a_api_e2e_v1.py::TestCompletionSafetyAcrossModes::test_flag_on_contractless
+FAILED tests/test_cg_gs_a_api_e2e_v1.py::TestValidContractSemanticOutcomes::test_case3_valid_contract_all_satisfied
+FAILED tests/test_cg_gs_a_api_e2e_v1.py::TestValidContractSemanticOutcomes::test_case4_partial_not_upgraded
+FAILED tests/test_cg_gs_b_destination_identity_v1.py::TestEvidenceViewIntegration::test_drilldown_payload_carries_block
+FAILED tests/test_cg_gs_c_api_e2e_v1.py::test_coverage_incomplete_full_path
+FAILED tests/test_cg_gs_c_api_e2e_v1.py::test_flag_off_guard_active - Asserti...
+FAILED tests/test_cg_gs_c_api_e2e_v1.py::test_coverage_incomplete_survives_replan_convergence
+FAILED tests/test_cg_gs_c_api_e2e_v1.py::test_coverage_incomplete_not_upgraded_via_existence_output
+FAILED tests/test_al351_target_validity_guard_v1.py::TestResumeAdmission::test_resume_legacy_state_continues
+10 failed, 292 passed, 4 warnings in 6.45s

@@ -1,0 +1,173 @@
+{
+ "note": "L3 browser journeys, canonical :3001. Final = authoritative. Attempt history preserved (S03/S08 first attempts failed due to journey-tool defects - assertion / wait-condition - not product behavior; re-runs with fixed tooling PASSED).",
+ "S01": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 1,
+    "status": "PASS",
+    "notes": {
+     "has_8findings": true,
+     "has_case": true,
+     "findings_listed": true
+    }
+   }
+  ]
+ },
+ "S03": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "FAIL",
+    "cause": "journey assertion defect (cluster-ID literal not on turn surface; sidebar F6 false positive); observed product behavior = direct F5 answer (see screenshot al33-l3-S03.png)",
+    "notes": {
+     "clarify_multi": false,
+     "f5_candidate": true,
+     "f6_candidate": true,
+     "direct_answer": false
+    }
+   },
+   {
+    "run": 3,
+    "status": "PASS",
+    "notes": {
+     "clarify": false,
+     "focus_f5": true,
+     "device": true,
+     "score80": true,
+     "direct_answer": true
+    }
+   }
+  ]
+ },
+ "S04": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "PASS",
+    "notes": {
+     "score": true,
+     "lightgbm": true,
+     "boundary": false,
+     "activity_markers": 5
+    }
+   }
+  ]
+ },
+ "S05": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "PASS",
+    "notes": {
+     "w_records": true,
+     "seven": true,
+     "all_records": true
+    }
+   }
+  ]
+ },
+ "S06": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "PASS",
+    "notes": {
+     "freq": true,
+     "t_records": true,
+     "count64": true,
+     "activity_markers": 5
+    }
+   }
+  ]
+ },
+ "S07": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "PASS",
+    "notes": {
+     "activity_markers": 5,
+     "cluster": true,
+     "device": true
+    }
+   }
+  ]
+ },
+ "S08": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "FAIL",
+    "cause": "journey wait-condition defect (stale intake closure text matched while loop still running; screenshot shows Activity 'Investigating / Iteration 1 of 8')",
+    "notes": {
+     "activity_markers": 4,
+     "eighteen": true,
+     "ids": false,
+     "boundary": false
+    }
+   },
+   {
+    "run": 3,
+    "status": "PASS",
+    "notes": {
+     "activity_markers": 4,
+     "eighteen": true,
+     "ids": true,
+     "boundary": true
+    }
+   }
+  ]
+ },
+ "S09": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "PASS",
+    "notes": {
+     "activity_markers": 4,
+     "cata": true,
+     "bounded": true
+    }
+   }
+  ]
+ },
+ "S12": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "PASS",
+    "notes": {
+     "eighteen": true,
+     "device": true,
+     "boundary": true,
+     "activity_markers": 4
+    }
+   }
+  ]
+ },
+ "S14": {
+  "final": "PASS",
+  "attempts": [
+   {
+    "run": 2,
+    "status": "PASS",
+    "notes": {
+     "activity_markers": 5,
+     "w87": true,
+     "count7": true,
+     "reload_w87": true,
+     "reload_conversation": true
+    }
+   }
+  ]
+ }
+}

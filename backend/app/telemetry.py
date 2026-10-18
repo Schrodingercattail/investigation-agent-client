@@ -107,6 +107,19 @@ class AgentTelemetryEvent(BaseModel):
     metadata_status_hash: str | None = None
     coverage_counts: dict[str, Any] | None = None
 
+    # Target-validity group (AL-3.5.1 G1). Observational only — never a
+    # decision input. No prompts, no request text, no chain-of-thought.
+    # `decision` (above) carries the TARGET_* state for these events.
+    reason_code: str | None = None
+    evidence_kind: str | None = None
+    guard_enabled: bool | None = None
+
+    # Goal Semantic Contract group (GSP WP-GSP-2). Observational only —
+    # never a decision input; no chain-of-thought, no raw LLM output.
+    contract_id: str | None = None
+    output_count: int | None = None
+    conflicts: str | None = None       # comma-separated conflicted fact keys
+
 
 # --- sink interface ----------------------------------------------------------
 

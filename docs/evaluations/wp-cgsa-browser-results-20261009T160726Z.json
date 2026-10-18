@@ -1,0 +1,20 @@
+{
+ "cgsa_J1_guarded_contractless": {
+  "input": "列出这个账号的关联账号。",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "body_tail": "ntext resolved\n\nfocus=case-level\n\nPlan created\n\nplan PLAN-3548d0235d58 (['analyze_related_accounts'])\n\nStep started\n\niteration 1 · analyze related accounts\n\nInvoking capability\nrelated account analysis\n\niteration 1 · analyze related accounts\n\nCapability returned\nrelated account analysis\nsuccess\n\niteration 1 · analyze related accounts · outcome: success\n\nResult summary\nrelated account analysis\nsuccess\n\nRisk Platform network attribution: 18 related accounts for this account.\n\niteration 1 · analyze related accounts · outcome: success\n\nDecision\nSTOP\n\n已成功获取该账号的18个关联账号列表（基于设备共享检测），问题已得到回答。\n\niteration 1\n\nStep completed\n\niteration 1 · analyze related accounts\n\nInvestigation completed\n\ngoal satisfied"
+ },
+ "cgsa_J2_guarded_stability": {
+  "input": "这个账号有哪些关联账号？",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "body_tail": "focus=case-level\n\nPlan created\n\nplan PLAN-b2d93c1e2a7e (['analyze_related_accounts'])\n\nStep started\n\niteration 1 · analyze related accounts\n\nInvoking capability\nrelated account analysis\n\niteration 1 · analyze related accounts\n\nCapability returned\nrelated account analysis\nsuccess\n\niteration 1 · analyze related accounts · outcome: success\n\nResult summary\nrelated account analysis\nsuccess\n\nRisk Platform network attribution: 18 related accounts for this account.\n\niteration 1 · analyze related accounts · outcome: success\n\nDecision\nSTOP\n\n关联账号分析已成功返回18个通过共享设备（DEV8Z1O4A35QU）关联的账号清单，问题已得到明确回答。\n\niteration 1\n\nStep completed\n\niteration 1 · analyze related accounts\n\nInvestigation completed\n\ngoal satisfied"
+ }
+}

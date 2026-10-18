@@ -1,0 +1,24 @@
+{
+ "J1_comparison_intent_uncovered": {
+  "input": "9笔提现都提向同一个地址，还是每笔提向一个新地址？",
+  "focus": "F3",
+  "focus_click": "CLICKED",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "body_tail": "n 1 of 8\nInvestigation completed\n(goal satisfied)\nPlan\n\nCurrent plan\n\n✓\nfetch case\n(completed)\n\nActivity\n\nAgent run started\n\nGoal: 9笔提现都提向同一个地址，还是每笔提向一个新地址？\n\nInvestigation context resolved\n\nfocus=F3\n\nPlan created\n\nplan PLAN-1dd3d0dec8df (['fetch_case'])\n\nStep started\n\niteration 1 · fetch case\n\nInvoking capability\nrisk case fetch\n\niteration 1 · fetch case\n\nCapability returned\nrisk case fetch\nsuccess\n\niteration 1 · fetch case · outcome: success\n\nResult summary\nrisk case fetch\nsuccess\n\nCase retrieved: 8 findings identified.\n\niteration 1 · fetch case · outcome: success\n\nDecision\nSTOP\n\nscripted session\n\niteration 1\n\nStep completed\n\niteration 1 · fetch case\n\nInvestigation completed\n\ngoal satisfied"
+ },
+ "J2_neutral_no_false_coverage": {
+  "input": "帮我梳理一下这个账号目前的情况。",
+  "focus": "F1",
+  "focus_click": "CLICKED",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "body_tail": "\nIteration 1 of 8\nInvestigation completed\n(goal satisfied)\nPlan\n\nCurrent plan\n\n✓\nfetch case\n(completed)\n\nActivity\n\nAgent run started\n\nGoal: 帮我梳理一下这个账号目前的情况。\n\nInvestigation context resolved\n\nfocus=F1\n\nPlan created\n\nplan PLAN-5dfe594c0dee (['fetch_case'])\n\nStep started\n\niteration 1 · fetch case\n\nInvoking capability\nrisk case fetch\n\niteration 1 · fetch case\n\nCapability returned\nrisk case fetch\nsuccess\n\niteration 1 · fetch case · outcome: success\n\nResult summary\nrisk case fetch\nsuccess\n\nCase retrieved: 8 findings identified.\n\niteration 1 · fetch case · outcome: success\n\nDecision\nSTOP\n\nscripted session\n\niteration 1\n\nStep completed\n\niteration 1 · fetch case\n\nInvestigation completed\n\ngoal satisfied"
+ }
+}

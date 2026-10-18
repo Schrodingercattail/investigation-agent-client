@@ -726,3 +726,86 @@ class TestRealToolLoop:
                                 build_context("F1", CASE), findings)
         assert result.state.agent_status == "completed"
         assert result.state.observations[0]["semantic_status"] == "timeline"
+
+
+# --- C1/B: empty re-plan bounded termination + re-plan budget ----------------
+
+class TestEmptyRePlanBounded:
+    """A RE_PLAN whose adopted plan has no executable steps must terminate
+    the loop (bounded partial completion on prior success) instead of
+    re-entering the decision point forever; re-plan adoptions consume
+    iteration budget so repeated re-plans cannot bypass max_iterations."""
+
+    def test_empty_replan_terminates_bounded(self, store, findings):
+        """Planner returns a non-empty plan, then an EMPTY re-plan.
+        The run must terminate on the first empty re-plan (bounded),
+        not loop."""
+        runner = make_runner(
+            store, ScriptedToolProvider([timeline_success()]),
+            [plan_json("timeline_investigation", ["inspect_timeline"]),
+             plan_json("timeline_investigation", [])],
+            ScriptedProposer(["RE_PLAN", "RE_PLAN", "STOP"]))
+        result = runner.run("show me the timeline for this finding",
+                            build_context("F1", CASE), findings)
+        # bounded terminal at the FIRST empty re-plan (C1/B fix: _re_plan
+        # returns None → BOUNDED_DATA; the empty plan is never adopted)
+        assert result.state.agent_status == "completed"
+        assert result.state.plan_revisions == 1
+        assert result.state.stop_reason == "bounded_data"
+        executed = result.state.observations
+        assert len(executed) == 1
+
+    def test_replan_adoption_consumes_iteration_budget(self, store, findings):
+        """Repeated non-empty re-plans consume iteration budget: with
+        max_iterations=8, the loop cannot exceed it via re-plan-only
+        cycles."""
+        runner = make_runner(
+            store, ScriptedToolProvider([timeline_success()] * 12),
+            [plan_json("timeline_investigation", ["inspect_timeline"])] * 12,
+            AlwaysContinueProposer())
+        result = runner.run("show me the timeline for this finding",
+                            build_context("F1", CASE), findings)
+        assert result.state.iteration <= 8
+        assert result.state.agent_status == "completed"
+
+    def test_empty_replan_with_prior_success_keeps_evidence(self, store,
+                                                            findings):
+        runner = make_runner(
+            store, ScriptedToolProvider([timeline_success()]),
+            [plan_json("timeline_investigation", ["inspect_timeline"]),
+             plan_json("timeline_investigation", [])],
+            ScriptedProposer(["RE_PLAN", "RE_PLAN", "STOP"]))
+        result = runner.run("show me the timeline for this finding",
+                            build_context("F1", CASE), findings)
+        # acquired evidence retained through the bounded terminal
+        assert any(o.get("outcome") == "success"
+                   for o in result.state.observations)
+        assert result.state.agent_status == "completed"
+
+
+class TestIterationCapBoundedPartial:
+    """Iteration cap reached with prior successful results → bounded
+    partial completion (COMPLETED + BOUNDED_DATA), never FAILED, evidence
+    and satisfactions preserved (C1/B closure)."""
+
+    def test_cap_with_prior_success_bounded_partial(self, store, findings):
+        runner = make_runner(
+            store,
+            ScriptedToolProvider([
+                timeline_success_with_id(i) for i in range(1, 12)]),
+            [plan_json("timeline_investigation", ["inspect_timeline"])] * 12,
+            AlwaysContinueProposer())
+        result = runner.run("show me the timeline for this finding",
+                            build_context("F1", CASE), findings)
+        assert result.state.iteration <= 8
+        # prior success preserved: not FAILED
+        assert result.task.status.value != "failed"
+        assert any(o.get("outcome") == "success"
+                   for o in result.state.observations)
+
+
+def timeline_success_with_id(i):
+    r = timeline_success()
+    r.data = dict(r.data or {})
+    r.data["unique_marker"] = f"run-{i}"     # each execution yields NEW data
+    return r

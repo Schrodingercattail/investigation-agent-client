@@ -1,0 +1,24 @@
+{
+ "J1_full_facts_positive_conclusion": {
+  "input": "9笔提现都提向同一个地址，还是每笔提向一个新地址？",
+  "focus": "F3",
+  "focus_click": "CLICKED",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "response_text": "Investigation Agent\n\n关于「关于 F3 的调查结果」:\n7 笔提现共指向 7 个不同目的地（记录中的目的地标识）。\n目的地标识分组（记录中的标识，精确区分大小写）:\n- dest-1（0xywghvxr5cxbpvon7qjcbls2e2q09tp7n7ek587x5）: 记录 W000087\n- dest-2（0xdz5fvhggj62mbuswm4jdebbazrl4de7yalg0fesk）: 记录 W000084\n- dest-3（1yh604i0eoolv1n0z9c2o8rj2uxxwh2iuy3wvr0b）: 记录 W000088\n- dest-4（0xm7a661pdckqek4945irouhyj471fd4zlyhrp3nxb）: 记录 W000086\n- dest-5（0xob8hkb80ts5dl409ni84w5qpscca2z4y4swn85r4）: 记录 W000090\n- dest-6（spygsyz2o7yp0z0u5ue820wgy4yzys1g6f5gc0ts）: 记录 W000085\n- dest-7（0x6t4gfobj31eubj183j8lw0x9l0ivioo4nfvmx3mx）: 记录 W000089\n| # | 记录 ID | 时间 | 目的地 | 明细 |\n|---|---|---|---|---|\n| 1 | W000087 | 2026-07-21T01:31:49.892750+00:00 | dest-1 (0xywghvxr5cxbpvon7qjcbls2e2q09tp7n7ek587x5) | Withdrawal of 4.141117 USDT to a newly encountered address |\n| 2 | W000084 | 2026-07-21T02:22:49.892750+00:00 | dest-2 (0xdz5fvhggj62mbuswm4jdebbazrl4de7yalg0fesk) | Withdrawal of 0.90031 USDC to a newly encountered address |\n| 3 | W000088 | 2026-07-21T03:01:49.892750+00:00 | dest-3 (1yh604i0eoolv1n0z9c2o8rj2uxxwh2iuy3wvr0b) | Withdrawal of 4.283497 BTC to a newly encountered address |\n| 4 | W000086 | 2026-07-21T04:30:49.892750+00:00 | dest-4 (0xm7a661pdckqek4945irouhyj471fd4zlyhrp3nxb) | Withdrawal of 1.645502 USDC to a newly encountered address |\n| 5 | W000090 | 2026-07-21T04:37:49.892750+00:00 | dest-5 (0xob8hkb80ts5dl409ni84w5qpscca2z4y4swn85r4) | Withdrawal of 4.199266 USDC to a newly encountered address |\n| 6 | W000085 | 2026-07-21T05:33:49.892750+00:00 | dest-6 (spygsyz2o7yp0z0u5ue820wgy4yzys1g6f5gc0ts) | Withdrawal of 0.735698 ETH to a newly encountered address |\n| 7 | W000089 |"
+ },
+ "J2_facts_unavailable_no_overclaim": {
+  "input": "9笔提现都提向同一个地址，还是每笔提向一个新地址？",
+  "focus": "F1",
+  "focus_click": "CLICKED",
+  "loop_click": "CLICKED",
+  "notes": {
+   "has_expected": true,
+   "no_forbidden": true
+  },
+  "response_text": "Investigation Agent\n\n关于「关于 F1 的调查结果」:\n该项尚未产生可判定的结果。\n\n整体结果: 以当前系统能力与数据，无法回答该请求。\nThe investigation could not re-plan within the supported surface after the latest observation.\n\nTask\nfailed\n\n9笔提现都提向同一个地址，还是每笔提向一个新地址？\n\nInvestigation step failed\nThe investigation could not re-plan within the supported surface after the latest observation."
+ }
+}

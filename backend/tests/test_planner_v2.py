@@ -16,6 +16,7 @@ from app.models import (
     Plan,
     PlanStepStatus,
 )
+from app.exceptions import LLMError
 from app.planner_v2 import PlanningFailure, PlannerV2, plan_turn
 from app.skills import SKILLS, eligible_skills_for_finding
 
@@ -268,9 +269,22 @@ class TestMalformedOutput:
         assert not isinstance(result, Plan)
 
     def test_llm_outage_bounded(self):
-        result = PlannerV2(ExplodingLLM()).plan("x", CTX_CASE, ["case_intake"])
+        # A genuine provider outage (LLMError family) stays bounded and
+        # keeps its accurate LLM_UNAVAILABLE classification.
+        class OutageLLM:
+            def generate(self, messages, max_tokens=0, temperature=0.1):
+                raise LLMError("connection refused")
+
+        result = PlannerV2(OutageLLM()).plan("x", CTX_CASE, ["case_intake"])
         assert isinstance(result, PlanningFailure)
         assert result.code == "LLM_UNAVAILABLE"
+
+    def test_unexpected_provider_exception_not_masked_as_outage(self):
+        # A raw non-LLM exception escaping generate() is a provider bug —
+        # it must stay bounded but must NOT be masked as LLM_UNAVAILABLE.
+        result = PlannerV2(ExplodingLLM()).plan("x", CTX_CASE, ["case_intake"])
+        assert isinstance(result, PlanningFailure)
+        assert result.code == "PLANNING_UNEXPECTED_ERROR"
 
 
 # --- 11/12. execution/safety boundaries -------------------------------------------------------
@@ -391,13 +405,15 @@ class TestSafetyBoundaries:
         """The planner's max_tokens budget accommodates thinking-style
         providers (root cause of real LLM_OUTPUT_INVALID: a 512-token budget
         truncated the JSON after the model's thinking block). The planner
-        must request a budget large enough for thinking + JSON."""
+        must request a budget large enough for thinking + JSON; 4096 after
+        the P0/B E2E showed an accepted GoalContract's REQUIRED OUTPUTS
+        block truncating both 2048 attempts (stop_reason=max_tokens)."""
         import inspect
         from app import planner_v2 as pv
         # the LLM call lives in the planning body (_plan_inner; plan() is
         # the thin telemetry envelope)
         src = inspect.getsource(pv.PlannerV2._plan_inner)
-        assert "max_tokens=2048" in src
+        assert "max_tokens=4096" in src
 
     def test_convenience_wrapper_passthrough(self):
         result = plan_turn(

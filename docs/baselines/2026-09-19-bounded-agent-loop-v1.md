@@ -204,10 +204,50 @@ The LLM never decides retries or retry counts.
   `stop_reason`, partial results/preserved state surfaced — **MUST NOT
   be represented as ordinary SUCCESS** anywhere in state, API, or
   composer wording.
+
 - No-communication guard: if the decision layer cannot produce a valid
   decision (e.g. repeatedly invalid LLM proposals), the loop terminates
   bounded (`BLOCK`/`failed`) rather than spinning — counted against the
   same iteration budget.
+
+### 9.1 Re-plan budget & empty-plan safety (C1/B incident, 2026-10)
+
+Live incident: a re-plan whose adopted plan had zero executable steps was
+re-adopted dozens of times without consuming iteration budget (iteration
+frozen at 2 of 8 while re-plan decisions repeated) — the §9 rule above
+existed but the implementation only counted step executions. The following
+invariants are long-term acceptance criteria; each has a deterministic
+regression test (`tests/test_agent_loop_v1.py::TestEmptyRePlanBounded`):
+
+1. **Bounded execution** — every adopted re-plan increments
+   `state.iteration`, so re-plan-only cycles consume the same
+   `AGENT_LOOP_MAX_ITERATIONS` budget as step executions and can never
+   bypass the bound.
+   *Acceptance:* a loop that re-plans repeatedly terminates with
+   `iteration <= AGENT_LOOP_MAX_ITERATIONS` and a typed bounded
+   stop_reason.
+2. **Empty-plan safety** — a re-planned plan with zero executable steps is
+   NOT adopted; `_re_plan` returns `None` and the loop terminates through
+   the existing bounded terminal (`BOUNDED_DATA` on prior success,
+   `REPLAN_FAILURE` otherwise).
+   *Acceptance:* a scripted empty re-plan terminates the run on first
+   occurrence; `plan_revisions` does not advance past the empty plan.
+3. **Evidence preservation** — a bounded terminal retains all successful
+   observations, satisfied outputs, and produced artifacts.
+   *Acceptance:* after a bounded terminal, ≥1 successful observation (when
+   one existed) remains in persisted state and every previously satisfied
+   output keeps `satisfaction=satisfied`.
+4. **Outcome integrity** — terminal status, GoalOutcome, and per-output
+   satisfaction stay mutually consistent: an unconfirmed or failed
+   deliverable is never rewritten to `SATISFIED`, and a run with any
+   unsatisfied deliverable is never rendered or persisted as
+   `COMPLETE`.
+   *Acceptance:* composer text, Activity top-line, and persisted
+   `goal_outcome` agree on partial vs complete for the same state.
+5. **Normal re-plan regression** — a NON-empty re-plan with genuinely new
+   or missing-evidence remediation still executes and can complete.
+   *Acceptance:* the existing re-plan recovery tests
+   (`TestRePlanAndRecovery`) stay green unchanged.
 
 ## 10. Planning strategy (bounded / receding horizon)
 

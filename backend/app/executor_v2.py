@@ -26,6 +26,7 @@ task/UI-driven retry.
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -92,6 +93,7 @@ REQUIRED_ARGUMENTS: dict[str, list[str]] = {
     "inspect_transactions": ["finding_id"],
     "inspect_self_opposite_trades": ["finding_id"],
     "analyze_cross_account_trades": ["case_id"],
+    "analyze_related_account_set_trades": ["case_id"],
     "analyze_related_accounts": ["case_id"],
     "explain_signal": ["finding_id"],
 }
@@ -125,8 +127,10 @@ def default_tool_provider() -> ToolProvider:
         lambda args: cross_account_trade_analysis(
             case_id=args.get("case_id", ""),
             finding_id=args.get("finding_id"),
-            # registry-locked value; the planner can never emit another
+            # registry-locked values; the planner can never emit another
             analysis_type=args.get("analysis_type", ANALYSIS_TYPE),
+            analysis_scope=args.get(
+                "analysis_scope", "target_account"),
         ))
     provider.register(
         "related_account_analysis",
@@ -167,6 +171,8 @@ def default_tool_provider() -> ToolProvider:
         finding_id=args.get("finding_id"),
         task_id=args.get("task_id"),
         source_tool_calls=args.get("source_tool_calls"),
+        source_step_ids=args.get("source_step_ids"),
+        prior_artifacts=args.get("prior_artifacts"),
     ))
     return provider
 
@@ -251,7 +257,8 @@ class ExecutorV2:
                          "inspect_self_opposite_trades",
                          "inspect_withdrawals", "inspect_transactions",
                          "analyze_cross_account_trades",
-                         "analyze_related_accounts") \
+                         "analyze_related_accounts",
+                         "analyze_related_account_set_trades") \
                 and "finding_id" not in args:
             # Focus Mode: the focused finding is the canonical drilldown
             # target; the planner never picks entity ids.
@@ -265,6 +272,7 @@ class ExecutorV2:
                          "inspect_withdrawals", "inspect_transactions",
                          "analyze_cross_account_trades",
                          "analyze_related_accounts",
+                         "analyze_related_account_set_trades",
                          "explain_signal") and "case_id" not in args:
             args["case_id"] = context.case_id
             sources["case_id"] = "investigation_context"
@@ -274,8 +282,19 @@ class ExecutorV2:
             # detector default (an ML finding must be explained by ML).
             # Precedence when several detector types back one finding:
             # Rule > ML > Graph (registry primary-detector semantics).
+            # SINGLE-CASE/TARGET ISOLATION: when the step carries an
+            # EXPLICIT finding_id that is NOT the focus, the focus's
+            # detector must NOT be stamped onto it (a different finding
+            # may be a feature observation — stamping the focus's ML
+            # made the tool attach the focus's model data to this
+            # finding). Leave signal_type unset: the tool derives it
+            # from the targeted finding's own signal_refs.
+            explicit_target = args.get("finding_id")
+            derives_from_focus = (
+                not explicit_target
+                or explicit_target == context.focused_finding_id)
             detector_types: list[str] = []
-            if focused_finding is not None:
+            if derives_from_focus and focused_finding is not None:
                 for ref in (getattr(focused_finding, "signal_refs", None)
                             or []):
                     st = (ref.get("signal_type")
@@ -305,6 +324,7 @@ class ExecutorV2:
     def _artifact_arguments(
         step: PlanStep, context: InvestigationContext, task_id: str,
         prior_calls: list[ToolCallV2], user_request: str = "",
+        prior_artifacts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Deterministic runtime arguments for generate_artifact.
 
@@ -353,6 +373,16 @@ class ExecutorV2:
             tc.model_copy(deep=True) for tc in prior_calls
             if tc.tool_name != "artifact_bundle"
         ]
+        # R2a stream scoping: a records-artifact step declares the plan
+        # step(s) it composes from; the tool filters its inputs to them.
+        if step.arguments.get("source_step_ids"):
+            args["source_step_ids"] = list(step.arguments["source_step_ids"])
+        # C1 idempotency: the artifact tool reuses a prior artifact whose
+        # semantic evidence fingerprint matches (same deliverable, same
+        # evidence, different tool-call IDs across re-plans).
+        args["prior_artifacts"] = [
+            dict(a) for a in (prior_artifacts or [])
+            if isinstance(a, dict) and a.get("evidence_fingerprint")]
         return args
 
     # --- public interface -----------------------------------------------------
@@ -413,6 +443,7 @@ class ExecutorV2:
         finding_capabilities: FindingCapability | None = None,
         prior_tool_calls: list[ToolCallV2] | None = None,
         focused_finding: Any | None = None,
+        prior_artifacts: list[dict[str, Any]] | None = None,
     ) -> ExecutionResult:
         """Execute one validated plan. Never generates a plan, never retries.
 
@@ -489,6 +520,7 @@ class ExecutorV2:
                 collected_artifacts=collected_artifacts,
                 provenance_pool=provenance_pool,
                 focused_finding=focused_finding,
+                prior_artifacts=prior_artifacts,
             )
             if step_error is not None:
                 fatal_error = step_error
@@ -528,6 +560,7 @@ class ExecutorV2:
         provenance_pool: list[ToolCallV2] | None = None,
         user_request: str = "",
         focused_finding: Any | None = None,
+        prior_artifacts: list[dict[str, Any]] | None = None,
     ) -> tuple[PlanStep, ToolCallV2 | None, ExecutorError | None,
                list[dict[str, Any]]]:
         """Execute exactly ONE plan step through the normal tool boundary
@@ -549,6 +582,7 @@ class ExecutorV2:
             provenance_pool=provenance_pool,
             user_request=user_request,
             focused_finding=focused_finding,
+            prior_artifacts=prior_artifacts,
         )
         tool_call = collected_calls[0] if collected_calls else None
         return step, tool_call, error, collected_artifacts
@@ -566,9 +600,24 @@ class ExecutorV2:
         provenance_pool: list[ToolCallV2] | None = None,
         user_request: str = "",
         focused_finding: Any | None = None,
+        prior_artifacts: list[dict[str, Any]] | None = None,
     ) -> ExecutorError | None:
         """Execute one plan step. Returns an ExecutorError when it is fatal
         (unimplemented tool / raised exception), else None."""
+
+        # TEST INSTRUMENTATION (R2a partial-failure acceptance; default
+        # OFF): AGENT_TOOL_FAIL_STEP_TYPE=<step type> makes THAT step type
+        # fail deterministically with an integration error at the real
+        # tool-execution boundary. Everything else is untouched.
+        _fail_step_type = os.environ.get("AGENT_TOOL_FAIL_STEP_TYPE", "")
+        if _fail_step_type and step.type == _fail_step_type:
+            return ExecutorError(
+                code="TEST_INJECTED_STREAM_FAILURE",
+                message=(
+                    f"injected failure for step type {_fail_step_type!r} "
+                    "(test instrumentation)"),
+                step_id=step.step_id,
+            )
 
         # REJECTED/SKIPPED semantics preserved: validator-level rejections were
         # settled before execution and never reach this loop as PENDING work.
@@ -605,7 +654,8 @@ class ExecutorV2:
             arguments = self._artifact_arguments(
                 step, context, task_id,
                 (provenance_pool or []) + collected_calls,
-                user_request=user_request)
+                user_request=user_request,
+                prior_artifacts=prior_artifacts)
             # artifact arguments are deterministic system values
             argument_sources = {k: "deterministic_system_value"
                                 for k in arguments}
@@ -705,7 +755,10 @@ class ExecutorV2:
                 and isinstance(tool_result.data.get("artifact"), dict):
             artifact_ids = collected_artifact_ids
             artifact_ids.append(tool_result.data["artifact"]["artifact_id"])
-            collected_artifacts.append(tool_result.data["artifact"])
+            artifact_record = dict(tool_result.data["artifact"])
+            if tool_result.data.get("evidence_fingerprint"):
+                artifact_record["evidence_fingerprint"] =                     tool_result.data["evidence_fingerprint"]
+            collected_artifacts.append(artifact_record)
 
         if step.status == PlanStepStatus.FAILED:
             summary = tool_result.error.message if tool_result.error \

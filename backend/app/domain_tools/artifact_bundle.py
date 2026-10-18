@@ -59,6 +59,25 @@ def _ref_str(ref: Any) -> str:
     return f"{ref.get('kind', '')}:{ref.get('id', '')}"
 
 
+def _dedupe_evidence_refs(refs: list[Any]) -> list[Any]:
+    """Order-preserving dedup of evidence refs (U00047 fix A): a re-plan
+    legitimately re-runs an analysis step, and each execution carries the
+    same evidence refs — concatenating every executed call's refs grows
+    the bundle's evidence list with duplicate pointers to the SAME
+    records (21 → 31 in the original U00047 artifact). Per-call
+    provenance is untouched; only the composed bundle's aggregate ref
+    list names each record once."""
+    seen: set[str] = set()
+    unique: list[Any] = []
+    for r in refs:
+        key = _ref_str(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(r)
+    return unique
+
+
 def _render_timeline(events: list[Any]) -> list[str]:
     """Timeline table with investigation-useful fields only (time, event,
     evidence refs). Importance/severity labels are deliberately NOT shown:
@@ -190,15 +209,10 @@ def _render_evidence_records(payload: dict[str, Any]) -> list[str]:
                 f"| {r.get('record_kind', '')}:{r.get('record_id', '')} | "
                 f"{details} | {ts} |"
             )
-    features = payload.get("risk_features") or {}
-    if features:
-        if records:
-            lines.append("")
-        lines.append("Risk features (ML, values as reported by the Risk "
-                     "Platform):")
-        for k, v in features.items():
-            label = _FEATURE_LABELS.get(k, k)
-            lines.append(f"- {label}: {v}")
+    # Scope integrity (Artifact Scope Integrity task): a pure records file
+    # carries the record rows and their own provenance — aggregate risk
+    # features are conversation/composer facts, never auto-attached
+    # decorations on a detail artifact.
     return lines
 
 
@@ -210,11 +224,16 @@ def _render_cross_account_candidates(payload: dict[str, Any]) -> list[str]:
     configured tolerances, never a coordinated-trading conclusion."""
     status = payload.get("analysis_status")
     cfg = payload.get("config") or {}
+    rel_tol = cfg.get("value_tolerance_relative")
+    floor = cfg.get("value_tolerance_absolute_floor")
     lines = [
         f"Matching criteria (system configuration): time within "
-        f"{cfg.get('max_time_delta_seconds', '?'):g}s; value within "
-        f"{cfg.get('value_tolerance_relative', '?'):.0%} relative "
-        f"(floor {cfg.get('value_tolerance_absolute_floor', '?')}).",
+        f"{cfg.get('max_time_delta_seconds', '?'):g}s; value difference "
+        f"within {rel_tol:.0%} relative to the larger side"
+        + (f", OR within the {floor:g} absolute floor for near-zero "
+           f"notionals (pairs admitted only by that floor are labeled "
+           f"below)" if isinstance(rel_tol, (int, float))
+           and isinstance(floor, (int, float)) else "."),
         "",
     ]
     if status == "MATCH_FOUND":
@@ -232,20 +251,53 @@ def _render_cross_account_candidates(payload: dict[str, Any]) -> list[str]:
                 f"| {c.get('account_b')} | {c.get('side_b')} "
                 f"| {c.get('symbol')} "
                 f"| {c.get('max_time_gap_seconds'):g} "
-                f"| {c.get('value_a'):,.2f} | {c.get('value_b'):,.2f} "
-                f"| {c.get('value_difference'):,.2f} "
+                f"| {c.get('value_a'):,.6g} | {c.get('value_b'):,.6g} "
+                f"| {c.get('value_difference'):,.6g} "
                 f"({c.get('value_difference_relative'):.1%}) | {ids} |")
         lines.append("")
         lines.append(
             "These are candidate relationships: quantitative matches "
             "under the configured analytical tolerances — leads for "
             "analyst judgment, not conclusions about intent.")
+        # floor-admitted transparency: a candidate whose relative
+        # difference exceeds the relative tolerance was admitted ONLY by
+        # the absolute near-zero floor — label it, never silently
+        floor_val = cfg.get("value_tolerance_absolute_floor")
+        if isinstance(rel_tol, (int, float)) and \
+                isinstance(floor_val, (int, float)):
+            floor_admitted = [
+                c.get("candidate_id")
+                for c in payload.get("candidates") or []
+                if isinstance(c.get("value_difference_relative"),
+                              (int, float))
+                and c["value_difference_relative"] > rel_tol
+                and c.get("value_difference") is not None
+                and abs(c["value_difference"]) <= floor_val]
+            if floor_admitted:
+                lines.append(
+                    f"Note: {', '.join(floor_admitted)} exceeded the "
+                    f"{rel_tol:.0%} relative tolerance and were admitted "
+                    f"only by the {floor_val:g} absolute floor (both sides "
+                    "are near-zero notionals).")
     else:
-        lines.append(
-            "No candidate relationships are reported: the available "
-            "transaction evidence was insufficient for a reliable "
-            "conclusion (bounded or empty retrieval). This is not a "
-            "no-match result.")
+        # NO_MATCH and INSUFFICIENT_DATA are DIFFERENT authoritative
+        # outcomes: NO_MATCH means the declared scope was completely
+        # retrieved and nothing matched (an authoritative zero for the
+        # analyzed scope); INSUFFICIENT_DATA means the evidence cannot
+        # establish matching either way. Conflating them misreports a
+        # complete-scope zero as an inconclusive retrieval (and vice
+        # versa) — the wording must match the actual status.
+        if status == "NO_MATCH":
+            lines.append(
+                "No candidate relationships match within the completely "
+                "retrieved analysis scope (retrieval complete, zero "
+                "matches) — an authoritative zero for the analyzed scope.")
+        else:
+            lines.append(
+                "No candidate relationships are reported: the available "
+                "transaction evidence was insufficient for a reliable "
+                "conclusion (bounded or empty retrieval). This is not a "
+                "no-match result.")
     limitations: list[str] = []
     retrieval = payload.get("retrieval") or {}
     if retrieval.get("truncated"):
@@ -358,6 +410,8 @@ def artifact_bundle(
     finding_id: str | None = None,
     task_id: str | None = None,
     source_tool_calls: list[ToolCallV2] | None = None,
+    source_step_ids: list[str] | None = None,
+    prior_artifacts: list[dict] | None = None,
 ) -> ToolResult:
     """Compose an investigation bundle from executed tool results.
 
@@ -428,6 +482,85 @@ def artifact_bundle(
         executed = [tc for tc in executed
                     if (tc.result.data or {}).get("finding_id") in (None, finding_id)]
 
+    # R2a stream scoping: a records artifact declares the plan step(s)
+    # whose results it composes from (source_step_ids in the plan step's
+    # arguments). Filter the executed calls to exactly those steps — the
+    # artifact contains ONLY its declared stream, never the whole plan.
+    source_step_ids = [str(s).strip() for s in (source_step_ids or [])
+                       if str(s).strip()]
+    if source_step_ids:
+        executed = [
+            tc for tc in executed
+            if any(tc.tool_call_id.startswith(f"TC-{sid}-")
+                   for sid in source_step_ids)]
+        if not executed:
+            return _validation_error(
+                "No executed tool results match the declared source "
+                f"step(s) {source_step_ids}; no artifact was fabricated."
+            )
+
+    # --- C1 idempotency: semantic evidence fingerprint ------------------------
+    # A RE_PLAN may re-run the same analysis step (new tool-call IDs, same
+    # semantic evidence). If an artifact of this task already covers the
+    # SAME semantic evidence for the same deliverable, reuse it instead of
+    # persisting a second duplicate export. A genuinely different evidence
+    # set (new candidates / remediated records) yields a different
+    # fingerprint and proceeds normally.
+    import hashlib as _hashlib
+
+    def _evidence_fingerprint(executed_calls):
+        # SET-based semantic identity: re-running the same analysis yields
+        # the same candidate/record KEYS (deduplicated), so the fingerprint
+        # is stable across re-plans even when calls execute twice.
+        keys = set()
+        for tc in executed_calls:
+            data = tc.result.data if (tc.result is not None
+                                      and isinstance(tc.result.data,
+                                                     dict)) else {}
+            if data.get("view") == "evidence":
+                ids = tuple(sorted(str(r.get("record_id")
+                                       if isinstance(r, dict) else r)
+                                   for r in (data.get("records") or [])))
+                keys.add(("records", data.get("finding_id"),
+                          data.get("stream"), ids))
+            for c in (data.get("candidates") or []):
+                if not isinstance(c, dict):
+                    continue
+                sup = tuple(sorted(str(x.get("transaction_id")
+                                       if isinstance(x, dict) else x)
+                                   for x in (c.get("supporting") or [])))
+                keys.add(("cand", c.get("account_a"), c.get("account_b"),
+                          c.get("symbol"), sup))
+        if not keys:
+            return None
+        return _hashlib.sha256(
+            repr(sorted(repr(k) for k in keys)).encode()).hexdigest()
+
+    fingerprint = _evidence_fingerprint(executed)
+    for prior in (prior_artifacts or []):
+        if not isinstance(prior, dict):
+            continue
+        if prior.get("evidence_fingerprint")                 and prior["evidence_fingerprint"] == fingerprint:
+            return ToolResult(
+                outcome=ToolResultOutcome.SUCCESS,
+                data={
+                    "artifact": prior,
+                    "artifact_id": prior.get("artifact_id"),
+                    "title": prior.get("title"),
+                    "scope": scope,
+                    "format": "md",
+                    "artifact_reused": True,
+                    "evidence_fingerprint": fingerprint,
+                    "source_tool_call_count": 0,
+                    "evidence_missing": False,
+                    "next_data_needed": [],
+                },
+                evidence_refs=_dedupe_evidence_refs(
+                    [r for tc in executed for r in tc.result.evidence_refs]),
+                citation_refs=[p for tc in executed
+                               for p in tc.result.citation_refs],
+            )
+
     # --- render sections (deterministic order; only available data) -----------
     lines: list[str] = []
     # Provenance accumulates EXACTLY when content renders (P10/P11): a call
@@ -470,8 +603,10 @@ def artifact_bundle(
             lines.extend(_finding_block(f))
         if findings_rendered:
             contributing_calls.append(canonical)
-        if not findings_rendered:
-            lines.append("- Findings: Not available (no case fetch this task).")
+        # Scope integrity: with no canonical fetch, there are no findings to
+        # own — an empty "Not available" header next to concrete evidence
+        # blocks (sourced from other steps) reads as a contradiction. The
+        # evidence blocks already name their own source finding/step.
 
         # No Investigation Evidence section here: concrete record IDs are
         # rendered only after a complete-set evidence investigation (see the
@@ -545,6 +680,31 @@ def artifact_bundle(
                     "this rule."
                 )
                 signal_lines.append(" — ".join(parts))
+        elif data.get("signal_type") == "Feature" \
+                and isinstance(data.get("explanation"), dict):
+            # Feature observation (AL-2.9/2.14 class): the observed values
+            # plus the platform's OWN authoritative semantics (factor
+            # entry + finding statement) — echoed verbatim, never
+            # reconstructed; a trigger verdict appears only if the
+            # platform stated one.
+            ex = data["explanation"]
+            feats = [f for f in (ex.get("features") or [])
+                     if isinstance(f, dict) and f.get("name")]
+            if not feats:
+                continue      # nothing observable → not a contributor
+            vals = ", ".join(f"{f['name']}={f.get('value')}"
+                             for f in feats[:5])
+            parts = [f"- Feature observation: {vals}."]
+            rf = ex.get("risk_factor")
+            if isinstance(rf, dict) and (rf.get("description") or "").strip():
+                parts.append(
+                    f"  Risk factor (severity "
+                    f"{rf.get('severity') or 'unknown'}): "
+                    f"{rf['description'].strip()}")
+            statement = (ex.get("finding_summary") or "").strip()
+            if statement:
+                parts.append(f"  Platform statement: {statement}")
+            signal_lines.append("\n".join(parts))
         elif data.get("signal_type") == "ML" and "explanation" in data:
             ex = data["explanation"]
             if "ml_score" in ex:
@@ -562,6 +722,28 @@ def artifact_bundle(
         lines.append("## Signal Explanation")
         lines.extend(signal_lines)
 
+    # --- attempted but unavailable (capability boundaries) ---------------------
+    # An UNSUPPORTED result is a recorded ATTEMPT bounded by the current
+    # capability surface — never a success, never risk evidence, and never
+    # silently invisible: the bundle renders it as its own bounded line so
+    # the investigation trail shows exactly what was tried and why no
+    # answer came back. (The tool's own error message is echoed verbatim.)
+    unavailable_lines: list[str] = []
+    for tc in executed:
+        if tc.result is None \
+                or tc.result.outcome != ToolResultOutcome.UNSUPPORTED:
+            continue
+        err = tc.result.error
+        unavailable_lines.append(
+            f"- {tc.tool_call_id} ({tc.tool_name}): attempted but not "
+            "supported by the current capability surface"
+            + (f" — {err.code}: {err.message}" if err else "."))
+        contributing_calls.append(tc)   # the attempt IS part of the trail
+    if unavailable_lines:
+        lines.append("")
+        lines.append("## Attempted but Unavailable")
+        lines.extend(unavailable_lines)
+
     # --- candidate cross-account relationships (only when present) --------
     # §17 baseline content rules: candidate relationship + supporting
     # transaction IDs + matching criteria/metrics + limitations. Renders
@@ -570,6 +752,11 @@ def artifact_bundle(
     # never silently omit the analysis). NO_MATCH renders as its own
     # bounded statement so the analysis is never invisible in a bundle.
     candidate_lines: list[str] = []
+    # C1: semantic dedup — a re-plan may re-run the same analysis and yield
+    # the same candidate set under a new tool-call ID. Identical candidate
+    # content renders ONCE (first occurrence); genuinely different candidate
+    # sets render their own blocks (no false dedup).
+    seen_candidate_keys: set = set()
     for tc in executed:
         data = tc.result.data if isinstance(tc.result.data, dict) else {}
         if data.get("analysis") != "cross_account_trade_analysis":
@@ -577,6 +764,15 @@ def artifact_bundle(
         if data.get("analysis_status") == "MATCH_FOUND" \
                 and not (data.get("candidates") or []):
             continue          # nothing to render → not a contributor
+        _key = frozenset(
+            (c.get("account_a"), c.get("account_b"), c.get("symbol"),
+             tuple(sorted(x.get("transaction_id") if isinstance(x, dict)
+                          else str(x)
+                          for x in (c.get("supporting") or []))))
+            for c in (data.get("candidates") or []) if isinstance(c, dict))
+        if _key in seen_candidate_keys:
+            continue    # identical analysis already rendered — no duplicate block
+        seen_candidate_keys.add(_key)
         block = _render_cross_account_candidates(data)
         if block:
             if candidate_lines:
@@ -801,10 +997,13 @@ def artifact_bundle(
             "scope": scope,
             "format": "md",
             "source_tool_call_count": len(contributing_calls),
+            "source_step_ids": source_step_ids or [],
+            "evidence_fingerprint": fingerprint,
             "evidence_missing": bool(gaps),
             "next_data_needed": gaps,
         },
-        evidence_refs=[r for tc in executed for r in tc.result.evidence_refs],
+        evidence_refs=_dedupe_evidence_refs(
+            [r for tc in executed for r in tc.result.evidence_refs]),
         citation_refs=[p for tc in executed for p in tc.result.citation_refs],
     )
 

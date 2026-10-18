@@ -162,6 +162,7 @@ def test_cross_account_match_answers_the_business_question():
         "tool_name": "cross_account_trade_analysis", "outcome": "success",
         "semantic_status": "MATCH_FOUND",
         "summary": {"candidates_found": 6, "candidates": cands,
+                    "target_account": "U00010",
                     "max_time_delta_seconds": 30.0,
                     "value_tolerance_relative": 0.05,
                     "retrieval": {"truncated": True}},
@@ -170,7 +171,7 @@ def test_cross_account_match_answers_the_business_question():
     st.focused_finding_title = None
     st.focused_finding_id = None
     response = compose_loop_response(st)
-    assert "发现 6 个候选跨账户对冲交易关系" in response
+    assert "发现 6 个涉及 U00010 的候选跨账户对冲交易关系" in response
     assert "30 秒" in response and "5%" in response       # matching criteria
     assert "预算限制" in response                            # bounded retrieval
     assert "不构成对操纵或交易意图的结论" in response

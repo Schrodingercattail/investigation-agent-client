@@ -268,6 +268,19 @@ class TaskActivityResponse(BaseModel):
     # Stage 2.1 structured Question / Goal Representation (bounded,
     # user-safe projection; additive).
     goal_representation: dict[str, Any] | None = None
+    # GSP WP-GSP-2: the accepted Goal Semantic Contract (bounded,
+    # user-safe content; additive; None when flag off / no contract).
+    goal_contract: dict[str, Any] | None = None
+    # GSP WP-GSP-5: derived overall goal outcome (complete/partial/
+    # unanswerable/blocked); additive.
+    goal_outcome: str | None = None
+    # GSP WP-GSP-3: per-observation output associations (additive; empty
+    # when flag off / legacy run).
+    observation_associations: list[dict[str, Any]] = Field(
+        default_factory=list)
+    # WP-CG-3: structured provenance of the GoalContract decision
+    # (additive; None when flag off / legacy run).
+    goal_contract_decision: dict[str, Any] | None = None
     is_terminal: bool
 
 

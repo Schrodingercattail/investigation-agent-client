@@ -90,6 +90,24 @@ _RELATED_ACCOUNT_ELEMENTS: tuple[str, ...] = (
 )
 
 
+# Account-listing delivery intent: the request asks for the related
+# accounts THEMSELVES (list/details/names), not merely mentions 关联账户
+# inside a metric-question predicate (e.g. 「是关联账户的对冲交易比例吗」).
+_ACCOUNT_DELIVERY_MARKERS: tuple[str, ...] = (
+    "列出", "清单", "明细", "名单", "发我", "发一下", "列一下",
+    "哪些账号", "哪些账户", "哪些关联",
+)
+
+
+def has_account_delivery_intent(text: str) -> bool:
+    """Whether the request carries delivery intent toward the related
+    accounts (list/details/names) — used to distinguish a genuine
+    related-accounts deliverable from a bare 关联账户 mention inside a
+    metric-question predicate."""
+    t = _normalized(text)
+    return any(m in t for m in _ACCOUNT_DELIVERY_MARKERS)
+
+
 def is_related_account_analysis_request(text: str) -> bool:
     """GOVERNED ROUTING predicate: case-level related-account analysis
     intent (「哪些账号是这个账号的关联账号」). A cross-account TRADE
@@ -126,3 +144,195 @@ def is_explain_finding_request(text: str) -> bool:
 def is_evidence_request(text: str) -> bool:
     """The user asks for the concrete evidence behind a finding."""
     return bool(_EVIDENCE_INTENT_RE.search(text or ""))
+
+
+# ---------------------------------------------------------------------------
+# Request-coverage vocabulary (deterministic aspect identification).
+# Bounded, single-sourced predicates naming the SUPPORTED sub-questions the
+# runtime can verify — the same vocabulary the goal layer's deterministic
+# contract proposer and the turn-path coverage verifier both read, so the
+# two surfaces can never disagree about which aspects a request contains.
+# Deliberately narrow: an unmatched request keeps its coverage uncertainty
+# (no invented aspects), matching the bounded-vocabulary rule above.
+# ---------------------------------------------------------------------------
+
+# The reverse-trade-RATE METRIC sub-question (「34.38%反向交易率指的是…」):
+# the user asks what the opposite_trade_ratio figure MEANS / measures.
+# Distinct from the cross-account ANALYSIS ask (evaluated by the routing
+# predicate above) — a request may contain one, the other, or both.
+_REVERSE_TRADE_RATE_RE = re.compile(
+    r"反向交易率|对向交易率|反向交易比例|opposite[\s-]*trade[\s-]*ratio",
+    re.IGNORECASE)
+
+
+def mentions_reverse_trade_rate(text: str) -> bool:
+    """The user asks about the opposite_trade_ratio metric itself
+    (its meaning / measurement scope)."""
+    return bool(_REVERSE_TRADE_RATE_RE.search(text or ""))
+
+
+# The withdrawal new-address sub-question (「哪些笔提现是新地址」): the
+# user asks WHICH withdrawals carry the is_new_address marker. Requires
+# BOTH the withdrawal subject and the new-address concept (AND rule —
+# same false-positive discipline as the comparison detector).
+_WITHDRAWAL_SUBJECT_RE = re.compile(r"提现|提現|取款|withdrawal", re.IGNORECASE)
+_NEW_ADDRESS_RE = re.compile(
+    r"新地址|新錢包地址|new[\s-]*address", re.IGNORECASE)
+
+
+def mentions_withdrawal_new_address(text: str) -> bool:
+    """The user asks which withdrawals were sent to new addresses
+    (the per-record is_new_address deliverable)."""
+    t = text or ""
+    return bool(_WITHDRAWAL_SUBJECT_RE.search(t)
+                and _NEW_ADDRESS_RE.search(t))
+
+
+def mentions_withdrawals(text: str) -> bool:
+    """The request's subject is withdrawal records (shared subject
+    element of the withdrawal sub-questions)."""
+    return bool(_WITHDRAWAL_SUBJECT_RE.search(text or ""))
+
+
+# Rule-criteria vocabulary: the user asks HOW a rule/threshold judges
+# (「判断标准」「怎样算高频提现」「多少笔会触发」) — the detection-rule
+# explanation intent, answered from the finding's authoritative rule data
+# (signal explain), NOT from policy retrieval. Same bounded-element
+# discipline as the matchers above; policy wording elsewhere in the
+# request keeps the policy route (the planner composes explain+policy).
+_RULE_CRITERIA_RE = re.compile(
+    r"判断标准|判定标准|认定标准|怎样算|怎麼算|怎么算|如何判定|怎麼判定|"
+    r"判定为|判定為|算不算|"
+    r"什么情况|哪些情况|什麼情況|哪些情況|何种情况|何種情況|"
+    r"多少笔|多少次|阈值|閾值|门槛|門檻|"
+    r"what[\s-]*counts[\s-]*as|what[\s-]*situation|"
+    r"how[\s-]*is[\s-]*(it|a|an)?[\s-]*determined|"
+    r"threshold|criteria",
+    re.IGNORECASE)
+
+
+def is_rule_criteria_request(text: str) -> bool:
+    """The user asks for a rule/threshold's criteria (how something is
+    judged, how many trigger it) — the detection-rule explanation
+    intent. Part of the explain-intent family: callers treat it exactly
+    like is_explain_finding_request."""
+    return bool(_RULE_CRITERIA_RE.search(text or ""))
+
+
+# Set-internal cross-account analysis intent (「这些账户之间是否存在对冲」):
+# the user FIRST names a related-account population and THEN asks about
+# hedging WITHIN that population. The analysis target is the SET
+# {case account} ∪ {related accounts} — candidate pairs may involve the
+# case account or only two related members. Distinct from the
+# target-anchored ask ("这个账户和其他账户之间有没有对冲") where every
+# candidate must involve the case account (Case-4 semantics). The set
+# predicate wins when both wordings appear: the population framing
+# ("这些账户之间") is the narrower, deliberate scope.
+_SET_INTERNAL_MARKERS: tuple[str, ...] = (
+    "这些账户之间", "這些賬戶之間", "这些账号之间", "這些賬號之間",
+    "关联账户之间", "關聯賬戶之間", "关联账号之间", "關聯賬號之間",
+    # "关联账户中(是否有对冲…)": the population-framed hedging ask
+    # without the 之间 form — still a set-internal request (the analysis
+    # scope is the related-account set, not the case account alone)
+    "关联账户中", "關聯賬戶中",
+    # B-fix: the 之-less contractions ("关联账号间是否存在对冲交易") name
+    # the same population-framed ask. The bare 账号间/账户间 forms are
+    # only recognized with the 是否存在 hedging frame, so a plain
+    # cross-account mention ("其他账户之间") never becomes set-internal.
+    "关联账号间", "關聯賬號間", "关联账户间", "關聯賬戶間",
+    "账号间是否存在", "賬號間是否存在", "账户间是否存在", "賬戶間是否存在",
+    "账户集合内部", "集合内部", "账户之间是否存在", "账号之间是否存在",
+    "among the related accounts", "between the related accounts",
+    "between these accounts", "among these accounts",
+)
+
+
+# Party-anchored guard: when a set-internal marker is immediately
+# preceded by a "with/and" connector, the named population is the CASE
+# ACCOUNT'S counterparty ("U00008 与关联账号之间") — the target-anchored
+# scope, deliberately NOT set-internal.
+_ANCHOR_PARTY_CONNECTORS = ("与", "和", "跟", "同", "及")
+_ANCHOR_PARTY_SPAN = __import__("re").compile(
+    r"(与|和|跟|同|及)(关联账号|关联账户|其他账号|其他账户|别的账号|"
+    r"别的账户|这些账号|这些账户)(之?间)")
+
+
+def is_related_account_set_trade_analysis(text: str) -> bool:
+    """GOVERNED ROUTING predicate: the user asks for hedging/counter-trade
+    candidates WITHIN a named related-account population (set-internal
+    pairs — the case account is one member of the set, not the only
+    anchor). Requires BOTH the set-internal framing AND the trade/hedging
+    subject."""
+    t = _normalized(text)
+    if not any(e in t for e in _TRADE_ANALYSIS_ELEMENTS):
+        return False
+    if not any(m in t for m in _SET_INTERNAL_MARKERS):
+        return False
+    # Party-anchored exclusion (B-fix): "U00008 与/和 关联账号(之)间…"
+    # names the population as the CASE ACCOUNT'S counterparty — the
+    # target-anchored scope. Strip those spans first; a set-internal
+    # marker surviving outside them still qualifies.
+    t_wo_party = _ANCHOR_PARTY_SPAN.sub("", t)
+    return any(m in t_wo_party for m in _SET_INTERNAL_MARKERS)
+
+
+# ---------------------------------------------------------------------------
+# Explain-compound decomposition vocabulary: the user asks WHY one or more
+# risk signals are risk items (「高频交易和提现到新地址为什么是风险项」).
+# Each domain maps the user's words to the finding-title vocabulary of the
+# SAME case — the actual findings are resolved from the case's OWN
+# metadata (never hardcoded ids): a domain only yields a target when this
+# case's findings carry the matching title vocabulary.
+# ---------------------------------------------------------------------------
+_EXPLAIN_DOMAINS: tuple[tuple[str, str, str], ...] = (
+    # (domain_id, request element, finding-title element)
+    ("trading_frequency", "高频交易", "trading frequency"),
+    ("trading_frequency", "交易频率", "trading frequency"),
+    ("trading_frequency", "频繁交易", "trading frequency"),
+    ("withdrawal_new_address", "提现到新地址", "new address"),
+    ("withdrawal_new_address", "新地址提现", "new address"),
+    ("withdrawal_new_address", "首次提现", "new address"),
+    ("withdrawal_frequency", "高频提现", "withdrawal frequency"),
+    ("withdrawal_frequency", "提现频率", "withdrawal frequency"),
+    ("shared_device", "共享设备", "shared device"),
+    ("linked_account", "关联账号网络", "linked account"),
+    ("linked_account", "关联账户网络", "linked account"),
+    ("ml_pattern", "ml pattern", "ml pattern"),
+    ("ml_pattern", "机器学习检测", "ml pattern"),
+    ("opposite_trade_ratio", "反向交易率", "opposite trade"),
+)
+
+
+def detect_explain_domains(text: str) -> list[str]:
+    """The distinct risk-signal domains the request names, in stable
+    first-mention order. Bounded vocabulary; an unmatched request yields
+    no domains (no invented decomposition)."""
+    t = _normalized(text)
+    domains: list[str] = []
+    for domain_id, request_element, _title in _EXPLAIN_DOMAINS:
+        if request_element in t and domain_id not in domains:
+            domains.append(domain_id)
+    return domains
+
+
+def findings_for_explain_domains(
+    text: str, findings: list[Any],
+) -> list[tuple[str, Any]]:
+    """(domain_id, finding) pairs for every detected domain whose case
+    carries a metadata-matched finding (title vocabulary). Order follows
+    first-mention; a domain with no matching finding in THIS case is
+    skipped — never guessed."""
+    t = _normalized(text)
+    matched: list[tuple[str, Any]] = []
+    seen_findings: set[str] = set()
+    for domain_id, request_element, title_element in _EXPLAIN_DOMAINS:
+        if request_element not in t:
+            continue
+        for f in findings or []:
+            title = _normalized(getattr(f, "title", "") or "")
+            if title_element in title and f.finding_id not in seen_findings:
+                matched.append((domain_id, f))
+                seen_findings.add(f.finding_id)
+                break
+    # dedupe by finding (one finding = one explain output), keep order
+    return matched

@@ -440,7 +440,10 @@ class TestToolCandidateEvidence:
         assert "T-X3" not in payload_json           # non-candidate rows stay internal
         assert "records" not in out.data            # no raw record dump key
         assert out.data["totals"]["transactions_retrieved"] == 5
-        assert out.data["totals"]["total_matched"] == 5
+        # target-anchored analysis echoes the two retrieval streams' full
+        # counts summed (disjoint populations on the real path; this fake
+        # serves the same 5-row page to both streams, hence 5 + 5)
+        assert out.data["totals"]["total_matched"] == 10
 
     def test_finding_anchor_recorded_not_filtering(self, scoped, monkeypatch):
         monkeypatch.setattr(

@@ -145,6 +145,148 @@ def _unsupported_capability_message(
 # Response composition (deterministic; grounded in ToolResults only)
 # ---------------------------------------------------------------------------
 
+def _mentions_reverse_trade_rate(user_request: str | None) -> bool:
+    """The user's own words naming the reverse-trade-rate METRIC (not
+    the cross-account analysis): when the authoritative metric could not
+    be retrieved, the composer says so instead of silently skipping the
+    ask. Shared vocabulary — the same predicate the request-coverage
+    verifier reads."""
+    import app.investigation_concepts as _concepts
+    return _concepts.mentions_reverse_trade_rate(user_request or "")
+
+
+def _evidence_comparison_lines(data: dict,
+                               user_request: str | None) -> list[str]:
+    """English conclusions over the evidence view's comparison fact
+    blocks — the destination-identity answer, the per-record new-address
+    answer, and the metric-scope reconciliation. Verdict SHAPES reuse the
+    contract path's pure fact-verdict functions (one semantics, two
+    surfaces); the wording is this composer's own (English turn surface).
+    Every line states its scope; a population shortfall never presents
+    the retrieved subset as the asserted full population."""
+    lines: list[str] = []
+    from app.goal_postconditions import (
+        _destination_block_consistent, _destination_facts_verdict,
+        _new_address_facts_verdict)
+    from app.goal_resolution import asserted_record_population
+
+    # 1) destination-address identity (the same-or-different ask)
+    di = data.get("destination_identity")
+    if isinstance(di, dict) and di.get("records_total"):
+        total = di["records_total"]
+        asserted = asserted_record_population(user_request or "")
+        shortfall = asserted is not None and asserted > total
+        if shortfall:
+            lines.append(
+                f"Population note: your request mentions {asserted} "
+                f"withdrawals, but the authoritative source holds only "
+                f"{total} (completely retrieved). The comparison below "
+                f"covers the {total} retrieved records only — it is NOT "
+                "an answer over the full requested population.")
+        if _destination_block_consistent(di):
+            missing = di.get("records_without_identity") or 0
+            unique = di.get("unique_destinations")
+            if missing:
+                lines.append(
+                    f"Destination identity: {missing}/{total} records "
+                    "lack a recorded destination identifier — the "
+                    "same-or-different comparison covers the comparable "
+                    "subset only, not the whole set.")
+            elif unique == 1:
+                lines.append(
+                    f"Destination identity: all {total} withdrawals "
+                    "point to the SAME destination (identical recorded "
+                    "address identifiers).")
+            else:
+                groups = di.get("groups") or []
+                # per-record mapping lists EVERY group — a truncated
+                # mapping would silently drop records from a per-record
+                # deliverable (these populations are bounded by the
+                # drilldown's complete-record-set contract)
+                per_record = "; ".join(
+                    f"{(g.get('record_ids') or ['?'])[0]}→"
+                    f"{g.get('destination_ref')}"
+                    for g in groups)
+                lines.append(
+                    f"Destination identity: the {total} withdrawals go "
+                    f"to {unique} DIFFERENT destinations (recorded "
+                    f"address identifiers; {per_record}). Not a single "
+                    "shared destination.")
+
+    # 2) per-record is_new_address status (the which-records ask)
+    na = data.get("new_address_status")
+    if isinstance(na, dict) and na.get("records_total"):
+        total = na["records_total"]
+        true_ids = [r.get("record_id") for r in (na.get("records") or [])
+                    if r.get("is_new_address") is True]
+        false_ids = [r.get("record_id") for r in (na.get("records") or [])
+                     if r.get("is_new_address") is False]
+        missing_n = na.get("missing_count") or 0
+        shown = ", ".join(str(i) for i in true_ids)
+        false_shown = ", ".join(str(i) for i in false_ids)
+        if missing_n:
+            lines.append(
+                f"New-address status: {missing_n}/{total} records have "
+                "no authoritative is_new_address marker — the per-record "
+                "status is established for the remainder only.")
+        elif not false_ids:
+            lines.append(
+                f"New-address status: ALL {total} withdrawals are marked "
+                f"as new addresses by the Risk Platform ({shown}).")
+        else:
+            lines.append(
+                f"New-address status: {len(true_ids)}/{total} withdrawals "
+                f"are marked as new addresses ({shown}); "
+                f"{len(false_ids)} are not "
+                f"({false_shown}).")
+
+    # 3) metric-scope reconciliation (summary metric vs exposed records)
+    pr = data.get("population_reconciliation")
+    if isinstance(pr, dict):
+        ref = str(pr.get("reference_time") or "")
+        for m in pr.get("metrics") or []:
+            if not isinstance(m, dict):
+                continue
+            if m.get("type") == "window_count":
+                noun = ("withdrawal" if "withdrawal" in str(m.get("metric"))
+                        else "transaction")
+                if m.get("verdict") == "population_mismatch":
+                    lines.append(
+                        f"⚠ Scope mismatch: the summary metric claims "
+                        f"{m.get('claimed')} {noun}/24h, but the 24h "
+                        f"window before the reference time ({ref}) "
+                        f"recomputes to {m.get('observed_in_window')} — "
+                        f"the record list holds {m.get('exposed_total')}. "
+                        "The discrepancy is recorded, not explained away.")
+                else:
+                    lines.append(
+                        f"Metric scope: the “{m.get('claimed')} "
+                        f"{noun}/24h” summary counts the 24h window "
+                        f"before the feature reference time ({ref}; "
+                        f"{m.get('observed_in_window')} in window); the "
+                        f"record list below spans all "
+                        f"{m.get('exposed_total')} {noun}s "
+                        f"({m.get('outside_window')} outside the scoring "
+                        "window). Two different scopes, both verifiable "
+                        "— neither number substitutes for the other.")
+            elif m.get("type") == "ratio_recompute":
+                if m.get("verdict") == "claim_supported":
+                    lines.append(
+                        f"Metric scope: the summary ratio "
+                        f"{m.get('claimed')} is confirmed by recomputing "
+                        f"from the records ({m.get('observed')}, "
+                        f"denominator all {m.get('denominator')} "
+                        "transactions).")
+                else:
+                    lines.append(
+                        f"⚠ Scope mismatch: the summary ratio "
+                        f"{m.get('claimed')} does not match the record "
+                        f"recomputation {m.get('observed')} (denominator "
+                        f"{m.get('denominator')}); recorded, not "
+                        "explained away.")
+    return lines
+
+
 def compose_response(
     *,
     user_request: str,
@@ -155,6 +297,7 @@ def compose_response(
     planning_failure: PlanningFailure | None = None,
     outcome_status: str | None = None,
     clarification_message: str | None = None,
+    response_language: str | None = None,
 ) -> str:
     """Transform structured results into a concise human-readable response.
 
@@ -179,10 +322,30 @@ def compose_response(
                     "investigation action. You can ask about the case, a "
                     "finding, its timeline, its evidence, or the policies "
                     "that apply.")
+        if code == "LLM_EMPTY_RESPONSE":
+            return ("The model returned empty responses twice, so this "
+                    "request could not be planned. Please try again in a "
+                    "moment — if it persists, the model endpoint may be "
+                    "temporarily degraded.")
+        if code == "LLM_TIMEOUT":
+            return ("The planning request timed out, so this request "
+                    "could not be started. Please try again in a moment.")
+        if code == "LLM_RATE_LIMITED":
+            return ("The planning service was rate limited, so this "
+                    "request could not be started. Please try again "
+                    "after a short delay.")
+        if code == "LLM_CONFIGURATION_ERROR":
+            return ("The planning service is misconfigured (authentication "
+                    "or configuration), so this request could not be "
+                    "started. This needs operator attention.")
         if code == "LLM_UNAVAILABLE":
             return ("The planning service is temporarily unavailable, so "
                     "this request could not be started. Please try again "
                     "in a moment — the investigation is unaffected.")
+        if code == "PLANNING_UNEXPECTED_ERROR":
+            return ("An unexpected error occurred during planning, so "
+                    "this request could not be started. Please try again "
+                    "— the investigation is unaffected.")
         if code == "NO_ELIGIBLE_SKILL":
             return ("This request doesn't match an investigation action "
                     "available for the current context. You can ask about "
@@ -304,11 +467,26 @@ def compose_response(
                     ) if on
                 ]
                 kind_txt = " and ".join(kinds) if kinds else "matching"
-                prose.append(
-                    f"The Risk Platform returned {n} {kind_txt} record"
-                    f"{'s' if n != 1 else ''} supporting this finding. All "
-                    "records are shown below."
-                )
+                if response_language == "zh":
+                    kind_zh = {"withdrawal": "提现", "transaction": "交易"}
+                    kinds_zh = "与".join(
+                        kind_zh.get(k, k) for k in kinds) if kinds else "匹配"
+                    prose.append(
+                        f"Risk Platform 返回了 {n} 条支持该发现的"
+                        f"{kinds_zh}记录,全部记录如下所示。"
+                    )
+                else:
+                    prose.append(
+                        f"The Risk Platform returned {n} {kind_txt} record"
+                        f"{'s' if n != 1 else ''} supporting this finding. "
+                        "All records are shown below."
+                    )
+                # Request-coverage closure: the conclusions the records
+                # themselves carry. A record list alone does not answer a
+                # same-or-different ask, a which-records ask, or a metric
+                # scope mismatch — each gets its own explicit conclusion
+                # (one dimension never stands in for another).
+                prose.extend(_evidence_comparison_lines(data, user_request))
                 # §3/§20: a concrete-record answer carries records only —
                 # risk features belong to signal/feature-explanation scope.
             elif data.get("view") == "self_opposite_trades":
@@ -427,39 +605,177 @@ def compose_response(
                 # observation contract): candidate terminology only — the
                 # result is a quantitative match under configured
                 # tolerances, never a confirmed-pattern claim.
+                # Case-4 correction: the answer has TWO independent parts
+                # — (A) what the authoritative same-account reverse-trade
+                # rate means (baseline §8 boundary; never conflated with
+                # the cross-account match), and (B) the target-anchored
+                # cross-account result, whose candidates all contain the
+                # target account, with the actually-retrieved scope stated.
                 status = data.get("analysis_status")
                 cfg = data.get("config") or {}
                 delta = cfg.get("max_time_delta_seconds")
                 rel = cfg.get("value_tolerance_relative")
+                floor = cfg.get("value_tolerance_absolute_floor")
+                # the criteria are DUAL: relative tolerance OR the absolute
+                # near-zero-notional floor. Stating only the 5% made
+                # floor-admitted candidates (relative diff far above 5%)
+                # read as contradicting the matcher.
                 criteria = (
                     f" (matching criteria: time within {delta:g}s, value "
-                    f"within {rel:.0%})" if delta is not None and rel is not None
-                    else "")
+                    f"difference within {rel:.0%} relative to the larger "
+                    f"side, OR within the {floor:g} absolute floor "
+                    "(near-zero notionals; pairs admitted only by the "
+                    "floor are labeled below)"
+                ) if delta is not None and rel is not None and \
+                    floor is not None else ""
+                target = data.get("target_account")
+                metrics = data.get("target_account_metrics") or {}
+                ratio = metrics.get("opposite_trade_ratio") \
+                    if isinstance(metrics, dict) else None
+                if ratio is not None and target:
+                    prose.append(
+                        f"About the reverse-trade rate: {ratio:.2%} "
+                        "(opposite_trade_ratio) is account "
+                        f"{target}'s OWN buy/sell balance — computed over "
+                        "the account's own trade stream as min(BUY count, "
+                        "SELL count) ÷ the account's total trades. It "
+                        "measures same-account opposite-side trading; it "
+                        "is NOT a cross-account match rate and is "
+                        "independent of the cross-account result below."
+                    )
+                elif ratio is None and _mentions_reverse_trade_rate(
+                        user_request):
+                    prose.append(
+                        "The authoritative reverse-trade-rate metric for "
+                        "this account could not be retrieved in this run, "
+                        "so its meaning is not restated here."
+                    )
+                retrieval = data.get("retrieval") or {}
+                t_ret = retrieval.get("target") or {}
+                c_ret = retrieval.get("counterparty") or {}
+                scope_bits: list[str] = []
+                if target and t_ret:
+                    scope_bits.append(
+                        f"target account {target}: "
+                        f"{t_ret.get('transactions_retrieved', 0)} "
+                        "transactions retrieved"
+                        + (" (partial)" if t_ret.get("truncated")
+                           else " (complete)"))
+                if c_ret:
+                    scope_bits.append(
+                        f"counterparty window: "
+                        f"{c_ret.get('transactions_retrieved', 0)} "
+                        "transactions retrieved across "
+                        f"{c_ret.get('accounts_queried', 0)} connected "
+                        "accounts"
+                        + (" (partial)" if c_ret.get("truncated") else ""))
+                set_mode = (data.get("analysis_scope")
+                            == "related_account_set")
                 if status == "MATCH_FOUND":
                     candidates = data.get("candidates") or []
                     n = len(candidates)
-                    prose.append(
+                    found = data.get("candidates_found")
+                    reported = (
                         f"The analysis found {n} candidate cross-account "
                         "opposite-trade relationship"
                         + ("s" if n != 1 else "")
                         + f" in the analyzed evidence{criteria}."
                     )
+                    if isinstance(found, int) and found > n:
+                        # the system candidate cap bound the report: the
+                        # user must see that more candidates exist than
+                        # are listed (never an silent cap)
+                        reported += (
+                            f" {found} candidates were found in total; "
+                            f"the top {n} are listed (system candidate "
+                            "limit)."
+                        )
+                    prose.append(reported)
+                    if set_mode:
+                        with_case = [c for c in candidates
+                                     if target in (c.get("account_a"),
+                                                   c.get("account_b"))]
+                        found = data.get("candidates_found")
+                        cap_note = ""
+                        if isinstance(found, int) and found > n:
+                            cap_note = (
+                                f" In total {found} candidate groups "
+                                f"were found; the top {n} are listed "
+                                f"here (system candidate limit) — the "
+                                f"remaining {found - n} are not "
+                                "delivered in this answer.")
+                        prose.append(
+                            f"Scope: the related-account set (case "
+                            f"account {target} ∪ related accounts). "
+                            f"{len(with_case)} of the {n} listed "
+                            f"candidates involve account {target}; the "
+                            f"remaining {n - len(with_case)} occur "
+                            "solely between other related accounts — "
+                            "each pair is reported with its own "
+                            "transaction evidence." + cap_note
+                        )
+                    else:
+                        if target:
+                            prose.append(
+                                f"All listed candidates involve account "
+                                f"{target} (the case account); candidates "
+                                f"without a {target} transaction are not "
+                                "part of this answer."
+                            )
                     for c in candidates:
                         ids = ", ".join(
                             c.get("transaction_ids_a", [])
                             + c.get("transaction_ids_b", []))
+                        if set_mode:
+                            tag = ("involves the case account"
+                                   if target in (c.get("account_a"),
+                                                 c.get("account_b"))
+                                   else "related-members only")
+                            tag_txt = f"({tag}) "
+                        else:
+                            tag_txt = ""
+
+                        def _num(v, spec):
+                            # missing value fields are disclosed as
+                            # n/a — never formatted as 0 and never a
+                            # crash (a malformed candidate must not
+                            # take the whole answer down)
+                            if isinstance(v, (int, float)) \
+                                    and not isinstance(v, bool):
+                                return format(v, spec)
+                            return "n/a"
+
+                        # floor-admitted transparency: a candidate whose
+                        # relative difference exceeds the relative
+                        # tolerance was admitted ONLY by the absolute
+                        # floor — label it, never silently
+                        floor_note = ""
+                        v_rel = c.get("value_difference_relative")
+                        v_diff = c.get("value_difference")
+                        if isinstance(v_rel, (int, float)) \
+                                and isinstance(v_diff, (int, float)) \
+                                and not isinstance(v_rel, bool) \
+                                and floor is not None \
+                                and v_rel > rel and abs(v_diff) <= floor:
+                            floor_note = (
+                                " — admitted by the absolute floor "
+                                f"({floor:g}; near-zero notionals)")
+
                         prose.append(
                             f"- Candidate {c.get('candidate_id')} "
-                            f"({c.get('match_type')}): "
-                            f"{c.get('account_a')} {c.get('side_a')} vs "
-                            f"{c.get('account_b')} {c.get('side_b')} — "
-                            f"{c.get('symbol')}; max gap "
-                            f"{c.get('max_time_gap_seconds'):g}s; value "
-                            f"{c.get('value_a'):,.2f} vs "
-                            f"{c.get('value_b'):,.2f} (difference "
-                            f"{c.get('value_difference'):,.2f}, "
-                            f"{c.get('value_difference_relative'):.1%}); "
-                            f"transactions: {ids}"
+                            f"{tag_txt}({c.get('match_type') or 'n/a'}): "
+                            f"{c.get('account_a') or '?'} "
+                            f"{c.get('side_a') or '?'} vs "
+                            f"{c.get('account_b') or '?'} "
+                            f"{c.get('side_b') or '?'} — "
+                            f"{c.get('symbol') or '?'}; max gap "
+                            f"{_num(c.get('max_time_gap_seconds'), 'g')}s; "
+                            f"value {_num(c.get('value_a'), ',.6g')} vs "
+                            f"{_num(c.get('value_b'), ',.6g')} (difference "
+                            f"{_num(c.get('value_difference'), ',.6g')}, "
+                            f"{_num(v_rel, '.1%')}); "
+                            f"transactions: {ids or 'n/a'}"
+                            f"{floor_note}"
                         )
                     prose.append(
                         "These are candidate relationships: quantitative "
@@ -467,14 +783,35 @@ def compose_response(
                         "tolerances — leads for analyst judgment, not "
                         "conclusions about intent."
                     )
+                    if retrieval.get("truncated"):
+                        prose.append(
+                            "Note: retrieval was bounded by system "
+                            "budgets, so the analyzed scope is partial; "
+                            "absence beyond it is not established."
+                        )
                 elif status == "NO_MATCH":
-                    prose.append(
-                        "No candidate cross-account opposite-trade "
-                        "relationships matched within the configured "
-                        f"tolerances{criteria} in the analyzed evidence. "
-                        "This applies to the analyzed accounts and data "
-                        "window only."
-                    )
+                    if set_mode:
+                        prose.append(
+                            "No candidate opposite-trade relationships "
+                            "matched within the configured "
+                            f"tolerances{criteria} anywhere inside the "
+                            "related-account set (the case account and "
+                            "all related accounts were retrieved and "
+                            "analyzed). This applies to the analyzed "
+                            "set and data window only."
+                        )
+                    else:
+                        prose.append(
+                            "No candidate cross-account opposite-trade "
+                            "relationships matched within the configured "
+                            f"tolerances{criteria} in the analyzed "
+                            "evidence. This applies to the analyzed "
+                            "accounts and data window only."
+                            + (f" No candidate involving account {target} "
+                               "was found; relationships between other "
+                               f"accounts are not reported as {target}'s "
+                               "hedging evidence." if target else "")
+                        )
                 else:   # INSUFFICIENT_DATA
                     prose.append(
                         "The cross-account trade analysis could not reach "
@@ -483,6 +820,9 @@ def compose_response(
                         "(retrieval was bounded or empty). This is not a "
                         "no-match result."
                     )
+                if scope_bits:
+                    prose.append("Analyzed scope: "
+                                 + "; ".join(scope_bits) + ".")
             elif data.get("signal_type") == "Rule" and "rule" in data:
                 # 1) detection mechanism (deterministic, from the payload).
                 # When the confirmed-fact sentence below already names the
@@ -529,15 +869,53 @@ def compose_response(
                         f"The finding was flagged by the rule {name}."
                     )
             elif data.get("signal_type") == "ML" and "explanation" in data:
-                # 1) detection mechanism (deterministic, from the payload)
-                prose.append(detection_mechanism_sentence(data))
-                # 2) confirmed fact: the model score
-                ex = data["explanation"]
-                if "ml_score" in ex:
-                    prose.append(
-                        f"The model score is {ex['ml_score']}/100 "
-                        f"({ex.get('score_interpretation', 'a system signal')})."
-                    )
+                if response_language == "zh":
+                    # zh turn face: the SAME authoritative semantics as the
+                    # loop path's zh rendering, built from THIS payload.
+                    from app.agent_loop import _signal_answer_lines
+                    ex_zh = data["explanation"]
+                    prose.extend(_signal_answer_lines({
+                        "ml_score": ex_zh.get("ml_score"),
+                        "detection_method": ex_zh.get("detection_method"),
+                        "score_interpretation": ex_zh.get(
+                            "score_interpretation"),
+                        "attribution_available": ex_zh.get(
+                            "attribution_available"),
+                        "available_feature_values":
+                            ex_zh.get("available_feature_values") or {},
+                    }, lang="zh"))
+                else:
+                    # 1) detection mechanism (deterministic, from the payload)
+                    prose.append(detection_mechanism_sentence(data))
+                    # 2) confirmed fact: the model score
+                    ex = data["explanation"]
+                    if "ml_score" in ex:
+                        prose.append(
+                            f"The model score is {ex['ml_score']}/100 "
+                            f"({ex.get('score_interpretation', 'a system signal')})."
+                        )
+                    # 3) the authoritative context features the model scored
+                    # (list-completeness labeling: a partial display says so)
+                    feats = ex.get("available_feature_values") or {}
+                    if isinstance(feats, dict) and feats:
+                        shown = ", ".join(
+                            f"{_FEATURE_LABELS.get(k, k)} = {v}"
+                            for k, v in list(feats.items())[:10])
+                        more = (
+                            f" (first 10 of {len(feats)} features)"
+                            if len(feats) > 10 else "")
+                        prose.append(
+                            "The model scored this account on these Risk "
+                            f"Platform features: {shown}{more}.")
+                    # 4) honest boundary: per-feature attribution does not
+                    # exist in RP data — never presented, never invented
+                    if ex.get("attribution_available") is False:
+                        prose.append(
+                            "Boundary: the Risk Platform provides no "
+                            "per-feature contribution attribution for this "
+                            "signal, so individual feature importance and "
+                            "the model's reasoning process cannot be stated "
+                            "— the facts above are what is determinable.")
             elif data.get("signal_type") == "Feature" \
                     and "explanation" in data:
                 # AL-2.9: a feature-detected finding (no rule/ML/graph
@@ -585,11 +963,36 @@ def compose_response(
                         f"{shown}{more}.")
                 related = ex.get("related_accounts") or []
                 if related:
-                    shown = ", ".join(str(a) for a in related[:5])
-                    more = (f" (and {len(related) - 5} more)"
-                            if len(related) > 5 else "")
-                    prose.append(
-                        f"Related accounts in the cluster: {shown}{more}.")
+                    # List-completeness semantics: RP's related_accounts
+                    # is a server-side preview — a partial list is always
+                    # labeled as a sample with the authoritative total
+                    # (cluster members incl. this account, minus one),
+                    # never as the complete membership.
+                    shown_ids = ", ".join(str(a) for a in related[:5])
+                    shown_n = min(len(related), 5)
+                    total = ex.get("related_accounts_total")
+                    is_preview = ex.get("related_accounts_preview") is True
+                    if is_preview and total and shown_n < total:
+                        member_count = (ex.get("cluster") or {}).get(
+                            "member_count")
+                        scope_note = (f" (the cluster has {member_count} "
+                                      "members including this account)"
+                                      if isinstance(member_count, int)
+                                      else "")
+                        prose.append(
+                            f"Related accounts — SAMPLE, not the full "
+                            f"list: {shown_ids} ({shown_n} of {total} "
+                            f"related accounts shown as a Risk Platform "
+                            f"graph-evidence preview{scope_note}). The "
+                            "complete related-account list is available "
+                            "through the related-account network "
+                            "analysis.")
+                    else:
+                        more = (f" (and {len(related) - 5} more)"
+                                if len(related) > 5 else "")
+                        prose.append(
+                            f"Related accounts in the cluster: "
+                            f"{shown_ids}{more}.")
             elif data.get("signal_type") == "Rule" \
                     and "explanation" in data:
                 # rule requested but NO backing rule exists in RP data —
@@ -982,6 +1385,7 @@ class InvestigationService:
         task_store: TaskStoreV2 | None = None,
         trigger_hint: TriggerReason | None = None,
         prior_tool_calls: list[ToolCallV2] | None = None,
+        response_language: str | None = None,
     ) -> InvestigationTurnResult:
         """Run one full turn. Never calls tools directly; never mutates the
         input context object (works on copies).
@@ -1343,6 +1747,7 @@ class InvestigationService:
             resolved_ctx,
             eligible_ids,
             finding_capabilities=finding_caps,
+            case_findings=case_findings,
         )
 
         if isinstance(plan_or_failure, PlanningFailure):
@@ -1356,6 +1761,7 @@ class InvestigationService:
                     user_request=user_request, skill_id=None, plan=None,
                     tool_calls=[], execution_errors=[],
                     planning_failure=plan_or_failure,
+                    response_language=response_language,
                 ),
                 context=resolved_ctx,
                 follow_ups=[],     # no follow-ups for planning failure
@@ -1393,7 +1799,30 @@ class InvestigationService:
             plan=plan,
             tool_calls=execution.tool_calls,
             execution_errors=execution.errors,
+            response_language=response_language,
         )
+
+        # --- 5b) Request-coverage verification (three-constraint closure) ------
+        # The turn path has no GoalContract: without this check a multi-
+        # aspect request is "completed" whenever its tools succeed — tool
+        # success is not an answer. The verifier reuses the contract
+        # path's verdict semantics over THIS RUN'S real payloads, names
+        # every identified aspect that is not determinately answered, and
+        # keeps partial answers (a failed aspect never erases the
+        # answered ones). Requests matching no supported pattern yield
+        # None — their coverage uncertainty is preserved, never invented.
+        from app.request_coverage import coverage_lines, verify_coverage
+        coverage = verify_coverage(
+            user_request,
+            [(tc.tool_name, tc.result.data if tc.result is not None
+              else None) for tc in execution.tool_calls])
+        _coverage_lines = coverage_lines(coverage)
+        if _coverage_lines:
+            response = response.rstrip() + "\n\n" + "\n".join(
+                _coverage_lines)
+        if coverage is not None:
+            target_resolution = {**target_resolution,
+                                 "request_coverage": coverage}
 
         # --- 6) Follow-ups (only after a valid structured result) ---------------
         follow_ups: list[FollowUp] = []

@@ -75,9 +75,20 @@ class ClaudeProvider:
         messages: list[dict],
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = 0.1,
+        timeout: float | None = None,
+        sdk_max_retries: int | None = None,
+        stream: bool = False,
     ) -> str:
         """
         Generate a response from the LLM.
+
+        Bounded retry: an HTTP-200 response that carries NO text block
+        (LLMEmptyResponseError — observed with thinking-style models) is
+        retried ONCE at this shared call boundary; the Anthropic SDK's own
+        max_retries does not cover it (a 200 is transport-successful).
+        Transport/timeout/429/5xx retries remain the SDK's responsibility
+        (default max_retries=2) — no app-layer loop is added for them, so
+        the combined request budget stays bounded.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -88,20 +99,299 @@ class ClaudeProvider:
             The generated text response
 
         Raises:
+            LLMEmptyResponseError: If both attempts return no text block
             LLMTimeoutError: If the request times out
             LLMRateLimitError: If rate limit is exceeded
             LLMError: For other LLM-related errors
             LLMConfigurationError: If configuration is invalid
         """
+        last_empty: LLMEmptyResponseError | None = None
+        # A-fix observability: per-application-attempt diagnostics for THIS
+        # call. Consumed by structured callers (goal understanding) and
+        # persisted with their stage diagnostics. Safe fields only — no
+        # prompts, no response bodies. Application-layer attempts are
+        # counted here; SDK/transport retries below this boundary are NOT
+        # observable and are never conflated with these counts.
+        attempts: list[dict] = []
+        self.last_attempts = attempts
+        for attempt in (1, 2):
+            _t0 = __import__("time").monotonic()
+            try:
+                text = self._generate_once(messages, max_tokens,
+                                           temperature, timeout,
+                                           sdk_max_retries, stream)
+                attempts.append({
+                    "attempt_index": attempt,
+                    "max_application_attempts": 2,
+                    "outcome": "success",
+                    "error_class": None,
+                    "elapsed_ms": int((__import__("time").monotonic()
+                                       - _t0) * 1000),
+                    "model": self.model,
+                    "max_tokens": max_tokens,
+                    "timeout_seconds": timeout,
+                    "sdk_max_retries": sdk_max_retries,
+                    "retry_triggered": attempt > 1,
+                    "accepted": True,
+                    **getattr(self, "last_response_meta", {}),
+                })
+                return text
+            except LLMEmptyResponseError as e:
+                _ctx = getattr(e, "context", {}) or {}
+                attempts.append({
+                    "attempt_index": attempt,
+                    "max_application_attempts": 2,
+                    "outcome": "empty_response",
+                    "error_class": "LLMEmptyResponseError",
+                    "empty_detail": _ctx.get("empty_detail", "unknown"),
+                    "stop_reason": _ctx.get("stop_reason"),
+                    "elapsed_ms": int((__import__("time").monotonic()
+                                       - _t0) * 1000),
+                    "model": self.model,
+                    "max_tokens": max_tokens,
+                    "timeout_seconds": timeout,
+                    "sdk_max_retries": sdk_max_retries,
+                    "retry_triggered": attempt == 1,
+                    "accepted": False,
+                    **getattr(self, "last_response_meta", {}),
+                })
+                last_empty = e
+                logger.warning(
+                    "LLM attempt %d/2 returned no text block "
+                    "(stop_reason=%s)%s",
+                    attempt,
+                    _ctx.get("stop_reason"),
+                    "; retrying once" if attempt == 1 else "; giving up")
+            except (APITimeoutError, LLMTimeoutError) as e:
+                self._record_and_reraise("timeout", "LLMTimeoutError", e, _t0,
+                                          max_tokens=max_tokens,
+                                          timeout_seconds=timeout,
+                                          sdk_max_retries=sdk_max_retries)
+            except AnthropicRateLimitError as e:
+                self._record_and_reraise("rate_limit", "AnthropicRateLimitError", e, _t0,
+                                          max_tokens=max_tokens,
+                                          timeout_seconds=timeout,
+                                          sdk_max_retries=sdk_max_retries)
+            except LLMRateLimitError as e:
+                self._record_and_reraise("rate_limit", "LLMRateLimitError", e, _t0,
+                                          max_tokens=max_tokens,
+                                          timeout_seconds=timeout,
+                                          sdk_max_retries=sdk_max_retries)
+            except LLMConfigurationError as e:
+                self._record_and_reraise("configuration_error", type(e).__name__, e, _t0,
+                                          max_tokens=max_tokens,
+                                          timeout_seconds=timeout,
+                                          sdk_max_retries=sdk_max_retries)
+            except (APIConnectionError, LLMError) as e:
+                self._record_and_reraise("service_unavailable", type(e).__name__, e, _t0,
+                                          max_tokens=max_tokens,
+                                          timeout_seconds=timeout,
+                                          sdk_max_retries=sdk_max_retries)
+            except APIStatusError as e:
+                outcome = ("configuration_error" if getattr(e, "status_code", None) in (401, 400)
+                           else "service_unavailable")
+                self._record_and_reraise(outcome, type(e).__name__, e, _t0)
+        context = dict(last_empty.context or {}) if last_empty else {}
+        context["attempts"] = 2
+        raise LLMEmptyResponseError(
+            "LLM response contained no text block (2 attempts)",
+            context=context,
+        ) from last_empty
+
+    @staticmethod
+    def _system_for_stream(messages: list[dict]) -> str | None:
+        """Anthropic protocol: system travels as a top-level parameter."""
+        for m in messages:
+            if m.get("role") == "system":
+                return m.get("content")
+        return None
+
+    def _record_and_reraise(self, outcome, error_class, exc, _t0,
+                            max_tokens=None, timeout_seconds=None,
+                            sdk_max_retries=None):
+        """A-fix observability: record a NON-empty-response attempt (the
+        mapped classification), then re-raise unchanged — no retry."""
+        self.last_attempts.append({
+            "attempt_index": len(self.last_attempts) + 1,
+            "max_application_attempts": 2,
+            "outcome": outcome,
+            "error_class": type(exc).__name__,
+            "detail": str(exc)[:120],
+            "elapsed_ms": int((__import__("time").monotonic() - _t0) * 1000),
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "timeout_seconds": timeout_seconds,
+            "sdk_max_retries": sdk_max_retries,
+            "retry_triggered": False,
+            "accepted": False,
+        })
+        raise exc
+
+    # TEST INSTRUMENTATION (bounded): injects HTTP-200 no-text-block
+    # responses at the shared LLM call boundary so the retry and error
+    # classification can be verified through the REAL API path with a
+    # controlled gateway scenario. Default 0 = never active in production.
+    FAULT_EMPTY_FIRST = int(os.environ.get("LLM_FAULT_EMPTY_FIRST", "0"))
+    # LLM_FAULT_SKIP_FIRST=M delays the fault window until after M healthy
+    # calls (lets a test target a specific subsystem, e.g. the planner,
+    # without faulting setup calls). Default 0 = no skip.
+    FAULT_SKIP_FIRST = int(os.environ.get("LLM_FAULT_SKIP_FIRST", "0"))
+    # LLM_FAULT_MALFORMED_JSON_FIRST=N serves the first N in-window calls
+    # as NON-EMPTY but structurally broken JSON text (the R0 failure
+    # class: the provider answers, the consumer's JSON parse fails).
+    # Same window semantics as the empty-response fault; default 0.
+    FAULT_MALFORMED_JSON_FIRST = int(
+        os.environ.get("LLM_FAULT_MALFORMED_JSON_FIRST", "0"))
+    # seeded from the env var at import time so a backend started with
+    # LLM_FAULT_EMPTY_FIRST=N serves the first N calls as injected
+    # no-text-block responses (test instrumentation only; default 0).
+    _fault_remaining: list[int] = (
+        [FAULT_EMPTY_FIRST] if FAULT_EMPTY_FIRST > 0 else [])
+    _malformed_remaining: list[int] = (
+        [FAULT_MALFORMED_JSON_FIRST] if FAULT_MALFORMED_JSON_FIRST > 0
+        else [])
+    _calls_so_far: list[int] = [0]
+
+    def _generate_once(
+        self,
+        messages: list[dict],
+        max_tokens: int,
+        temperature: float,
+        timeout: float | None = None,
+        sdk_max_retries: int | None = None,
+        stream: bool = False,
+    ) -> str:
+        type(self)._calls_so_far[0] += 1
+        _in_fault_window = (type(self)._calls_so_far[0]
+                            > type(self).FAULT_SKIP_FIRST)
+        if type(self).FAULT_SKIP_FIRST > 0 or type(self)._fault_remaining \
+                or type(self)._malformed_remaining:
+            logger.info(
+                "LLM call #%s (fault_window=%s, empty_left=%s, "
+                "malformed_left=%s)",
+                type(self)._calls_so_far[0], _in_fault_window,
+                (type(self)._fault_remaining[0]
+                 if type(self)._fault_remaining else 0),
+                (type(self)._malformed_remaining[0]
+                 if type(self)._malformed_remaining else 0))
+        if _in_fault_window and type(self)._fault_remaining \
+                and type(self)._fault_remaining[0] > 0:
+            type(self)._fault_remaining[0] -= 1
+            logger.warning(
+                "LLM FAULT INJECTION (test instrumentation): serving a "
+                "no-text-block response; call=%s skip=%s remaining=%s",
+                type(self)._calls_so_far[0],
+                type(self).FAULT_SKIP_FIRST,
+                type(self)._fault_remaining[0])
+            raise LLMEmptyResponseError(
+                "LLM response contained no text block (injected)",
+                context={"injected": True, "attempts_remaining":
+                         type(self)._fault_remaining[0]},
+            )
+        if _in_fault_window and type(self)._malformed_remaining \
+                and type(self)._malformed_remaining[0] > 0:
+            type(self)._malformed_remaining[0] -= 1
+            logger.warning(
+                "LLM FAULT INJECTION (test instrumentation): serving a "
+                "non-empty MALFORMED-JSON response; call=%s skip=%s "
+                "remaining=%s",
+                type(self)._calls_so_far[0],
+                type(self).FAULT_SKIP_FIRST,
+                type(self)._malformed_remaining[0])
+            # mirrors the live U00008 failure: text present, JSON broken
+            # mid-string — a JSONDecodeError at the consumer, NOT an
+            # empty response (the A-fix provider retry must NOT fire).
+            return ('{"goal_resolution": "INFERRED", "goal_type": '
+                    '"policy_check", "ambiguous_goal_types": [], '
+                    '"reason": "unterminat')
         try:
             logger.debug(f"Sending {len(messages)} messages to LLM (model: {self.model})")
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=messages,
-            )
+            # Q2: GU-specific request-scoped timeout / SDK retry policy via
+            # the SDK's official with_options — the shared client (and its
+            # 60s/2-retry defaults for other stages) is never mutated.
+            _client = self.client
+            if timeout is not None or sdk_max_retries is not None:
+                _opts: dict = {}
+                if timeout is not None:
+                    _opts["timeout"] = timeout
+                if sdk_max_retries is not None:
+                    _opts["max_retries"] = sdk_max_retries
+                _client = self.client.with_options(**_opts)
+            if stream:
+                # Q2: GU uses the SDK's official streaming API — keeps the
+                # connection alive during long thinking, accumulates the
+                # FINAL message so downstream parsing is unchanged.
+                with _client.messages.stream(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=self._system_for_stream(messages),
+                    messages=messages,
+                ) as _stream:
+                    _first_event_ms = None
+                    _t_stream = __import__("time").monotonic()
+                    _event_count = 0
+                    for _event in _stream:
+                        _event_count += 1
+                        if _first_event_ms is None:
+                            _first_event_ms = int(
+                                (__import__("time").monotonic()
+                                 - _t_stream) * 1000)
+                    response = _stream.get_final_message()
+                _final_usage = getattr(response, "usage", None)
+                self.last_response_meta = {
+                    "stop_reason": getattr(response, "stop_reason", None),
+                    "content_kinds": [getattr(b, "type", "?")
+                                      for b in response.content],
+                    "text_chars": sum(
+                        len(getattr(b, "text", "") or "")
+                        for b in response.content
+                        if getattr(b, "type", None) == "text"),
+                    "usage_input_tokens": (
+                        getattr(_final_usage, "input_tokens", None)
+                        if _final_usage is not None else None),
+                    "usage_output_tokens": (
+                        getattr(_final_usage, "output_tokens", None)
+                        if _final_usage is not None else None),
+                    "max_tokens": max_tokens,
+                    "stream_completed": True,
+                    "first_event_ms": _first_event_ms,
+                    "event_count": _event_count,
+                }
+            else:
+                response = _client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=messages,
+                )
 
+            # Per-attempt response metadata (safe fields only): usage,
+            # stop reason, content-block structure, text length. No prompt
+            # or response bodies are retained here.
+            _usage = getattr(response, "usage", None)
+            _text_chars = 0
+            _prev_meta = getattr(self, "last_response_meta", {}) or {}
+            self.last_response_meta = {
+                "stop_reason": getattr(response, "stop_reason", None),
+                "content_kinds": [getattr(b, "type", "?")
+                                  for b in response.content],
+                "text_chars": sum(
+                    len(getattr(b, "text", "") or "")
+                    for b in response.content
+                    if getattr(b, "type", None) == "text"),
+                "usage_input_tokens": (
+                    getattr(_usage, "input_tokens", None)
+                    if _usage is not None else None),
+                "usage_output_tokens": (
+                    getattr(_usage, "output_tokens", None)
+                    if _usage is not None else None),
+                "max_tokens": max_tokens,
+                # streaming observability survives the shared rebuild
+                **{k: _prev_meta[k] for k in
+                   ("stream_completed", "first_event_ms", "event_count")
+                   if k in _prev_meta},
+            }
             for block in response.content:
                 if getattr(block, "type", None) == "text":
                     logger.debug(f"Received LLM response: {len(block.text)} chars")
@@ -112,9 +402,17 @@ class ClaudeProvider:
             # small max_tokens budget with reasoning blocks). A distinct
             # class keeps the failure taxonomy truthful: this is NOT an
             # unavailable provider.
+            _meta = getattr(self, "last_response_meta", {}) or {}
+            _kinds = _meta.get("content_kinds") or [
+                getattr(b, "type", "?") for b in response.content]
+            _detail = ("no_content_blocks" if not _kinds
+                       else "non_text_blocks_only")
             raise LLMEmptyResponseError(
                 "LLM response contained no text block",
-                context={
+                context={"stop_reason":
+                         getattr(response, "stop_reason", None),
+                         "content_kinds": _kinds,
+                         "empty_detail": _detail,
                     "response_type": str(type(response.content)),
                     "stop_reason": getattr(response, "stop_reason", None),
                 },
@@ -129,9 +427,17 @@ class ClaudeProvider:
 
         except AnthropicRateLimitError as e:
             logger.error(f"LLM rate limit exceeded: {str(e)}")
+            # SDK >=0.1x carries the hint in response headers, not as an
+            # attribute — extract from the real location so the 429's
+            # retry_after semantics actually survive classification.
+            retry_after = getattr(e, "retry_after", None)
+            if retry_after is None:
+                _resp = getattr(e, "response", None)
+                retry_after = (_resp.headers.get("retry-after")
+                               if _resp is not None else None)
             raise LLMRateLimitError(
                 "LLM rate limit exceeded - please retry after a delay",
-                context={"retry_after": getattr(e, "retry_after", None)},
+                context={"retry_after": retry_after},
             ) from e
 
         except APIStatusError as e:
@@ -170,3 +476,23 @@ class ClaudeProvider:
                 f"Unexpected LLM error: {str(e)}",
                 context={"error_type": type(e).__name__},
             ) from e
+
+
+# Fault-injection arming guard (test instrumentation, default OFF): both
+# switches are env-opt-in and inert unless a process is EXPLICITLY started
+# with them. If armed, announce it loudly once so no test-only process can
+# be mistaken for a production one in the logs.
+if (ClaudeProvider.FAULT_EMPTY_FIRST > 0
+        or ClaudeProvider.FAULT_SKIP_FIRST > 0
+        or ClaudeProvider.FAULT_MALFORMED_JSON_FIRST > 0):
+    logger.warning(
+        "LLM FAULT INJECTION ARMED (TEST INSTRUMENTATION — never enable "
+        "outside a controlled test process): LLM_FAULT_EMPTY_FIRST=%s, "
+        "LLM_FAULT_MALFORMED_JSON_FIRST=%s, LLM_FAULT_SKIP_FIRST=%s; "
+        "LLM calls after the first %s will be served injected "
+        "no-text-block or malformed-JSON responses until the fault "
+        "budgets are exhausted.",
+        ClaudeProvider.FAULT_EMPTY_FIRST,
+        ClaudeProvider.FAULT_MALFORMED_JSON_FIRST,
+        ClaudeProvider.FAULT_SKIP_FIRST,
+        ClaudeProvider.FAULT_SKIP_FIRST)

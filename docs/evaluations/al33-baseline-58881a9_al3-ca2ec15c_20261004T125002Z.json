@@ -1,0 +1,1695 @@
+{
+ "A_run_metadata": {
+  "run_id": "al3-ca2ec15c",
+  "protocol": "AL-3.3 second full S01-S18 baseline evaluation",
+  "production_baseline_commit": "58881a9",
+  "evaluation_harness_commit": "59070a1",
+  "harness_selection": "runner_al3.py + run_al3.py from harness commit 59070a1 (tracked files identical at HEAD 58881a9). run_baseline.py from the same commit was NOT used: its post-goal GET /investigations/{id} overwrites Activity-derived focus with InvestigationContext.focused_finding_id, violating the committed focus-source contract (tests/test_al317_focus_source_v1.py) and re-introducing the first-run focus contamination. The untracked run_baseline_v2.py was NOT used: its turn branch leaves stop_reason=None, which would artifact-FAIL S03/S05 on the expected_stop_reason gate.",
+  "model": "glm-5.3 (z.ai Anthropic-compatible endpoint, temperature per provider default; judge temperature=0.0)",
+  "prompt_version": "planner/agent prompts = production code at 58881a9 (planner_v2.py, agent_loop.py, composers); judge prompt = eval/llm_judge.py JUDGE_SYSTEM (AL-2.13 robustness fix, max_tokens=2048, max_retries=1)",
+  "scenario_version": "S01-S18.v1 (frozen registry, 18 scenarios)",
+  "rp_data": {
+   "source": "Risk Platform :8000 (risk-platform-demo backend)",
+   "fingerprint": "sha256[:16] of (evidence, explanation) payload for U00010 = bcef0d3982a97e01",
+   "note": "harness field rp_data_hash is a placeholder (sha256(b'U00010')); real fingerprint recorded here"
+  },
+  "timestamp_start_utc": "2026-10-04T12:50:02Z",
+  "timestamp_end_utc": "2026-10-04T13:11:59Z",
+  "l3_window_utc": "2026-10-04T13:19:18Z - 14:22:00Z (incl. 2 journey-tool re-runs: S03 assertion fix, S08 wait-condition fix)",
+  "execution_environment": {
+   "frontend": "http://localhost:3001 (vite, restarted 12:14 CST onto current tree before the run)",
+   "backend": "http://localhost:8001 (uvicorn app.main:app, PID started 2026-10-04 16:40:57 CST; all backend/app mtimes <= 16:38:15 CST -> process provably loaded the 58881a9 working tree; identity endpoint reports 58881a9)",
+   "risk_platform": "http://localhost:8000 (external, authoritative)",
+   "llm": "glm-5.3 via https://api.z.ai/api/anthropic",
+   "qa_stacks": "none used; canonical stack only"
+  },
+  "first_run_defect_recheck": {
+   "execution_mode_dispatch": "FIXED and verified: turn scenarios (S01/S03/S05) executed via POST /turn; loop scenarios via /goal; invalid modes raise ValueError in runner; deterministic/no_key_loop never silently executed (excluded from runner invocation, recorded SKIPPED).",
+   "loop_focus_source": "FIXED and verified: loop focus read from AgentLoopState via GET /tasks/{id}/activity projection; observed focus F1(S04), F7(S06), F5(S07,S10), F3(S14) - all correct, none None (contrast: 50d39002 run had all-None due to the run_baseline.py context clobber).",
+   "judge_budget": "FIXED and verified: max_tokens=2048; S09 judge hit LLMEmptyResponseError twice, retried once, then judge_available=False was recorded and the deterministic gates-only PASS stood - judge failure did NOT become agent PARTIAL/FAIL."
+  }
+ },
+ "B_scenario_matrix": {
+  "note": "frozen registry S01-S18.v1; GT=Y means GroundTruth expectations present",
+  "S01": {
+   "class": "al3_quality",
+   "mode": "turn",
+   "layers": [
+    "L1",
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S02": {
+   "class": "al2_regression",
+   "mode": "loop",
+   "layers": [
+    "L1"
+   ],
+   "gt": true,
+   "browser": false
+  },
+  "S03": {
+   "class": "al3_quality",
+   "mode": "turn",
+   "layers": [
+    "L1",
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S04": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S05": {
+   "class": "al3_quality",
+   "mode": "turn",
+   "layers": [
+    "L1",
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S06": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S07": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S08": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L1",
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S09": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L1",
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S10": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L1",
+    "L2"
+   ],
+   "gt": true,
+   "browser": false
+  },
+  "S11": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L1"
+   ],
+   "gt": true,
+   "browser": false
+  },
+  "S12": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L1",
+    "L2",
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S13": {
+   "class": "al3_quality",
+   "mode": "no_key_loop",
+   "layers": [
+    "L1",
+    "L2"
+   ],
+   "gt": true,
+   "browser": false
+  },
+  "S14": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L3"
+   ],
+   "gt": true,
+   "browser": true
+  },
+  "S15": {
+   "class": "al3_quality",
+   "mode": "deterministic",
+   "layers": [
+    "L1"
+   ],
+   "gt": true,
+   "browser": false
+  },
+  "S16": {
+   "class": "al2_regression",
+   "mode": "deterministic",
+   "layers": [
+    "L1"
+   ],
+   "gt": true,
+   "browser": false
+  },
+  "S17": {
+   "class": "al3_quality",
+   "mode": "loop",
+   "layers": [
+    "L2"
+   ],
+   "gt": true,
+   "browser": false
+  },
+  "S18": {
+   "class": "al3_quality",
+   "mode": "deterministic",
+   "layers": [
+    "L1"
+   ],
+   "gt": false,
+   "browser": false
+  }
+ },
+ "C_scenario_results": {
+  "S01": {
+   "status": "PASS",
+   "gates": "7/7",
+   "failed_gates": [],
+   "judge_avg": 2.0,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response directly provides the U00010 case overview with its findings, explains each finding's trigger with concrete evidence and thresholds (e.g., 6-day-old account with 54 trades/24h, 7 withdrawals exceeding threshold, 34.38% ratio below the 40% rule), and honestly qualifies what the signals do and do not prove (ML score not a calibrated probability, ratio alone doesn't demonstrate coordination) without referencing any wrong case."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response directly provides the U00010 case overview with its findings, explains each finding's trigger with concrete evidence and thresholds (e.g., 6-day-old account with 54 trades/24h, 7 withdrawals exceeding threshold, 34.38% ratio below the 40% rule), and honestly qualifies what the signals do and do not prove (ML score not a calibrated probability, ratio alone doesn't demonstrate coordination) without referencing any wrong case."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response directly provides the U00010 case overview with its findings, explains each finding's trigger with concrete evidence and thresholds (e.g., 6-day-old account with 54 trades/24h, 7 withdrawals exceeding threshold, 34.38% ratio below the 40% rule), and honestly qualifies what the signals do and do not prove (ML score not a calibrated probability, ratio alone doesn't demonstrate coordination) without referencing any wrong case."
+    }
+   ],
+   "focus": null,
+   "stop_reason": "goal_satisfied",
+   "iteration": 1,
+   "agent_status": "completed",
+   "tools": [
+    "risk_case_fetch",
+    "artifact_bundle"
+   ],
+   "taxonomy": null,
+   "investigation_id": "INV-db8dab5e2186",
+   "task_id": "TASK-ac1b05242260",
+   "response_excerpt": "8 findings were identified for case U00010. Select a finding from the Findings panel on the left to continue the investigation.\n- ML Pattern Detection: 99.41/100; a system signal, not a calibrated probability.\n- New account with high activity.: The account is 6 days old and recorded 54 trades in 24 hours, satisfying the system's new-account/high-activity rule.\n- High withdrawal frequency.: 7 withdrawals were recorded in 24 hours, exceeding the system's threshold for elevated withdrawal frequency.\n- First withdrawal to new address.: A first withdrawal to a new address was detected; 7 withdrawals were recorded in 24 hours, and 100.00% of withdrawals were sent to newly encountered addresses.\n- Shared Device Relationships.: 1 shared device was used by this account and other users, indicating a link between this account and additional user accounts.\n- Linked Account Network.: 18 connected accounts were detected through shared devices, forming a network of related accounts that should be reviewed as part of this investigation.\n- High Trading Frequency.: 54 trades were recorded in 24 hours, an elevated level of trading activity for a single-day window.\nAccount Age.\nThe account is 6 days o",
+   "loop_events": [],
+   "plan_steps": [],
+   "goal_type": null
+  },
+  "S02": {
+   "status": "FAIL",
+   "gates": "3/6",
+   "failed_gates": [
+    {
+     "check_id": "expected_capability",
+     "expected": "case_intake",
+     "observed": "['risk_case_fetch', 'artifact_bundle', 'artifact_bundle', 'artifact_bundle']"
+    },
+    {
+     "check_id": "key_fact:8 findings",
+     "expected": "8 findings",
+     "observed": "ABSENT"
+    },
+    {
+     "check_id": "key_fact:U00010",
+     "expected": "U00010",
+     "observed": "ABSENT"
+    }
+   ],
+   "judge_avg": 0.67,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 1,
+     "rationale": "The response confirms the investigation ran with 8 findings but omits the case identifier U00010, presents only runtime metadata (step names, artifact IDs) without explaining what the findings are or why they matter, and never acknowledges what details are unavailable."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 0,
+     "rationale": "The response confirms the investigation ran with 8 findings but omits the case identifier U00010, presents only runtime metadata (step names, artifact IDs) without explaining what the findings are or why they matter, and never acknowledges what details are unavailable."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 1,
+     "rationale": "The response confirms the investigation ran with 8 findings but omits the case identifier U00010, presents only runtime metadata (step names, artifact IDs) without explaining what the findings are or why they matter, and never acknowledges what details are unavailable."
+    }
+   ],
+   "focus": null,
+   "stop_reason": "goal_satisfied",
+   "iteration": 2,
+   "agent_status": "completed",
+   "tools": [
+    "risk_case_fetch",
+    "artifact_bundle",
+    "artifact_bundle",
+    "artifact_bundle"
+   ],
+   "taxonomy": "tool_selection_failure",
+   "investigation_id": "INV-36b68cf62aeb",
+   "task_id": "TASK-aba0022f96aa",
+   "response_excerpt": "The investigation completed.\nSteps completed: 2 (fetch_case, generate_artifact).\n- risk_case_fetch:success finding_count=8\n- artifact_bundle:success artifact artifact=ART-c8e086fc39\nArtifacts produced: ART-c8e086fc39.",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-10a4054d455d (['fetch_case', 'generate_artifact'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "risk_case_fetch",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Case retrieved: 8 findings identified."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "案件数据获取成功，8项发现和10条证据已就绪，下一步生成调查报告的计划仍然有效。",
+     "decision": "CONTINUE",
+     "why": "案件数据获取成功，8项发现和10条证据已就绪，下一步生成调查报告的计划仍然有效。"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "artifact_bundle",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Investigation bundle created (ART-c8e086fc39)."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "证据包已成功生成（10条证据引用、无警告、无待补数据），调查计划的全部步骤已执行完毕，目标达成。",
+     "decision": "STOP",
+     "why": "证据包已成功生成（10条证据引用、无警告、无待补数据），调查计划的全部步骤已执行完毕，目标达成。"
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "fetch_case",
+     "success"
+    ],
+    [
+     "generate_artifact",
+     "success"
+    ]
+   ],
+   "goal_type": null
+  },
+  "S03": {
+   "status": "FAIL",
+   "gates": "6/11",
+   "failed_gates": [
+    {
+     "check_id": "expected_finding",
+     "expected": "F5",
+     "observed": "None"
+    },
+    {
+     "check_id": "expected_capability",
+     "expected": "signal_explain",
+     "observed": "[]"
+    },
+    {
+     "check_id": "key_fact:Cluster_device_sharing_1",
+     "expected": "Cluster_device_sharing_1",
+     "observed": "ABSENT"
+    },
+    {
+     "check_id": "key_fact:DEV8Z1O4A35QU",
+     "expected": "DEV8Z1O4A35QU",
+     "observed": "ABSENT"
+    },
+    {
+     "check_id": "key_fact:80.0",
+     "expected": "80.0",
+     "observed": "ABSENT"
+    }
+   ],
+   "judge_avg": 0.33,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 0,
+     "rationale": "The agent only returned a disambiguation prompt listing finding names without answering why shared devices are a risk, omitting all required graph facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0) and any explanation, though it at least avoided fabricating an answer."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 0,
+     "rationale": "The agent only returned a disambiguation prompt listing finding names without answering why shared devices are a risk, omitting all required graph facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0) and any explanation, though it at least avoided fabricating an answer."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 1,
+     "rationale": "The agent only returned a disambiguation prompt listing finding names without answering why shared devices are a risk, omitting all required graph facts (Cluster_device_sharing_1, DEV8Z1O4A35QU, 80.0) and any explanation, though it at least avoided fabricating an answer."
+    }
+   ],
+   "focus": null,
+   "stop_reason": "goal_satisfied",
+   "iteration": 1,
+   "agent_status": "failed",
+   "tools": [],
+   "taxonomy": "target_resolution_failure",
+   "investigation_id": "INV-56a6fd0e0d50",
+   "task_id": "TASK-abe87ae40d0b",
+   "response_excerpt": "Your request matches multiple possibilities:\n- [finding] F5: Shared Device Relationships.\n- [finding] F6: Linked Account Network.\nPlease specify which one you mean.",
+   "loop_events": [],
+   "plan_steps": [],
+   "goal_type": null
+  },
+  "S04": {
+   "status": "PASS",
+   "gates": "18/18",
+   "failed_gates": [],
+   "judge_avg": 2.0,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response defines ML Pattern Detection (LightGBM-based 机器学习), clarifies the 99.41 score as a system signal rather than a calibrated fraud probability, provides feature context, honestly states the attribution boundary (cannot assert how much a specific feature contributed), cites the ML Factors policy reference, and contains none of the prohibited content."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response defines ML Pattern Detection (LightGBM-based 机器学习), clarifies the 99.41 score as a system signal rather than a calibrated fraud probability, provides feature context, honestly states the attribution boundary (cannot assert how much a specific feature contributed), cites the ML Factors policy reference, and contains none of the prohibited content."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response defines ML Pattern Detection (LightGBM-based 机器学习), clarifies the 99.41 score as a system signal rather than a calibrated fraud probability, provides feature context, honestly states the attribution boundary (cannot assert how much a specific feature contributed), cites the ML Factors policy reference, and contains none of the prohibited content."
+    }
+   ],
+   "focus": "F1",
+   "stop_reason": "goal_satisfied",
+   "iteration": 2,
+   "agent_status": "completed",
+   "tools": [
+    "signal_explain",
+    "policy_lookup",
+    "policy_lookup",
+    "policy_lookup"
+   ],
+   "taxonomy": null,
+   "investigation_id": "INV-22a9674d5159",
+   "task_id": "TASK-e4175b5461a0",
+   "response_excerpt": "关于发现 F1「ML Pattern Detection」:99.41/100; a system signal, not a calibrated probability.\nML Pattern Detection 的含义:Risk Platform 使用机器学习（检测方法:LightGBM）从账户行为模式中识别与风险升高相关的模式,并将其作为一个风险发现呈现。\n本账号的 ML 信号分数为 99.41/100 —— 这是系统检测信号的强度(system signal, not a calibrated probability of fraud),不是校准过的欺诈概率。\n该账号的实际特征值(供参考的上下文,不代表它们导致了该分数):Shared device count = 1, Linked account count = 18, unique_ip_count = 1, Trade frequency (24h) = 54, Trade frequency (7d) = 64（共 12 项）。\n归因边界:当前 Risk Platform 没有提供这个模型分数对应的特征归因,因此不能准确断言某一个具体特征贡献了多少分。\n政策依据:Risk Platform 为该发现关联到 1 处 finding-level 政策引用,包括 《Risk_Scoring_Explainability_Guide.md》 Risk Scoring Explainability Guide (Demo Template) / 2. Evidence Types (Conceptual) / 2.1 ML Factors。\nThe investigation completed.\nSteps completed: 2 (explain_signal, retrieve_policy).\n- signal_explain:success ML\n- policy_lookup:success policy_matches match_count=4",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-6c337e8a6202 (['explain_signal', 'retrieve_policy'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "signal_explain",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "The available evidence was insufficient for this step."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "信号解释已返回ML分数(LightGBM 99.41)及关键特征值，但回答'为什么是风险'仍需执行剩余的retrieve_policy步骤获取依据。",
+     "decision": "CONTINUE",
+     "why": "信号解释已返回ML分数(LightGBM 99.41)及关键特征值，但回答'为什么是风险'仍需执行剩余的retrieve_policy步骤获取依据。"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "policy_lookup",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Policy review: 4 reference(s) found."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "The signal's meaning was explained and the policy lookup returned matching citat",
+     "decision": "STOP",
+     "why": "The signal's meaning was explained and the policy lookup returned matching citations (ML Factors, ri"
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "success"
+    ],
+    [
+     "retrieve_policy",
+     "success"
+    ]
+   ],
+   "goal_type": "explain_finding"
+  },
+  "S05": {
+   "status": "PASS",
+   "gates": "16/16",
+   "failed_gates": [],
+   "judge_avg": 2.0,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response explains why the finding was flagged (rule threshold: 7 withdrawals in 24h exceeds normal pattern), presents all 7 evidence records including W000087 and W000089 with full details, avoids all prohibited phrases, and transparently states the source (Risk Platform) and that all records are shown with nothing omitted."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response explains why the finding was flagged (rule threshold: 7 withdrawals in 24h exceeds normal pattern), presents all 7 evidence records including W000087 and W000089 with full details, avoids all prohibited phrases, and transparently states the source (Risk Platform) and that all records are shown with nothing omitted."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response explains why the finding was flagged (rule threshold: 7 withdrawals in 24h exceeds normal pattern), presents all 7 evidence records including W000087 and W000089 with full details, avoids all prohibited phrases, and transparently states the source (Risk Platform) and that all records are shown with nothing omitted."
+    }
+   ],
+   "focus": "F3",
+   "stop_reason": "goal_satisfied",
+   "iteration": 1,
+   "agent_status": "completed",
+   "tools": [
+    "signal_explain",
+    "finding_drilldown"
+   ],
+   "taxonomy": null,
+   "investigation_id": "INV-6e0063218665",
+   "task_id": "TASK-bab16ab50ee6",
+   "response_excerpt": "This finding was flagged by rule-based detection.\nThe finding was flagged by the rule High withdrawal frequency: 7 withdrawals in 24h exceeds the normal pattern\nThe Risk Platform returned 7 withdrawal records supporting this finding. All records are shown below.\n- 2026-07-21T01:31:49.892750+00:00: Withdrawal of 4.141117 USDT to a newly encountered address [W000087]\n- 2026-07-21T02:22:49.892750+00:00: Withdrawal of 0.90031 USDC to a newly encountered address [W000084]\n- 2026-07-21T03:01:49.892750+00:00: Withdrawal of 4.283497 BTC to a newly encountered address [W000088]\n- 2026-07-21T04:30:49.892750+00:00: Withdrawal of 1.645502 USDC to a newly encountered address [W000086]\n- 2026-07-21T04:37:49.892750+00:00: Withdrawal of 4.199266 USDC to a newly encountered address [W000090]\n- 2026-07-21T05:33:49.892750+00:00: Withdrawal of 0.735698 ETH to a newly encountered address [W000085]\n- 2026-07-21T06:08:49.892750+00:00: Withdrawal of 1.146421 USDC to a newly encountered address [W000089]",
+   "loop_events": [],
+   "plan_steps": [],
+   "goal_type": null
+  },
+  "S06": {
+   "status": "FAIL",
+   "gates": "12/13",
+   "failed_gates": [
+    {
+     "check_id": "key_fact:transaction record",
+     "expected": "transaction record",
+     "observed": "ABSENT"
+    }
+   ],
+   "judge_avg": 2.0,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response explains why high trading frequency is risky (54 trades in 24h is elevated, account only 6 days old), provides a transaction record table with T00-prefixed IDs, avoids prohibited withdrawal/W000087 content, and explicitly acknowledges both the display limit on the 64 records and the lack of feature-attribution data."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response explains why high trading frequency is risky (54 trades in 24h is elevated, account only 6 days old), provides a transaction record table with T00-prefixed IDs, avoids prohibited withdrawal/W000087 content, and explicitly acknowledges both the display limit on the 64 records and the lack of feature-attribution data."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response explains why high trading frequency is risky (54 trades in 24h is elevated, account only 6 days old), provides a transaction record table with T00-prefixed IDs, avoids prohibited withdrawal/W000087 content, and explicitly acknowledges both the display limit on the 64 records and the lack of feature-attribution data."
+    }
+   ],
+   "focus": "F7",
+   "stop_reason": "goal_satisfied",
+   "iteration": 2,
+   "agent_status": "completed",
+   "tools": [
+    "signal_explain",
+    "finding_drilldown",
+    "finding_drilldown",
+    "finding_drilldown"
+   ],
+   "taxonomy": "answer_fidelity_failure",
+   "investigation_id": "INV-68cf805ce3a4",
+   "task_id": "TASK-9711e7409992",
+   "response_excerpt": "关于发现 F7「High Trading Frequency.」:54 trades were recorded in 24 hours, an elevated level of trading activity for a single-day window.\nAccount Age.\nThe account is 6 days old; this is contextual evidence, relevant in combination with the high activity obse\n风险信号:行为特征检测发现该账号存在异常行为模式 — 观测到 Trade frequency (24h) = 54。\n该账号的实际行为特征值是 Risk Platform 标记此风险发现的依据。当前 RP 数据不提供特征归因,因此不能断言某一个具体特征贡献了多少分。\n完整证据共 64 条(交易记录)：\n| # | 记录 ID | 时间 | 明细 |\n|---|---|---|---|\n| 1 | T000670 | 2026-07-20T13:42:49.892578+00:00 | SELL trade of 1.8529 ADA (0.85 value) |\n| 2 | T000678 | 2026-07-20T13:50:49.892578+00:00 | BUY trade of 1.298 DOT (9.53 value) |\n| 3 | T000661 | 2026-07-20T13:59:49.892578+00:00 | SELL trade of 0.2522 MATIC (0.14 value) |\n| 4 | T000673 | 2026-07-20T14:16:49.892578+00:00 | SELL trade of 1.4758 ETH (5,128.53 value) |\n| 5 | T000700 | 2026-07-20T14:36:49.892578+00:00 | SELL trade of 1.1923 ADA (0.54 value) |\n| 6 | T000688 | 2026-07-20T14:48:49.892578+00:00 | SELL trade of 0.9511 DOGE (0.11 value) |\n| 7 | T000675 | 2026-07-20T15:04:49.892578+00:00 | BUY trade of 0.7964 ADA (0.36 value) |\n| 8 | T000692 | 2026-07-20T15:04:49.892578+00:00 | SELL trade of 1.8207 AVAX (64.35 value) |\n| 9 | T000695 | 20",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-814b7d08a3c8 (['explain_signal', 'inspect_transactions'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "signal_explain",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Step completed successfully."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "信号解释已确认触发特征为24小时内54笔交易的高频行为，但还需执行inspect_transactions获取具体交易明细才能完整回答问题。",
+     "decision": "CONTINUE",
+     "why": "信号解释已确认触发特征为24小时内54笔交易的高频行为，但还需执行inspect_transactions获取具体交易明细才能完整回答问题。"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "finding_drilldown",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Complete record set reviewed: 64 records."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "The high-frequency trading risk explanation is complete and 64 matching transact",
+     "decision": "STOP",
+     "why": "The high-frequency trading risk explanation is complete and 64 matching transaction records with det"
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "success"
+    ],
+    [
+     "inspect_transactions",
+     "success"
+    ]
+   ],
+   "goal_type": null
+  },
+  "S07": {
+   "status": "PASS",
+   "gates": "7/7",
+   "failed_gates": [],
+   "judge_avg": 1.67,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response directly answers why shared device is a risk item — the device links this account to other user accounts, placing it in the risky cluster Cluster_device_sharing_1 (score 80.0) with device DEV8Z1O4A35QU confirmed, backed by an AML policy citation — but while honest and evidence-grounded, it does not explicitly state what information is unavailable (e.g., nature of related accounts, sharing timestamps)."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response directly answers why shared device is a risk item — the device links this account to other user accounts, placing it in the risky cluster Cluster_device_sharing_1 (score 80.0) with device DEV8Z1O4A35QU confirmed, backed by an AML policy citation — but while honest and evidence-grounded, it does not explicitly state what information is unavailable (e.g., nature of related accounts, sharing timestamps)."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 1,
+     "rationale": "The response directly answers why shared device is a risk item — the device links this account to other user accounts, placing it in the risky cluster Cluster_device_sharing_1 (score 80.0) with device DEV8Z1O4A35QU confirmed, backed by an AML policy citation — but while honest and evidence-grounded, it does not explicitly state what information is unavailable (e.g., nature of related accounts, sharing timestamps)."
+    }
+   ],
+   "focus": "F5",
+   "stop_reason": "goal_satisfied",
+   "iteration": 2,
+   "agent_status": "completed",
+   "tools": [
+    "signal_explain",
+    "policy_lookup",
+    "policy_lookup",
+    "policy_lookup"
+   ],
+   "taxonomy": null,
+   "investigation_id": "INV-5988278c1e80",
+   "task_id": "TASK-98fbf0146025",
+   "response_excerpt": "关于发现 F5「Shared Device Relationships.」:1 shared device was used by this account and other users, indicating a link between this account and additional user accounts. [3]\n风险信号:图关系检测发现该账号处于风险网络中 — cluster 「Cluster_device_sharing_1」, detection type “device_sharing”, 19 accounts in the cluster, cluster risk score 80.0。\n当前可确认的共享设备:DEV8Z1O4A35QU。\n相关账号:U00337, U00325, U00349, U00004, U00343。\n政策依据:Risk Platform 为该发现关联到 1 处 finding-level 政策引用,包括 《AML_Suspicious_Indicators.md》 AML Suspicious Activity Indicators (Demo Template) / 5. Network / Relationship Signals / 5.1 Links to Known Risky Clusters。\nThe investigation completed.\nSteps completed: 2 (explain_signal, retrieve_policy).\n- signal_explain:success Graph\n- policy_lookup:success policy_matches match_count=4",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-eaa66db0afcc (['explain_signal', 'retrieve_policy'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "signal_explain",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Step completed successfully."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "信号解释已返回设备共享聚类数据但规则/评分归因为空，仍需执行策略检索步骤以完整回答共享设备为何构成风险。",
+     "decision": "CONTINUE",
+     "why": "信号解释已返回设备共享聚类数据但规则/评分归因为空，仍需执行策略检索步骤以完整回答共享设备为何构成风险。"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "policy_lookup",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Policy review: 4 reference(s) found."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "信号解释与政策依据（4条匹配引用，含AML可疑指标中设备关联风险集群条款）已足以结论性地回答共享设备为何列为风险项。",
+     "decision": "STOP",
+     "why": "信号解释与政策依据（4条匹配引用，含AML可疑指标中设备关联风险集群条款）已足以结论性地回答共享设备为何列为风险项。"
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "success"
+    ],
+    [
+     "retrieve_policy",
+     "success"
+    ]
+   ],
+   "goal_type": "explain_finding"
+  },
+  "S08": {
+   "status": "PASS",
+   "gates": "14/14",
+   "failed_gates": [],
+   "judge_avg": 2.0,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response directly answers the question by listing all 18 related accounts (including U00004 and U00337), identifies the shared device DEV8Z1O4A35QU, explains the device-sharing cluster risk signal with evidence, and honestly states the data cannot prove violation or malicious intent between the accounts, fully covering all required ground truth facts without prohibited claims."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response directly answers the question by listing all 18 related accounts (including U00004 and U00337), identifies the shared device DEV8Z1O4A35QU, explains the device-sharing cluster risk signal with evidence, and honestly states the data cannot prove violation or malicious intent between the accounts, fully covering all required ground truth facts without prohibited claims."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response directly answers the question by listing all 18 related accounts (including U00004 and U00337), identifies the shared device DEV8Z1O4A35QU, explains the device-sharing cluster risk signal with evidence, and honestly states the data cannot prove violation or malicious intent between the accounts, fully covering all required ground truth facts without prohibited claims."
+    }
+   ],
+   "focus": null,
+   "stop_reason": "goal_satisfied",
+   "iteration": 1,
+   "agent_status": "completed",
+   "tools": [
+    "related_account_analysis",
+    "related_account_analysis",
+    "related_account_analysis"
+   ],
+   "taxonomy": null,
+   "investigation_id": "INV-63314fa3fd80",
+   "task_id": "TASK-12381b04cad9",
+   "response_excerpt": "为什么是风险信号:Risk Platform 的网络关系检测发现该账号与其他账号存在网络/共享设备关系（detection type “device_sharing”, cluster 「Cluster_device_sharing_1」, 19 accounts in the cluster, cluster risk score 80.0）。这类关系会作为需要进一步调查的风险信号记录;当前数据本身不能证明这些账号之间存在违规或恶意意图。\n关联账号共 18 个:\n- U00004\n- U00005\n- U00008\n- U00003\n- U00002\n- U00006\n- U00001\n- U00007\n- U00009\n- U00325\n- U00343\n- U00301\n- U00331\n- U00337\n- U00319\n- U00307\n- U00349\n- U00313\n连接这些账号的共享设备:DEV8Z1O4A35QU。\nThe investigation completed.\nSteps completed: 1 (analyze_related_accounts).\n- related_account_analysis:success RELATED_ACCOUNTS_FOUND",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-472ac94a7769 (['analyze_related_accounts'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "related_account_analysis",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Risk Platform network attribution: 18 related accounts for this account."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "关联账号分析已成功返回18个通过共享设备关联的账号及聚类证据，问题已得到解答。",
+     "decision": "STOP",
+     "why": "关联账号分析已成功返回18个通过共享设备关联的账号及聚类证据，问题已得到解答。"
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "analyze_related_accounts",
+     "success"
+    ]
+   ],
+   "goal_type": "identify_related_accounts"
+  },
+  "S09": {
+   "status": "PASS",
+   "gates": "11/11",
+   "failed_gates": [],
+   "judge_avg": null,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": -1,
+     "rationale": "judge unavailable"
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": -1,
+     "rationale": "judge unavailable"
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": -1,
+     "rationale": "judge unavailable"
+    }
+   ],
+   "focus": null,
+   "stop_reason": "goal_satisfied",
+   "iteration": 2,
+   "agent_status": "completed",
+   "tools": [
+    "cross_account_trade_analysis",
+    "artifact_bundle",
+    "artifact_bundle",
+    "artifact_bundle"
+   ],
+   "taxonomy": null,
+   "investigation_id": "INV-6276f2f3f1fe",
+   "task_id": "TASK-aae10c645bd9",
+   "response_excerpt": "有。在当前检索范围内发现 6 个候选跨账户对冲交易关系。\n匹配条件:两笔交易时间相差不超过 30 秒,且价值差异在 5% 以内。这些候选关系是量化匹配的调查线索,不构成对操纵或交易意图的结论。\n注意:本次检索受到系统预算限制,覆盖范围不完整,因此不能据此证明未检索范围内不存在更多关系。\n已发现的候选关系如下：\n| # | 候选 | 账户 A | 方向 | 账户 B | 方向 | 币种 | 时间差(s) | 价值 A | 价值 B | 差异 | 交易 |\n|---|---|---|---|---|---|---|---:|---:|---:|---:|---|\n| 1 | CATA-001 | U00307 | BUY | U00349 | SELL | MATIC | 0.00716 | 1.05843072918 | 1.088148380049 | 0.029717650869000023 | T024864, T026813 |\n| 2 | CATA-002 | U00301 | BUY | U00307 | SELL | MATIC | 0.001049 | 0.685459975392 | 0.835648066467 | 0.15018809107499997 | T024557, T024841 |\n| 3 | CATA-003 | U00301 | SELL | U00325 | BUY | ADA | 0.004112 | 0.66047784084 | 0.9423189137419999 | 0.2818410729019999 | T024555, T025675 |\n| 4 | CATA-004 | U00331 | BUY | U00349 | SELL | DOGE | 0.003103 | 0.20622948587999998 | 0.14226205605 | 0.06396742982999998 | T025965, T026817 |\n| 5 | CATA-005 | U00307 | SELL | U00313 | BUY | XRP | 0.001103 | 0.41684919641600005 | 1.080950785555 | 0.664101589139 | T024821, T025124 |\n| 6 | CATA-006 | U00313 | BUY | U00349 | SELL | DOGE | 0.00617 | 0.025067298202000002 | 0.36032476217 | 0.335257463968 | T025120, T026801 |\nThe investigation completed.\nSteps completed: 2 (analyze_cross_acco",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-aed8463233e5 (['analyze_cross_account_trades', 'generate_artifact'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "cross_account_trade_analysis",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Found 6 candidate cross-account opposite-trade relationships (candidates only, n"
+    },
+    {
+     "ev": "decision.made",
+     "sum": "Analysis found 6 matching hedge trade candidates, but the evidence artifact for ",
+     "decision": "CONTINUE",
+     "why": "Analysis found 6 matching hedge trade candidates, but the evidence artifact for the user has not yet"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "artifact_bundle",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Investigation bundle created (ART-6dda835f40)."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "跨账户对冲交易分析已完成，且证据已生成到工件 ART-6dda835f40 中（含 12 条交易证据引用），问题已得到回答。",
+     "decision": "STOP",
+     "why": "跨账户对冲交易分析已完成，且证据已生成到工件 ART-6dda835f40 中（含 12 条交易证据引用），问题已得到回答。"
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "analyze_cross_account_trades",
+     "success"
+    ],
+    [
+     "generate_artifact",
+     "success"
+    ]
+   ],
+   "goal_type": "cross_account_check"
+  },
+  "S10": {
+   "status": "FAIL",
+   "gates": "9/10",
+   "failed_gates": [
+    {
+     "check_id": "expected_stop_reason",
+     "expected": "bounded_data",
+     "observed": "goal_satisfied"
+    }
+   ],
+   "judge_avg": 2.0,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response explains why device sharing is risky (graph cluster with 19 accounts and risk score 80.0), enumerates the known device and related accounts, and explicitly states the data boundary—that record-level evidence returned zero records so the existing summary cannot be called 全部明细—covering all required facts without prohibited claims."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response explains why device sharing is risky (graph cluster with 19 accounts and risk score 80.0), enumerates the known device and related accounts, and explicitly states the data boundary—that record-level evidence returned zero records so the existing summary cannot be called 全部明细—covering all required facts without prohibited claims."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response explains why device sharing is risky (graph cluster with 19 accounts and risk score 80.0), enumerates the known device and related accounts, and explicitly states the data boundary—that record-level evidence returned zero records so the existing summary cannot be called 全部明细—covering all required facts without prohibited claims."
+    }
+   ],
+   "focus": "F5",
+   "stop_reason": "goal_satisfied",
+   "iteration": 3,
+   "agent_status": "completed",
+   "tools": [
+    "finding_drilldown",
+    "signal_explain",
+    "signal_explain",
+    "signal_explain"
+   ],
+   "taxonomy": "convergence_failure",
+   "investigation_id": "INV-cb5de879f0f4",
+   "task_id": "TASK-3ba0b52125c4",
+   "response_excerpt": "关于发现 F5「Shared Device Relationships.」:1 shared device was used by this account and other users, indicating a link between this account and additional user accounts. [3]\n风险信号:图关系检测发现该账号处于风险网络中 — cluster 「Cluster_device_sharing_1」, detection type “device_sharing”, 19 accounts in the cluster, cluster risk score 80.0。\n当前可确认的共享设备:DEV8Z1O4A35QU。\n相关账号:U00337, U00325, U00349, U00004, U00343。\n关于\"全部明细\"的数据边界:该发现在 Risk Platform 中没有记录级证据可枚举(检索返回零条记录);平台提供的是上方已列出的聚合/图级别事实。因此我不能把现有摘要描述为\"全部明细\"——这是当前调查数据的真实边界,而非遗漏。\nThe investigation completed.\nSteps completed: 1 (explain_signal).\n- signal_explain:success Graph\n- finding_drilldown:empty\n- signal_explain:success Graph",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-37f37119399e (['explain_signal', 'inspect_evidence'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "signal_explain",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Step completed successfully."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "信号解释已识别出设备共享集群及风险评分，但还需执行下一步 inspect_evidence 获取与该账号共享设备的完整明细。",
+     "decision": "CONTINUE",
+     "why": "信号解释已识别出设备共享集群及风险评分，但还需执行下一步 inspect_evidence 获取与该账号共享设备的完整明细。"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "finding_drilldown",
+     "outcome": "empty"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "finding_drilldown:empty"
+    },
+    {
+     "ev": "decision.made",
+     "sum": "The evidence lookup returned no concrete device-sharing records in the Risk Plat",
+     "decision": "RE_PLAN",
+     "why": "The evidence lookup returned no concrete device-sharing records in the Risk Platform, so a new plan "
+    },
+    {
+     "ev": "plan.created",
+     "sum": "re-plan PLAN-888ab12aadc7 (['explain_signal', 'inspect_evidence'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "signal_explain",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Step completed successfully."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "the re-planned query reproduced an identical result with no new information; the",
+     "decision": "STOP",
+     "why": "the re-planned query reproduced an identical result with no new information; the available data has "
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "success"
+    ],
+    [
+     "inspect_evidence",
+     "pending"
+    ]
+   ],
+   "goal_type": null
+  },
+  "S11": {
+   "status": "FAIL",
+   "gates": "4/6",
+   "failed_gates": [
+    {
+     "check_id": "expected_stop_reason",
+     "expected": "context_unresolved",
+     "observed": "goal_satisfied"
+    },
+    {
+     "check_id": "prohibited:signal_explain",
+     "expected": "absent",
+     "observed": "PRESENT"
+    }
+   ],
+   "judge_avg": null,
+   "judge": [],
+   "focus": "F1",
+   "stop_reason": "goal_satisfied",
+   "iteration": 2,
+   "agent_status": "completed",
+   "tools": [
+    "signal_explain",
+    "signal_explain",
+    "signal_explain",
+    "signal_explain"
+   ],
+   "taxonomy": "convergence_failure",
+   "investigation_id": "INV-51ee213ca1a9",
+   "task_id": "TASK-b232a20400b3",
+   "response_excerpt": "关于发现 F1「ML Pattern Detection」:99.41/100; a system signal, not a calibrated probability.\nML Pattern Detection 的含义:Risk Platform 使用机器学习（检测方法:LightGBM）从账户行为模式中识别与风险升高相关的模式,并将其作为一个风险发现呈现。\n本账号的 ML 信号分数为 99.41/100 —— 这是系统检测信号的强度(system signal, not a calibrated probability of fraud),不是校准过的欺诈概率。\n该账号的实际特征值(供参考的上下文,不代表它们导致了该分数):Shared device count = 1, Linked account count = 18, unique_ip_count = 1, Trade frequency (24h) = 54, Trade frequency (7d) = 64（共 12 项）。\n归因边界:当前 Risk Platform 没有提供这个模型分数对应的特征归因,因此不能准确断言某一个具体特征贡献了多少分。\nThe investigation completed.\nSteps completed: 1 (explain_signal).\n- signal_explain:success ML\n- signal_explain:success ML",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-16d69fe89548 (['explain_signal'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "signal_explain",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "The available evidence was insufficient for this step."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "解释步骤返回的证据不足（缺少归因和证据明细，仅有一个ML分数），需要重新制定计划以获取更多虚拟币洗钱相关的信息来回答问题。",
+     "decision": "RE_PLAN",
+     "why": "解释步骤返回的证据不足（缺少归因和证据明细，仅有一个ML分数），需要重新制定计划以获取更多虚拟币洗钱相关的信息来回答问题。"
+    },
+    {
+     "ev": "plan.created",
+     "sum": "re-plan PLAN-265667113069 (['explain_signal', 'inspect_evidence'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "signal_explain",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "The available evidence was insufficient for this step."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "the re-planned query reproduced an identical result with no new information; the",
+     "decision": "STOP",
+     "why": "the re-planned query reproduced an identical result with no new information; the available data has "
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "success"
+    ],
+    [
+     "inspect_evidence",
+     "pending"
+    ]
+   ],
+   "goal_type": "explain_finding"
+  },
+  "S12": {
+   "status": "PASS",
+   "gates": "9/9",
+   "failed_gates": [],
+   "judge_avg": 2.0,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response directly answers both parts of the question by explaining why the linked-account relationship is a risk signal (device_sharing detection, cluster of 19 accounts, risk score 80.0), listing exactly 18 linked accounts with the shared device, and explicitly acknowledging that the data cannot prove violations or malicious intent between the accounts."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response directly answers both parts of the question by explaining why the linked-account relationship is a risk signal (device_sharing detection, cluster of 19 accounts, risk score 80.0), listing exactly 18 linked accounts with the shared device, and explicitly acknowledging that the data cannot prove violations or malicious intent between the accounts."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response directly answers both parts of the question by explaining why the linked-account relationship is a risk signal (device_sharing detection, cluster of 19 accounts, risk score 80.0), listing exactly 18 linked accounts with the shared device, and explicitly acknowledging that the data cannot prove violations or malicious intent between the accounts."
+    }
+   ],
+   "focus": null,
+   "stop_reason": "goal_satisfied",
+   "iteration": 1,
+   "agent_status": "completed",
+   "tools": [
+    "related_account_analysis",
+    "related_account_analysis",
+    "related_account_analysis"
+   ],
+   "taxonomy": null,
+   "investigation_id": "INV-f938908c10c5",
+   "task_id": "TASK-36d67197f707",
+   "response_excerpt": "为什么是风险信号:Risk Platform 的网络关系检测发现该账号与其他账号存在网络/共享设备关系（detection type “device_sharing”, cluster 「Cluster_device_sharing_1」, 19 accounts in the cluster, cluster risk score 80.0）。这类关系会作为需要进一步调查的风险信号记录;当前数据本身不能证明这些账号之间存在违规或恶意意图。\n关联账号共 18 个:\n- U00004\n- U00005\n- U00008\n- U00003\n- U00002\n- U00006\n- U00001\n- U00007\n- U00009\n- U00325\n- U00343\n- U00301\n- U00331\n- U00337\n- U00319\n- U00307\n- U00349\n- U00313\n连接这些账号的共享设备:DEV8Z1O4A35QU。\nThe investigation completed.\nSteps completed: 1 (analyze_related_accounts).\n- related_account_analysis:success RELATED_ACCOUNTS_FOUND",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-5e62ac6cc28e (['analyze_related_accounts'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "related_account_analysis",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Risk Platform network attribution: 18 related accounts for this account."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "The analysis conclusively answers both parts: the risk stems from device sharing",
+     "decision": "STOP",
+     "why": "The analysis conclusively answers both parts: the risk stems from device sharing (device DEV8Z1O4A35"
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "analyze_related_accounts",
+     "success"
+    ]
+   ],
+   "goal_type": null
+  },
+  "S14": {
+   "status": "PASS",
+   "gates": "8/8",
+   "failed_gates": [],
+   "judge_avg": 2.0,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 2,
+     "rationale": "The response directly answers why high-frequency withdrawal is a risk item (7 withdrawals in 24h exceeding the threshold/normal pattern), provides a complete evidence table of all 7 records including W000087, and explicitly confirms these are all 7 authoritative records available without overclaiming."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 2,
+     "rationale": "The response directly answers why high-frequency withdrawal is a risk item (7 withdrawals in 24h exceeding the threshold/normal pattern), provides a complete evidence table of all 7 records including W000087, and explicitly confirms these are all 7 authoritative records available without overclaiming."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response directly answers why high-frequency withdrawal is a risk item (7 withdrawals in 24h exceeding the threshold/normal pattern), provides a complete evidence table of all 7 records including W000087, and explicitly confirms these are all 7 authoritative records available without overclaiming."
+    }
+   ],
+   "focus": "F3",
+   "stop_reason": "goal_satisfied",
+   "iteration": 2,
+   "agent_status": "completed",
+   "tools": [
+    "signal_explain",
+    "finding_drilldown",
+    "finding_drilldown",
+    "finding_drilldown"
+   ],
+   "taxonomy": null,
+   "investigation_id": "INV-ebc4d4cf7f32",
+   "task_id": "TASK-f1cf29a5545f",
+   "response_excerpt": "关于发现 F3「High withdrawal frequency.」:7 withdrawals were recorded in 24 hours, exceeding the system's threshold for elevated withdrawal frequency. [2]\n风险信号:规则「High withdrawal frequency」触发 — 规则说明:「7 withdrawals in 24h exceeds the normal pattern」。即:本次行为满足了这条规则的触发条件,因此被标记为风险项。\n完整证据共 7 条(提现记录)：\n| # | 记录 ID | 时间 | 明细 |\n|---|---|---|---|\n| 1 | W000087 | 2026-07-21T01:31:49.892750+00:00 | Withdrawal of 4.141117 USDT to a newly encountered address |\n| 2 | W000084 | 2026-07-21T02:22:49.892750+00:00 | Withdrawal of 0.90031 USDC to a newly encountered address |\n| 3 | W000088 | 2026-07-21T03:01:49.892750+00:00 | Withdrawal of 4.283497 BTC to a newly encountered address |\n| 4 | W000086 | 2026-07-21T04:30:49.892750+00:00 | Withdrawal of 1.645502 USDC to a newly encountered address |\n| 5 | W000090 | 2026-07-21T04:37:49.892750+00:00 | Withdrawal of 4.199266 USDC to a newly encountered address |\n| 6 | W000085 | 2026-07-21T05:33:49.892750+00:00 | Withdrawal of 0.735698 ETH to a newly encountered address |\n| 7 | W000089 | 2026-07-21T06:08:49.892750+00:00 | Withdrawal of 1.146421 USDC to a newly encountered address |\n以上为 Risk Platform 权威证据的全部 7 条记录。\nThe investigation completed.\nSteps completed: 2 (expla",
+   "loop_events": [
+    {
+     "ev": "plan.created",
+     "sum": "plan PLAN-087a14f029f1 (['explain_signal', 'inspect_withdrawals'])"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "signal_explain",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Step completed successfully."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "规则解释已确认（24小时内7笔提现超出正常模式），但还需执行 inspect_withdrawals 获取全部高频提现证据明细。",
+     "decision": "CONTINUE",
+     "why": "规则解释已确认（24小时内7笔提现超出正常模式），但还需执行 inspect_withdrawals 获取全部高频提现证据明细。"
+    },
+    {
+     "ev": "tool.completed",
+     "sum": "",
+     "tool": "finding_drilldown",
+     "outcome": "success"
+    },
+    {
+     "ev": "observation.recorded",
+     "sum": "Complete record set reviewed: 7 records."
+    },
+    {
+     "ev": "decision.made",
+     "sum": "风险解释已完成，且已检索到全部7条高频提现证据记录（W000084-W000090），问题已得到完整回答。",
+     "decision": "STOP",
+     "why": "风险解释已完成，且已检索到全部7条高频提现证据记录（W000084-W000090），问题已得到完整回答。"
+    },
+    {
+     "ev": "agent.completed",
+     "sum": ""
+    }
+   ],
+   "plan_steps": [
+    [
+     "explain_signal",
+     "success"
+    ],
+    [
+     "inspect_withdrawals",
+     "success"
+    ]
+   ],
+   "goal_type": null
+  },
+  "S17": {
+   "status": "FAIL",
+   "gates": "4/7",
+   "failed_gates": [
+    {
+     "check_id": "expected_finding",
+     "expected": "F3",
+     "observed": "None"
+    },
+    {
+     "check_id": "key_fact:Withdrawal frequency (24h) = 7",
+     "expected": "Withdrawal frequency (24h) = 7",
+     "observed": "ABSENT"
+    },
+    {
+     "check_id": "key_fact:withdrawal",
+     "expected": "withdrawal",
+     "observed": "ABSENT"
+    }
+   ],
+   "judge_avg": 0.67,
+   "judge": [
+    {
+     "dimension": "answer_addresses_question",
+     "score": 0,
+     "rationale": "The response completely fails to address the risk signal question (no mention of the withdrawal frequency finding), offers only runtime metadata instead of explanation, but is fully honest and transparent about being blocked due to unresolved context."
+    },
+    {
+     "dimension": "explanation_quality",
+     "score": 0,
+     "rationale": "The response completely fails to address the risk signal question (no mention of the withdrawal frequency finding), offers only runtime metadata instead of explanation, but is fully honest and transparent about being blocked due to unresolved context."
+    },
+    {
+     "dimension": "honesty_insufficiency",
+     "score": 2,
+     "rationale": "The response completely fails to address the risk signal question (no mention of the withdrawal frequency finding), offers only runtime metadata instead of explanation, but is fully honest and transparent about being blocked due to unresolved context."
+    }
+   ],
+   "focus": null,
+   "stop_reason": "context_unresolved",
+   "iteration": 0,
+   "agent_status": "blocked",
+   "tools": [],
+   "taxonomy": "target_resolution_failure",
+   "investigation_id": "INV-b72f8b452d8c",
+   "task_id": "TASK-1dc382c0ffb2",
+   "response_excerpt": "The investigation is blocked and cannot progress.\nI couldn't safely determine the target of your question.\nStop reason: context_unresolved.",
+   "loop_events": [
+    {
+     "ev": "agent.blocked",
+     "sum": "I couldn't safely determine the target of your question."
+    }
+   ],
+   "plan_steps": [],
+   "goal_type": "explain_finding"
+  }
+ },
+ "D_quality_axis_profile": {
+  "Q1 Target Resolution": {
+   "result": "11/14 resolved correctly; 1 serious over-resolution (S11); 2 conservative clarifications vs frozen GT (S03 fresh-turn, S17 no-antecedent)",
+   "detail": "Loop focus verified from Activity: F1(S04) F7(S06) F5(S07,S10) F3(S14); case-level correctly kept for intake/account-list (S01,S02,S08,S09,S12). S11 resolved a nonexistent topic ('虚拟币洗钱') to F1 and executed - the run's serious Q1 defect (observed 1/3 runs). S03/S17 behavior is safe clarification/refusal; frozen GT unmet (see E/F notes)."
+  },
+  "Q2 Planning Quality": {
+   "result": "14/14 well-formed plans; RE_PLAN only on empty/no-progress (correct); 1 turn-surface skill-label observation (S03 browser: plan chip 'timeline_investigation' for an explain question; answer content still explain-shaped)",
+   "detail": "Loop plans: fetch_case+generate_artifact (S02), explain_signal+retrieve_policy (S04,S07), explain+inspect (S06,S10,S14), analyze_related_accounts (S08,S12), analyze_cross_account_trades+generate_artifact (S09), explain_signal (S11->re-plan +inspect_evidence)."
+  },
+  "Q3 Execution Quality": {
+   "result": "All executed tool calls succeeded except S10 finding_drilldown=empty (honest empty, correct outcome class); argument-level provenance not exposed via the activity projection (UI-safe whitelist) - recorded as observation limit",
+   "detail": "Citation markers [2]/[3] present in S07/S14 responses; record IDs (W0000xx, T000670..., CATA-001..) genuine per RP fingerprint bcef0d3982a97e01."
+  },
+  "Q4 Loop Boundedness": {
+   "result": "All loops terminated bounded: iterations 1-3 (max seen 3 <= S10 GT bound 4); zero limit-stops; S10 exercised the designed RE_PLAN -> identical-result -> STOP guard; 1 stop-taxonomy defect (S10 goal_satisfied vs bounded_data, repeated 2/2 post-fix); S11 completed on a wrong target (bounded but wrongly grounded)",
+   "detail": "STOP decisions carried substantive rationales (e.g. S14 '已检索到全部7条...W000084-W000090'; S10 'the re-planned query reproduced an identical result with no new information'). Premature stopping: none at content level; S10 stop-class under-reports partial-answer semantics."
+  },
+  "Q5 Evidence (a-d)": {
+   "result": "Q5a retrieval correct in 13/14 executed (S11 mis-scoped to wrong target); Q5b complete: 7/7 withdrawals (S05,S14), 64/64 transactions (S06), 18/18 accounts (S08,S12), 6 candidates (S09), 0-records honestly bounded (S10); Q5c interpretation correct with correct threshold/feature semantics; Q5d provenance genuine (record IDs + citation markers)",
+   "detail": "Deterministic E2 confirmations come from backend activity observations ('Complete record set reviewed: 64/7 records', '18 related accounts', 'Found 6 candidate...', 'finding_drilldown:empty') because harness loop tool_calls carry no structured data (evidence-count gates inert - recorded as evaluator limitation)."
+  },
+  "Q6 Answer Fidelity": {
+   "result": "Judge mean 1.61/2 over 12 judged; 9 scenarios at >=1.67; weak surfaces: S02 (runtime-metadata closure, judge 0.67), S03/S17 (clarify/refuse - judged low on answer_addresses_question while honesty honored); S06 gate miss is a literal-string oracle artifact (judge 2.0)",
+   "detail": "Gate-level fidelity failures: S02 (2 key-fact literals), S06 ('transaction record' noun; composer used 交易记录), S03/S17 facts absent because no finding answer was produced."
+  },
+  "Q7 Honesty & Boundary": {
+   "result": "Strong: attribution refusals (S04,S06), relationship-≠-intent boundaries (S08,S09,S12), budget-limit disclosure (S09), data-boundary (S10), honest clarify/refuse (S03,S17, browser case-less error), no UNKNOWN->FALSE conversion anywhere; 1 violation class: S11 false relevance via wrong-target execution",
+   "detail": "No fabricated findings, no invented record IDs, no unsupported conclusive claims in any of the 14 responses."
+  },
+  "Q8 Conversation Coherence": {
+   "result": "Follow-up resolution from conversation works (S07,S08,S09,S14 all resolved correctly after intake); focus persists turn->goal and across browser reload (S14); observed context-dependency: S03 resolves only WITH history (fresh-context run clarified)",
+   "detail": "Focus source contract held: loop scenarios read from AgentLoopState/Activity (all non-None where a finding was the target); turn scenarios from InvestigationContext."
+  },
+  "Q9 Investigation Usability (browser)": {
+   "result": "10/10 browser scenarios rendered correct answers, evidence, boundedness and Activity semantics; markdown tables/lists render; reload persistence verified (S14); usability debt: loop intake closure is runtime-metadata shaped (S02 pattern)",
+   "detail": "Activity panel verified showing Goal/plan/capability invocation+outcome/iteration/terminal status; error and clarification cards render with actionable guidance."
+  }
+ },
+ "E_hard_gates": {
+  "total": 143,
+  "passed": 128,
+  "pass_rate": 0.8951,
+  "failures_by_check_type": {
+   "expected_capability": [
+    "S02",
+    "S03"
+   ],
+   "key_fact": [
+    "S02",
+    "S02",
+    "S03",
+    "S03",
+    "S03",
+    "S06",
+    "S17",
+    "S17"
+   ],
+   "expected_finding": [
+    "S03",
+    "S17"
+   ],
+   "expected_stop_reason": [
+    "S10",
+    "S11"
+   ],
+   "prohibited": [
+    "S11"
+   ]
+  }
+ },
+ "F_llm_judge": {
+  "availability": "12/12 attempted judges succeeded; S09 judge unavailable after 1 retry (LLMEmptyResponseError x2) - deterministic PASS kept; S11 judge not run (GT has no key facts, by design)",
+  "rows": [
+   [
+    "S01",
+    2.0,
+    "ok"
+   ],
+   [
+    "S02",
+    0.67,
+    "ok"
+   ],
+   [
+    "S03",
+    0.33,
+    "ok"
+   ],
+   [
+    "S04",
+    2.0,
+    "ok"
+   ],
+   [
+    "S05",
+    2.0,
+    "ok"
+   ],
+   [
+    "S06",
+    2.0,
+    "ok"
+   ],
+   [
+    "S07",
+    1.67,
+    "ok"
+   ],
+   [
+    "S08",
+    2.0,
+    "ok"
+   ],
+   [
+    "S09",
+    null,
+    "unavailable after retry (LLMEmptyResponseError x2) - deterministic result kept"
+   ],
+   [
+    "S10",
+    2.0,
+    "ok"
+   ],
+   [
+    "S11",
+    null,
+    "not run (GT has no key facts)"
+   ],
+   [
+    "S12",
+    2.0,
+    "ok"
+   ],
+   [
+    "S14",
+    2.0,
+    "ok"
+   ],
+   [
+    "S17",
+    0.67,
+    "ok"
+   ]
+  ]
+ },
+ "G_evidence_vs_answer": {
+  "E1_retrieval": "correct in 13/14 executed; S11 mis-scoped (wrong target)",
+  "E2_completeness": "verified complete: 7/7 (S05,S14), 64/64 (S06), 18/18 (S08,S12), 6 candidates (S09); S10 0-records honestly bounded",
+  "E3_accuracy": "spot-checked record IDs/scores match RP fingerprint bcef0d3982a97e01; no fabricated records",
+  "A1_interpretation": "correct threshold/feature/score semantics (S04,S05,S06); relationship-≠-intent kept (S08,S09,S12)",
+  "A2_conclusion": "bounded conclusions correct (S09 'candidates only, no intent conclusion'); S11 conclusion ungrounded (wrong topic); S02 no substantive conclusion on surface",
+  "A3_completeness_directness": "direct in 10/14; weak: S02 (metadata), S03/S17 (clarify/refuse)",
+  "special_patterns": {
+   "correct_evidence_wrong_interpretation": "none observed",
+   "insufficient_evidence_apparently_correct_answer": "none observed (S10 refused to dress up empty records; S02 is the inverse: correct evidence, weak answer)",
+   "wrong_evidence_confident_answer": "S11 (irrelevant F1 evidence presented for a 虚拟币洗钱 question)"
+  }
+ },
+ "H_loop_boundedness": {
+  "iterations": {
+   "S01": 1,
+   "S02": 2,
+   "S03": 1,
+   "S04": 2,
+   "S05": 1,
+   "S06": 2,
+   "S07": 2,
+   "S08": 1,
+   "S09": 2,
+   "S10": 3,
+   "S11": 2,
+   "S12": 1,
+   "S14": 2,
+   "S17": 0
+  },
+  "stop_reasons": {
+   "S01": "goal_satisfied",
+   "S02": "goal_satisfied",
+   "S03": "goal_satisfied",
+   "S04": "goal_satisfied",
+   "S05": "goal_satisfied",
+   "S06": "goal_satisfied",
+   "S07": "goal_satisfied",
+   "S08": "goal_satisfied",
+   "S09": "goal_satisfied",
+   "S10": "goal_satisfied",
+   "S11": "goal_satisfied",
+   "S12": "goal_satisfied",
+   "S14": "goal_satisfied",
+   "S17": "context_unresolved"
+  },
+  "re_plan_events": {
+   "S10": "empty drilldown -> RE_PLAN -> identical result -> STOP (no-progress guard OK, iter 3)",
+   "S11": "insufficient evidence -> RE_PLAN (+inspect_evidence) -> identical -> STOP (on WRONG target)",
+   "S04": "CONTINUE after insufficient observation -> policy step -> STOP (healthy)"
+  },
+  "premature_stopping": "none at content level; S10 stop-class mislabel (goal_satisfied vs bounded_data)",
+  "unnecessary_continuation": "none observed (no scenario continued past answerable completion)",
+  "retries": "no tool retries observed; no stopped_by_limit"
+ },
+ "I_browser": {
+  "scenarios": {
+   "S01": [
+    "PASS",
+    "case overview + 8 findings + U00010 rendered"
+   ],
+   "S03": [
+    "PASS",
+    "direct answer: Context focus 'F5 - Shared Device Relationships (Resolved from conversation)', device_sharing, 19 accounts, 80.0, DEV8Z1O4A35QU, policy citation [3]; 1st attempt FAIL was journey-assertion artifact (cluster-ID literal not on turn surface; sidebar F6 false positive); re-run PASS with corrected assertions; product behavior identical across both attempts"
+   ],
+   "S04": [
+    "PASS",
+    "99.41 + LightGBM + ML explanation rendered; Activity panel shows loop semantics"
+   ],
+   "S05": [
+    "PASS",
+    "7 withdrawal records incl. W000087 rendered"
+   ],
+   "S06": [
+    "PASS",
+    "Trade frequency (24h) = 54 + 64 transaction records (T00...) rendered in markdown table"
+   ],
+   "S07": [
+    "PASS",
+    "follow-up resolved F5: cluster + DEV8Z1O4A35QU"
+   ],
+   "S08": [
+    "PASS",
+    "why + 18 account IDs + boundary + DEV8Z1O4A35QU; Activity terminal 'Investigation completed (goal satisfied)'; 1st attempt FAIL was journey wait-condition artifact (stale intake closure text matched mid-run); re-run PASS"
+   ],
+   "S09": [
+    "PASS",
+    "6 candidates + CATA-001 table + bounded conclusion"
+   ],
+   "S12": [
+    "PASS",
+    "multi-intent: why + 18 accounts + boundary"
+   ],
+   "S14": [
+    "PASS",
+    "7 withdrawal records; RELOAD persistence verified (W000087 + conversation retained after reopen)"
+   ]
+  },
+  "summary": "10/10 PASS (S14 incl. reload persistence); 2 journey-tool re-runs documented (S03 assertions, S08 wait condition); product behavior consistent across attempts",
+  "exploratory": [
+   "case-less New Investigation + finding question -> bounded Error card with case-ID guidance (no invented case)",
+   "S03 resolution is context-dependent: fresh (API) -> clarify {F5,F6}; with intake history (browser) -> direct F5 answer",
+   "turn-surface S03 plan chip labeled timeline_investigation for an explain question (observed; answer content explain-shaped)",
+   "Activity panel renders loop truth: goal, plan, capability invocation+outcome, iteration x of 8, focus (case-level kept for account-list), terminal '(goal satisfied)'"
+  ],
+  "screenshots": "qa/screenshots/al33-l3-*.png (+2 FAIL-attempt shots preserved)"
+ },
+ "J_human_review": [
+  {
+   "sample": "S04",
+   "class": "PASS",
+   "reviewer_notes": "Genuinely answers both sub-questions (meaning + why-risk). Score semantics honest ('system signal, not a calibrated probability'), feature values listed as context with an explicit no-attribution boundary. No false confidence; analyst does not need to re-ask. Evidence boundary clear. human_review: AGREE with PASS."
+  },
+  {
+   "sample": "S11",
+   "class": "FAIL (most consequential)",
+   "reviewer_notes": "User asked about a NONEXISTENT '虚拟币洗钱' finding; agent resolved F1 (ML Pattern Detection) and answered with F1's ML explanation. From the analyst's seat this is a false-relevance answer: it does not answer the question and invites the user to believe F1 is the crypto-laundering signal. Mitigations: response names F1 honestly (no invented finding), no fabricated facts. Loop's own re-plan decision text still references '虚拟币洗钱' - the loop knew the topic and never re-checked target validity. Prior two harness runs refused correctly -> weather-sensitive. human_review: AGREE with FAIL; taxonomy in report (convergence_failure by first-gate) understates it - root cause is semantic over-resolution (Q1)."
+  },
+  {
+   "sample": "S02",
+   "class": "evidence-vs-answer mismatch",
+   "reviewer_notes": "Evidence layer correct (risk_case_fetch success; observation 'Case retrieved: 8 findings identified'; bundle ART produced). Answer layer weak: conversational output is runtime metadata ('Steps completed... artifact_bundle:success ART-...') instead of an analyst-facing case overview; content lives in the artifact. Analyst must re-ask or open the artifact. No false claims. human_review: AGREE with FAIL (answer-fidelity); repeated 3/3 runs across harness generations."
+  },
+  {
+   "sample": "S10",
+   "class": "degraded / uncertainty",
+   "reviewer_notes": "Zero record-level evidence exists; agent stated the data boundary explicitly ('没有记录级证据可枚举...我不能把现有摘要描述为全部明细') - UNKNOWN not converted to FALSE, no fabrication, bounded at iter 3 with a correct RE_PLAN->no-progress->STOP. Content honesty intact; stop_reason taxonomy labeled goal_satisfied instead of bounded_data (repeated 2/2 post-fix runs). human_review: AGREE with FAIL (stop-taxonomy only); the ANSWER itself is honest and usable."
+  },
+  {
+   "sample": "S07 + S14",
+   "class": "multi-turn",
+   "reviewer_notes": "S07: follow-up resolved F5 from conversation (loop focus via Activity), graph facts + device + related accounts + policy citation; coherent. S14: intake -> F3 evidence loop; 7 records with record IDs; browser reload retained everything. Conversation coherence (Q8) confirmed on both surfaces."
+  },
+  {
+   "sample": "S08 + S14 (browser)",
+   "class": "browser scenario",
+   "reviewer_notes": "Screenshot-verified rendering: markdown lists/tables, Context/Artifacts/Activity panels, terminal status '(goal satisfied)', plan/capability/iteration semantics, focus=case-level correctly shown for an account-list question; S14 reload persistence. Rendering correct; no stale state observed across 12+ browser investigations."
+  },
+  {
+   "sample": "S03 (browser, exploratory)",
+   "class": "degraded entry",
+   "reviewer_notes": "A 'New Investigation' in the UI is case-less; asking a finding question without naming a case yields a bounded Error card ('I couldn't identify a case. Please provide a case ID such as 00299.') - honest, actionable, no invented case. Also observed: with intake history the SAME question resolves F5 directly ('Resolved from conversation') - S03 outcome is context-dependent (fresh API run clarified; history-backed browser run answered)."
+  }
+ ],
+ "K_failure_taxonomy": {
+  "recorded": {
+   "tool_selection_failure": 1,
+   "target_resolution_failure": 2,
+   "answer_fidelity_failure": 1,
+   "convergence_failure": 2
+  },
+  "note": "taxonomy = class of FIRST failing gate; see M for root-cause-precise interpretation (e.g. S11 recorded convergence_failure but root cause is Q1 semantic over-resolution; S02 recorded tool_selection_failure but root cause is loop-intake composer surface + capability-vs-tool oracle naming)"
+ },
+ "L_environment_evaluator_errors": {
+  "judge": "S09: LLMEmptyResponseError x2 (retry honored, judge_available=False, deterministic result kept)",
+  "harness_limitations": [
+   "run_baseline.py (harness commit 59070a1) contains a loop-focus clobber (lines ~136-142) violating the committed AL-3.17 focus contract - NOT used for this run; must be fixed before any future baseline (recorded, not fixed, per protocol §1).",
+   "run_baseline_v2.py (untracked) turn branch leaves stop_reason=None -> would artifact-FAIL S03/S05 stop gates - NOT used for this run.",
+   "Loop tool_calls in harness traces carry no structured data -> evidence-count gates (evidence_count/evidence_count_min) are inert in loop mode (affects S05/S06/S08/S09/S12/S14 counting gates; supplemented this run by backend activity observations).",
+   "Harness JSON does not persist trace.response_text (only gates/judge reference it) - responses were re-fetched from the API for this report; raw copies embedded in the run evidence.",
+   "rp_data_hash field is a placeholder (sha256 of b'U00010'); real fingerprint recorded in §A.",
+   "run_al3.py would silently route deterministic/no_key_loop scenarios through /goal if they were not excluded by the operator - the no-fallback rule was honored manually this run (14-scenario explicit list); a harness-level skip is still missing.",
+   "judge not run for S11 by design (GT expected_key_facts empty) - the run's most consequential failure therefore has judge coverage gap (deterministic gates caught it)."
+  ],
+  "skipped": {
+   "S13": {
+    "reason": "INFRASTRUCTURE_UNAVAILABLE - no_key_loop requires a dedicated no-key backend execution path; none exists in the tree (both harness generations skip it; corrective doc 2026-10-03 §8 lists specialised infrastructure as missing)",
+    "ground_truth_available": true
+   },
+   "S15": {
+    "reason": "SKIPPED - deterministic mode requires the fixture harness (AL-3.2 scope limitation); not executable against the canonical stack by the frozen runner",
+    "ground_truth_available": true
+   },
+   "S16": {
+    "reason": "SKIPPED (regression gate) - deterministic fixture harness required; NOT executed, NOT passed - recorded separately per protocol §16",
+    "ground_truth_available": true
+   },
+   "S18": {
+    "reason": "SKIPPED - deterministic fixture harness required",
+    "ground_truth_available": true
+   }
+  },
+  "environment": "no RP errors; no backend errors; frontend restarted pre-run; no QA stacks used"
+ },
+ "M_baseline_quality_findings": {
+  "A_stable_strengths": [
+   "Finding-level explain/evidence quality on both surfaces: S04/S05/S07/S08/S12/S14 all judge>=1.67 with complete record sets (7/7, 64/64, 18/18) and correct why-explanations grounded in RP facts (repeated: consistent with prior smoke and AL-2.x QA).",
+   "Honesty/boundary discipline is systemic: attribution refusal (S04/S06), relationship-≠-intent (S08/S09/S12), budget-limit disclosure (S09), data-boundary (S10), honest clarify/refuse (S03/S17, browser case-less error). No UNKNOWN->FALSE, no fabrication in 14 responses.",
+   "Loop convergence discipline: bounded iterations (max 3), RE_PLAN only on empty/no-progress, no-progress STOP guard fired correctly (S10), STOP decisions with substantive rationales.",
+   "Focus-source contract held end-to-end (Activity projection non-None and correct for every finding-targeted loop scenario).",
+   "Browser rendering/Activity semantics/reload persistence (10/10)."
+  ],
+  "B_repeated_systematic_patterns": [
+   "P1 (repeated 3/3 runs, both surfaces): loop-surface case-intake closure answers with runtime metadata ('Steps completed...', 'artifact_bundle:success ART-...') instead of an analyst-facing case overview - S02 regression gate FAILs on this in every harness generation. E correct / A weak.",
+   "P2 (repeated 2/2 post-fix runs): empty-record bounded answers stop with goal_satisfied instead of bounded_data (S10). Content honesty intact; stop-taxonomy under-reports partial-answer semantics.",
+   "P3 (repeated 2/2 fresh-context runs): '共享设备' explain question in a fresh investigation clarifies with candidates {F5, F6} instead of resolving F5; with intake history it resolves F5 directly (browser). Hypothesis: resolver candidate generation treats device-sharing phrasing as F5/F6-ambiguous without conversational grounding.",
+   "P4 (repeated 3/3): S17's frozen GT expects F3 evidence for '这个发现' but the scenario never establishes a focus; the agent refuses (context_unresolved) every time. Architecturally-correct behavior vs unachievable GT precondition - oracle/scenario design gap, not an agent defect (evaluator-side finding)."
+  ],
+  "C_isolated_failures": [
+   "S11 semantic over-resolution (observed 1/3 runs; prior two runs refused correctly): '虚拟币洗钱' -> F1 executed with F1's evidence - false-relevance answer; weather-sensitive glm-5.3 resolution. THE quality finding of this run.",
+   "S06 single literal-string gate miss ('transaction record' absent; composer rendered '完整证据共 64 条(交易记录)' + full T00 table; judge 2.0) - oracle brittleness, isolated, no semantic defect."
+  ],
+  "D_regression_failures": [
+   "S02 (AL-2 regression gate): FAIL - loop-intake answer is runtime metadata; also GT names capability 'case_intake' while the executed tool is risk_case_fetch (capability-vs-tool-name oracle mismatch recorded; the substantive failure is the composer surface).",
+   "S16 (AL-2 regression gate): SKIPPED - deterministic fixture infrastructure unavailable; the EMPTY≠SATISFIED regression property was NOT exercised in this run (honest gap; related live behavior observed positively in S10's empty-record handling)."
+  ],
+  "E_environment_data_issues": [
+   "glm-5.3 weather affects semantic resolution (S11 flip vs prior runs; S03 context-dependence) and judge output stability (S09 empty responses x2). Single-run-per-scenario cannot separate weather from systematic behavior - flagged per-claim in this report.",
+   "RP stable throughout; data fingerprint bcef0d3982a97e01; no RP errors."
+  ],
+  "F_evaluator_issues": [
+   "run_baseline.py (harness commit 59070a1) contains a loop-focus clobber (lines ~136-142) violating the committed AL-3.17 focus contract - NOT used for this run; must be fixed before any future baseline (recorded, not fixed, per protocol §1).",
+   "run_baseline_v2.py (untracked) turn branch leaves stop_reason=None -> would artifact-FAIL S03/S05 stop gates - NOT used for this run.",
+   "Loop tool_calls in harness traces carry no structured data -> evidence-count gates (evidence_count/evidence_count_min) are inert in loop mode (affects S05/S06/S08/S09/S12/S14 counting gates; supplemented this run by backend activity observations).",
+   "Harness JSON does not persist trace.response_text (only gates/judge reference it) - responses were re-fetched from the API for this report; raw copies embedded in the run evidence.",
+   "rp_data_hash field is a placeholder (sha256 of b'U00010'); real fingerprint recorded in §A.",
+   "run_al3.py would silently route deterministic/no_key_loop scenarios through /goal if they were not excluded by the operator - the no-fallback rule was honored manually this run (14-scenario explicit list); a harness-level skip is still missing.",
+   "judge not run for S11 by design (GT expected_key_facts empty) - the run's most consequential failure therefore has judge coverage gap (deterministic gates caught it)."
+  ]
+ },
+ "N_limitations": [
+  "Single case (U00010) and single run per scenario: glm-5.3 weather is not sampled; repeated/one-off labels above rely on cross-run comparison with two prior harness runs (one contaminated, one focus-clobbered) - treated as corroboration, not clean replicas.",
+  "S13/S15/S16/S18 not executed (no specialised infrastructure): 4 of 18 scenarios (incl. regression gate S16) have NO result this run.",
+  "Judge = same model family as the agent (glm-5.3): self-judging bias possible; judge is used only for quality scores, never to override deterministic gates.",
+  "Evidence-count hard gates inert in loop mode (see F); completeness verification this run leans on backend activity observations.",
+  "Browser journeys: the UI has no pre-bound-case entry, so case-bound single-prompt scenarios (S03/S04/S05/S06/S12) ran intake-first to establish U00010 (journey metadata; mirrors AL-2.x QA pattern). S03 and S08 required journey-tool fixes (assertions / wait-condition); their re-runs are labeled and their first-attempt observations are preserved in this report.",
+  "Two L3 journey re-runs (S03, S08) mean browser evidence for those two scenarios comes from a second execution; product behavior was identical across attempts for S03 (direct answer both times).",
+  "Turn-surface stop_reason is harness-modeled as goal_satisfied (committed runner semantics); /turn has no native stop_reason."
+ ],
+ "raw_evidence": {
+  "harness_json": "docs/evaluations/al3-eval-20261004T125002.json",
+  "responses": "docs/evaluations/al33-baseline-58881a9_al3-ca2ec15c_20261004T125002Z-responses.json",
+  "activities": "docs/evaluations/al33-baseline-58881a9_al3-ca2ec15c_20261004T125002Z-activities.json",
+  "l3_results": "docs/evaluations/al33-baseline-58881a9_al3-ca2ec15c_20261004T125002Z-l3-results.json",
+  "run_log": "/tmp/al33_baseline_run.log"
+ }
+}

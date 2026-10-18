@@ -1,0 +1,4 @@
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+2026-10-08 21:54:23,310 - app.agent_loop - WARNING - GSP-7 re-plan filter: stripped repeat-unsupported steps ['inspect_self_opposite_trades']
+2026-10-08 21:54:23,310 - app.agent_loop - WARNING - GSP-7 re-plan filter: stripped repeat-unsupported steps ['inspect_self_opposite_trades']

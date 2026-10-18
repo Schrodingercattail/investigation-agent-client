@@ -189,13 +189,17 @@ class TestActivityContract:
                       json={"goal": "show the timeline"}).json()
         activity = _await_terminal(c, goal["task_id"])
 
-        # whitelisted top-level fields only
+        # whitelisted top-level fields only (GSP WP-GSP-2/3 added the
+        # goal_contract / goal_outcome / observation_associations read-
+        # model keys — additive, frontend consumes neither yet)
         assert set(activity.keys()) == {
             "task_id", "investigation_id", "case_id", "goal",
             "criteria_kind", "focused_finding_id", "agent_status",
             "stop_reason", "iteration", "max_iterations", "plan_revisions",
             "plan_steps", "artifact_ids", "activity",
-            "goal_representation", "is_terminal"}
+            "goal_representation", "goal_contract", "goal_outcome",
+            "observation_associations", "goal_contract_decision",
+            "is_terminal"}
         # NO internal state structures leak
         for forbidden in ("observations", "decisions", "retries",
                           "invalid_proposals", "response"):
@@ -210,7 +214,8 @@ class TestActivityContract:
             assert set(rec.keys()) == {
                 "seq", "event_type", "timestamp", "iteration", "step_id",
                 "step_type", "tool_name", "outcome", "decision",
-                "agent_status", "stop_reason", "summary", "artifact_ids"}
+                "agent_status", "stop_reason", "summary", "artifact_ids",
+                "semantic_basis"}
             assert rec["summary"] is None or len(rec["summary"]) <= 300
 
         # the loop lifecycle is reconstructable from records alone
