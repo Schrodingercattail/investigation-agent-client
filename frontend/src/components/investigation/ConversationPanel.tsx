@@ -11,10 +11,12 @@ import type {
 } from '@/api/types'
 import { Bot, CircleAlert, User } from 'lucide-react'
 import { Fragment, useEffect, useRef } from 'react'
-import { PlanCard } from './PlanCard'
 import { FollowUpChips } from './FollowUpChips'
+import { PlanCard } from './PlanCard'
 import { TimelineView, type TimelineEventData } from './TimelineView'
 import { TaskStatus } from './TaskStatus'
+import { AgentActivityBlock } from './AgentActivityBlock'
+import type { AgentActivityState } from '@/hooks/useAgentActivity'
 
 export interface ConversationTurn {
   id: string
@@ -28,6 +30,11 @@ export interface ConversationTurn {
   followUps?: FollowUp[]
   timelineEvents?: TimelineEventData[]
   focusedEventId?: string | null
+}
+
+export interface LiveActivityView {
+  taskId: string
+  state: AgentActivityState
 }
 
 interface ConversationPanelProps {
@@ -45,6 +52,12 @@ interface ConversationPanelProps {
    * whether intake guidance ("Select a finding…") is applicable: shown
    * only when NO finding is focused (P12 — guidance matches state). */
   focusedFindingId: string | null
+  /** The STILL-RUNNING loop run started in this session (Activity-in-
+   * conversation): rendered inline after the user's request while the run
+   * executes. The page stops passing it once the run's answer turn has
+   * been absorbed (the absorbed turn carries its own historical block),
+   * which also unmounts the polling hook. */
+  liveActivity?: LiveActivityView | null
 }
 
 /**
@@ -89,6 +102,7 @@ export function ConversationPanel({
   onNavigate,
   followUpsDisabled,
   focusedFindingId,
+  liveActivity,
 }: ConversationPanelProps) {
   // Auto-scroll: whenever the rendered conversation content changes (a new
   // user turn, agent response, or focus confirmation is appended), bring the
@@ -131,7 +145,7 @@ export function ConversationPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnsSignature, loading])
   return (
-    <ScrollArea className="h-full">
+    <ScrollArea className="conversation-scroll h-full">
       <div className="space-y-4 p-4" aria-live="polite">
         {turns.length === 0 && !loading && (
           <div
@@ -147,16 +161,16 @@ export function ConversationPanel({
           <Fragment key={turn.id}>
             {turn.role === 'user' ? (
               <div className="flex justify-end">
-                <Card className="max-w-[85%] border-primary/20 bg-primary/5">
+                <Card className="max-w-[85%] min-w-0 border-primary/20 bg-primary/5">
                   <CardContent className="flex items-start gap-2 p-3">
                     <User className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
-                    <p className="text-sm">{turn.text}</p>
+                    <p className="[overflow-wrap:anywhere] text-sm">{turn.text}</p>
                   </CardContent>
                 </Card>
               </div>
             ) : (
               <div className="flex justify-start">
-                <Card className="max-w-[95%]">
+                <Card className="max-w-[95%] min-w-0">
                   <CardContent className="space-y-3 p-3">
                     <div className="flex items-center gap-2">
                       <Bot className="h-4 w-4 shrink-0 text-primary" aria-hidden />
@@ -164,7 +178,16 @@ export function ConversationPanel({
                         Investigation Agent
                       </span>
                     </div>
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                    {/* Activity-in-conversation: a bounded Agent Loop run's
+                        execution trace renders ABOVE its final answer, in
+                        execution order (request → activity → answer). Only
+                        agent_loop turns carry it — regular turns are
+                        unaffected. Historical/absorbed runs fetch their
+                        persisted projection once (read-only). */}
+                    {turn.task?.type === 'agent_loop' && (
+                      <AgentActivityBlock taskId={turn.task.task_id} />
+                    )}
+                    <p className="whitespace-pre-wrap [overflow-wrap:anywhere] text-sm leading-relaxed">
                       {renderTurnText(turn.text, focusedFindingId)}
                     </p>
 
@@ -181,7 +204,14 @@ export function ConversationPanel({
                       </div>
                     )}
 
-                    {turn.plan && <PlanCard plan={turn.plan} />}
+                    {/* Activity-in-conversation: loop turns carry the plan
+                        snapshot inside the leading Activity block, so the
+                        trailing Plan card would duplicate it. Non-loop
+                        turns (historical turn-path tasks) keep the Plan
+                        card — they have no Activity block. */}
+                    {turn.plan && turn.task?.type !== 'agent_loop' && (
+                      <PlanCard plan={turn.plan} />
+                    )}
                     {turn.task && <TaskStatus task={turn.task} />}
 
                     {turn.artifacts && turn.artifacts.length > 0 && (
@@ -244,6 +274,16 @@ export function ConversationPanel({
             are appended to `turns` by the page when a selection is made and
             persist like any other historical message (they are never
             removed by later turns, follow-up clicks, or refresh). */}
+
+        {/* LIVE Activity-in-conversation: while a bounded loop run started
+            in this session is executing, its real progress renders inline
+            right after the user's request (request → activity → answer).
+            The page stops passing it once the run's answer turn has been
+            absorbed — the absorbed agent turn then carries the historical
+            block, so the trace never renders twice. */}
+        {liveActivity && (
+          <AgentActivityBlock taskId={liveActivity.taskId} live />
+        )}
 
         {loading && (
           <div className="flex justify-start" role="status" aria-label="Agent is working">

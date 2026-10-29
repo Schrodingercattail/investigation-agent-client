@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     # fails fast instead of multiplying the wait.
     GOAL_UNDERSTANDING_TIMEOUT_SECONDS: float = 240.0
     GOAL_UNDERSTANDING_SDK_MAX_RETRIES: int = 0
+    # U00008 planner reliability fix: the planner's generation budget was
+    # 4096 while Goal Understanding — SAME model (glm-5.3 via the
+    # Anthropic-compatible endpoint), SAME time window — ran on 8192 after
+    # its own 4096→8192 fix. A simple two-finding criteria request hit
+    # stop_reason=max_tokens on BOTH planner attempts at 4096 (thinking-
+    # style output consumed the budget before any text block). Aligned to
+    # the GU-proven value; this is the PLANNER's budget only. Env override
+    # PLANNER_MAX_TOKENS continues to work.
+    PLANNER_MAX_TOKENS: int = 8192
 
     def validate_goal_understanding_runtime(self) -> None:
         """Call-time guard (Q2 closure): invalid values fail loudly instead

@@ -460,9 +460,20 @@ class TestG1Compatibility:
 
     def test_defaults_off(self):
         assert settings.ENABLE_GOAL_SEMANTIC_CONTRACT is False or True
-        # the default in code is False; assert via a fresh Settings import
+        # the default IN CODE is False; assert via a fresh Settings that
+        # ignores the cwd env_file AND the process env (llm_provider's
+        # module-level load_dotenv injects backend/.env into os.environ
+        # when the LLM chain is imported first — P0 recovery made the
+        # .env carry the flag, so isolate both channels explicitly)
+        import os
         from app.config import Settings
-        assert Settings().ENABLE_GOAL_SEMANTIC_CONTRACT is False
+        _saved = os.environ.pop("ENABLE_GOAL_SEMANTIC_CONTRACT", None)
+        try:
+            assert Settings(_env_file=None) \
+                .ENABLE_GOAL_SEMANTIC_CONTRACT is False
+        finally:
+            if _saved is not None:
+                os.environ["ENABLE_GOAL_SEMANTIC_CONTRACT"] = _saved
 
     def test_goal_contract_telemetry_emitted(self, monkeypatch):
         """accepted/rejected events are emitted with structured fields

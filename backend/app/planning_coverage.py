@@ -166,6 +166,23 @@ _FINDING_SCOPED_TOOLS = frozenset({"finding_drilldown", "signal_explain"})
 # output whose subject IS a finding pins the appended step to it.
 _FINDING_ID_RE = re.compile(r"^F\d+$")
 
+# U00033 metric-semantics closure: the reverse-trade-rate METRIC deliverable
+# (facet reverse_trade_metric_semantics) needs the target_account_metrics
+# echo — produced ONLY by analyze_cross_account_trades in target_account
+# scope. Related-account steps succeed but their payload carries no such
+# metrics, so they must never be counted as covering (or supplementing) a
+# metric-semantics output.
+_METRIC_FACET = "reverse_trade_metric_semantics"
+_METRIC_EVIDENCE_STEP = "analyze_cross_account_trades"
+_METRIC_NON_COVERING_STEPS = ("analyze_related_accounts",
+                              "analyze_related_account_set_trades")
+
+
+def _requires_target_account_metrics(output) -> bool:
+    facets = {f.value if hasattr(f, "value") else str(f)
+              for f in (output.postcondition_facets or [])}
+    return _METRIC_FACET in facets
+
 
 def step_covers_output(step, output) -> bool:
     """Whether ONE adopted step can legally serve ONE output: the step's
@@ -179,6 +196,22 @@ def step_covers_output(step, output) -> bool:
     restriction."""
     if step.type not in eligible_step_types_for_output(output):
         return False
+    # U00033 metric-semantics closure: related-account analysis steps do
+    # not produce target_account_metrics, so they never cover a metric
+    # deliverable — the cross-account analysis (which echoes the
+    # authoritative opposite_trade_ratio) is the covering step.
+    if _requires_target_account_metrics(output) \
+            and step.type in _METRIC_NON_COVERING_STEPS:
+        return False
+    # U00047 delivery closure: generate_artifact is the DELIVERY channel
+    # for record streams, not an evidence-acquisition path — a bare
+    # artifact step (no records retrieval before it) renders an empty
+    # bundle, so it never covers a record-stream requirement by itself.
+    if step.type == "generate_artifact":
+        req_values = {t.value if hasattr(t, "value") else str(t)
+                      for t in (output.evidence_requirements or [])}
+        if req_values & {"withdrawal_records", "transaction_records"}:
+            return False
     args = getattr(step, "arguments", None)
     target = args.get("finding_id") if isinstance(args, dict) else None
     if not target:
@@ -211,6 +244,20 @@ def _ordered_eligible(output) -> list:
     target-anchored step (which would narrow the analysis to pairs
     involving the case account only)."""
     eligible = eligible_step_types_for_output(output)
+    # U00047 delivery closure: for record-stream requirements the
+    # supplement must add the RECORDS RETRIEVAL step — generate_artifact
+    # is the delivery channel, never the acquisition path.
+    _req_values = {t.value if hasattr(t, "value") else str(t)
+                   for t in (output.evidence_requirements or [])}
+    if _req_values & {"withdrawal_records", "transaction_records"}:
+        eligible = [t for t in eligible if t != "generate_artifact"]
+    # U00033 metric-semantics closure: a metric deliverable must be served
+    # by the cross-account analysis (the only target_account_metrics
+    # source) — related-account steps are not eligible for it.
+    if _requires_target_account_metrics(output):
+        eligible = [t for t in eligible
+                    if t not in _METRIC_NON_COVERING_STEPS]
+        eligible = [t for t in eligible if t != "generate_artifact"]
     if _FINDING_ID_RE.match((output.subject_ref or "").strip()):
         return eligible
     eligible = sorted(
@@ -218,6 +265,24 @@ def _ordered_eligible(output) -> list:
         key=lambda t: (1 if (STEP_TOOL_MAP.get(t) and
                              STEP_TOOL_MAP[t].tool_name
                              in _FINDING_SCOPED_TOOLS) else 0,))
+    # U00010 B1 (EN, Batch B1): an output requiring EXACTLY ONE record
+    # stream must be supplemented with the STREAM-SPECIALIZED step
+    # (inspect_withdrawals / inspect_transactions), never the generic
+    # inspect_evidence — the generic view has no stream lock and no
+    # stream anchor, and historically executed INVALID_ARGUMENT.
+    from app.goal_resolution import EvidenceType
+    reqs = {getattr(e, "value", e)
+            for e in (output.evidence_requirements or [])}
+    _SPECIALIZED = {
+        "withdrawal_records": "inspect_withdrawals",
+        "transaction_records": "inspect_transactions",
+    }
+    stream_reqs = reqs & set(_SPECIALIZED)
+    if len(stream_reqs) == 1:
+        preferred = _SPECIALIZED[next(iter(stream_reqs))]
+        if preferred in eligible:
+            eligible = ([preferred]
+                        + [t for t in eligible if t != preferred])
     from app.goal_resolution import _CLAIM_HEDGING_SET
     if (getattr(output, "claim", "") or "") == _CLAIM_HEDGING_SET \
             and "analyze_related_account_set_trades" in eligible:

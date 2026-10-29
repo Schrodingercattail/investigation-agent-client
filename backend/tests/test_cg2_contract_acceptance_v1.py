@@ -321,7 +321,12 @@ class TestSingleGoalCompat:
                                 task_id="TASK-CG2-U",
                                 findings_provider=lambda: findings)
         assert result.state.goal_contract is None
-        assert result.state.goal_contract_decision is None
+        # B1: flag OFF is now a RECORDED decision state (not silence) —
+        # the contract path was skipped, nothing inferred about candidates
+        _dec = result.state.goal_contract_decision
+        assert _dec["outcome"] == "flag_off"
+        assert _dec["understanding"]["flag_enabled"] is False
+        assert _dec["understanding"]["candidate"]["stage_ran"] is False
 
     def test_v_single_goal_multi_output_contract_still_accepted(self):
         """Pre-existing behavior (gsp2 test_case_d shape): INFERRED
@@ -365,7 +370,8 @@ class TestCheckpointWiring:
                                 findings_provider=lambda: findings)
         s = result.state
         assert s.goal_contract is None
-        assert s.goal_contract_decision == {
-            "outcome": "invalid_proposal:compound_single_output",
-            "reason": "compound_single_output"}
+        assert s.goal_contract_decision["outcome"] == \
+            "invalid_proposal:compound_single_output"
+        assert (s.goal_contract_decision["understanding"]["schema"]
+                == "gu-decision/1")
         assert s.agent_status == "completed"         # guarded legacy path

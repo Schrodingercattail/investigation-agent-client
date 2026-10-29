@@ -113,7 +113,15 @@ class TestResolverCrossCaseGuard:
         assert out.updated_context.case_id == "U00033"
         assert "U00033" in (out.clarification_message or "")
         assert "U90001" in (out.clarification_message or "")
-        assert "new investigation" in (out.clarification_message or "").lower()
+        # per-turn response language: the guidance face follows the
+        # request's own language, using the SAME detector the runtime uses
+        # (a short zh verb + id stays undeterminable → the en default face)
+        from app.response_language import detect_response_language
+        if detect_response_language(msg) == "zh":
+            assert "新建一个调查" in (out.clarification_message or "")
+        else:
+            assert "new investigation" in (out.clarification_message or ""
+                                           ).lower()
 
     def test_guard_runs_before_intent_classification(self):
         """A cross-case request phrased as an artifact request must still be
@@ -207,7 +215,9 @@ class TestFullPipelineNoExecution:
         assert r.context_changed is False
         assert not r.execution or not r.execution.artifacts
         assert "U00033" in r.response and "U90001" in r.response
-        assert "new investigation" in r.response.lower()
+        # per-turn response language: the guidance face follows the
+        # request's own language
+        assert "新建一个调查" in r.response
 
     def test_no_internal_identifiers_in_guidance(self, tmp_path):
         r = self._run(tmp_path, "investigate U90001", FOCUSED)

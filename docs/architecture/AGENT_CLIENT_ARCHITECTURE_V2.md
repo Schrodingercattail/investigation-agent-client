@@ -878,6 +878,169 @@ for evaluation runs) and a pluggable `TelemetrySink` protocol with a
   production-derived evaluation cases can reuse it without coupling
   production execution to evaluation infrastructure.
 
+### 9a. Agent Activity in the Conversation (implemented & E2E-verified, 2026-10-19)
+
+The bounded Agent Loop's execution trace renders **inside the conversation
+main line** (Codex/Cursor-style working block), in execution order:
+`user request → Agent Activity block → Agent final answer`. The conversation
+is the Activity's ONLY user-visible surface: the right-hand panel shows
+**Artifacts only** (the former Context and Activity tabs were removed from
+the UI — their data paths, APIs, and persistence are untouched), and the
+right-hand `AgentActivityPanel` component survives only as an unused
+implementation kept for its component tests.
+
+### 9a-1. Unified submission — every request on the Agent Loop
+(implemented & E2E-verified, 2026-10-19)
+
+The composer exposes **ONE send action** (button and Enter share the same
+form entry). EVERY user submission — simple questions, compound
+investigations, follow-up clicks, and the first Case Intake — executes on
+the bounded Agent Loop via the unified endpoint
+`POST /api/v2/investigations/{id}/submit`. There is no turn/loop routing
+and no mode picker: the frontend never chooses an execution mode, and the
+single-turn runtime is no longer part of the user submission flow (the
+`/turn` endpoint remains only as a backward-compatible API entry; the
+follow-up registry still reconstructs canonical intents server-side).
+
+Submission flow: ONE goal-understanding pass (`understand_goal` — the
+same LLM-backed-with-heuristic-fallback capability the loop uses) produces
+the task-level Goal Representation and is handed to the runner so the
+loop does not classify the same request twice. If understanding fails,
+the loop runs its own understanding (including the deterministic
+heuristic fallback) — it never falls back to a different runtime. Simple
+tasks satisfy their contract in a few iterations and STOP naturally; the
+loop bound and the LoopPolicy still bound complex ones; blocked/partial/
+bounded_data terminals are reported exactly as the loop decided them.
+
+**Case Intake through the loop (minimal compatibility).** The canonical
+intake request ("Investigate <case>") is inherently open-ended and the
+goal-understanding LLM may classify it as AMBIGUOUS. The case is already
+resolved and bound at creation, so for the FIRST submission of an
+investigation an AMBIGUOUS result is replaced by the deterministic
+heuristic intake representation (`heuristic_goal`) and the loop executes
+the standard case intake — no turn fallback, no blocked dead end.
+
+Known consequence (documented): free-form submissions include one
+goal-understanding LLM call before execution; the deterministic heuristic
+fallback keeps the entry functional when the LLM is unavailable.
+
+**Case Intake answer closure (U00033, E2E-verified).** The canonical
+intake request ("Investigate <case>" / "查询 <case> 用户情况") is
+inherently open-ended; understanding may classify it AMBIGUOUS or degrade
+to a proposal-less heuristic goal. On the FIRST submission of an
+investigation, /submit substitutes the deterministic case-intake
+representation (`_case_intake_representation`): an explicit case-level
+overview output (evidence: case_summary) under the standard GoalContract
+machinery. The loop then fetches the case, the postcondition evaluator
+verifies the case_summary evidence, and the GSP composer renders the
+case overview (finding count, overall risk level/score, finding list)
+as the conversational answer — the artifact bundle is additional, never
+a substitute for the answer. For runs that still end without a contract
+(e.g. understanding unavailable), the legacy composer renders the case
+overview from the same bounded observation summary.
+
+**Full RP summary depth (U00033 follow-up, E2E-verified).** The bounded
+observation whitelist for risk_case_fetch carries each finding's RP
+explanatory summary (from `explanation.key_findings`, parsed by
+`_split_key_finding` — the SAME RP LLM-derived text the old Send path
+rendered) alongside id+title, plus the case-level risk level/score echo.
+Both composers (GSP CASE_SUMMARY facts and the no-contract
+`_case_level_answer_lines`) render these per-finding explanations; the
+risk_case_fetch summary is capped (10 findings / 280 chars per summary,
+with disclosure) and the complete per-finding details remain available in
+the Findings panel and persisted ToolCallV2 records. RP's /explain
+persists its canonical explanation server-side (ExplanationStoreService)
+and serves it without regeneration — the Agent re-fetches via
+risk_case_fetch → adapter.fetch_case → get_case_explanation_raw and never
+triggers a duplicate LLM generation. A re-plan that
+proposes an IDENTICAL plan after a fully-successful execution collapses
+to the bounded completion instead of re-running the same fetches.
+
+**Loop persistence (U00047 fix, E2E-verified).** When a loop run
+terminates, the API layer persists into the SAME investigation session
+read model the turn path writes: the final plan snapshot
+(`session["plans"][task_id]`, statuses exactly as the executor left
+them), the run's ToolCallV2 records (`session["tool_calls"]`, dedup by
+tool_call_id), artifact bodies, and the composed response. Findings
+carried by tool results therefore restore through the existing
+`GET /tasks/{id}/results` and reopen-restore contracts with their
+evidence refs intact. Writes are idempotent (plan overwrite-by-task-id,
+tool_call_id dedup) and keyed by task/investigation — repeated polls,
+reloads, and reopens never duplicate, and cross-task/cross-investigation
+bleed is impossible by construction. Known minor inconsistency
+(pre-existing snapshot semantics, unchanged): a step executed after the
+loop's final plan sync may persist as `pending` even though its
+tool_calls/artifacts prove execution — the snapshot is conservative
+(never over-claims completion) and the authoritative execution record is
+`tool_calls`.
+
+**Placement and lifecycle.** Each `agent_loop` conversation turn renders its
+own `AgentActivityBlock` above that turn's composed answer; the block is
+keyed to the turn's task (`turn.task.task_id`), so a run's trace can never
+appear under another task. While a session-started run is executing, the
+page passes its polling state to ConversationPanel as `liveActivity` and the
+block renders auto-expanded after the user's request; once the terminal
+answer turn is absorbed the live block unmounts and the turn's historical
+block takes over (auto-collapsed — one block per run, never two). The
+page-level gate excludes any turn whose `task.task_id` (restored turns,
+`a-${task_id}`) or turn id (session-absorbed turns, `loop-${taskId}`)
+matches the running task.
+
+**Data source.** No new backend capability: the block consumes the same
+`GET /tasks/{task_id}/activity` bounded UI-safe projection as the panel
+(sequence-ordered activity records, plan snapshot, artifact ids,
+`agent_status`/`stop_reason`/`goal_outcome`). Historical runs fetch the
+projection once (read-only); live runs reuse the page-level
+`useAgentActivity` polling (2s, visibility-aware, self-stopping at the
+terminal status). There is no SSE/WebSocket and no synthetic progress: when
+only the final snapshot exists, the block shows that snapshot — loading,
+record-reading, and temporarily-unavailable states are visually distinct
+and never imply the Agent is still working.
+
+**Status presentation is a single pure mapping** (`resolveActivityPresentation`):
+`agent_status × stop_reason × goal_outcome → one presentation`
+(running / success / partial / failed / blocked). Binding rules:
+`completed + goal_outcome=complete + goal_satisfied` is the ONLY success;
+`bounded_data` or `goal_outcome=partial` always renders as PARTIAL (the
+bounded stop reason wins even against an inconsistent complete outcome);
+`stopped_by_limit` is a bounded partial, never success; `failed`/`blocked`
+render as failed/blocked; unknown combinations degrade conservatively to
+partial. No separate "cancelled" state exists in the loop and none is
+invented. Frontend booleans, artifact presence, and iteration counts never
+drive the success claim.
+
+**Reuse and boundaries.** The block composes existing shadcn/ui primitives
+(Collapsible, Badge, Skeleton, ScrollArea) and lucide icons; no new
+dependencies. Activity-specific logic (status mapping, timeline row
+shaping, auto-expand/collapse with user-toggle precedence) lives in the
+domain component `AgentActivityBlock` + the pure `resolveActivityPresentation`
+module (both unit-tested); the right-hand `AgentActivityPanel` and its tests
+are unchanged.
+
+**Security boundary.** The block renders only the backend's whitelisted
+projection: event titles, humanized tool names, outcome badges, bounded
+summaries (truncated at ~220 chars), artifact ids. Never chain-of-thought,
+never raw tool payloads/parameters, never internal decision structures —
+those do not exist in the projection by contract.
+
+**Bounded timeline.** Very long runs render the LATEST 60 events with an
+explicit disclosure ("Showing the latest N of M events — the full trace is
+in the Activity tab") and the timeline viewport is height-capped
+(280px). A real 130-event run verified: 60 rows, disclosure, no layout
+overflow, ~14ms in-page render. The cap is disclosed, never silent.
+
+**Tests.** Component/mapping tests: `AgentActivityBlock.test.tsx` (status
+mapping table incl. bounded-never-success, collapse/expand, seq ordering,
+bounded summaries, live auto-collapse, 130-event cap + disclosure).
+Unified-routing tests: `test_submit_routing_v1.py` (turn/loop/fallback
+rule + real-API submit E2E: single task per submission, mode and
+route_reason observed). Real-browser journeys:
+`qa/journey_activity_inline_browser_u00047.py` (inline placement, live
+progress, partial-not-success on a real bounded run, expand/collapse by
+mouse and keyboard, artifact entry, reload+reopen restore consistency,
+console-error capture) and the blocked-run probe (`context_unresolved` →
+blocked presentation). API contract: `tests/test_agent_activity_api_v1.py`.
+
 ---
 
 ## 10. Governance, Grounding & Error Handling

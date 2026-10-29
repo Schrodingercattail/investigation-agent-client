@@ -251,12 +251,101 @@ class TestRecordTableMarker:
             output_id="O1", claim="records", claim_kind="retrieval",
             subject_ref="UA", scope=ScopeLevel.FINDING_LEVEL.value,
             evidence_requirements=["withdrawal_records"])
-        summary = {"record_count": 9,
+        summary = {"record_count": 25,
                    "record_rows": [{"record_id": f"W{i:03d}",
                                     "timestamp": "t",
-                                    "summary": "s"} for i in range(9)],
+                                    "summary": "s"} for i in range(25)],
                    "_actual_evidence_types": ["withdrawal_records"],
                    "rows_truncated": True}
         lines = _gsp_render_output_facts(out, summary)
         blob = "\n".join(lines)
         assert "前 10 条" in blob or "完整集合" in blob
+
+
+# --- L1: records-listing chat cap + shown/total disclosure (T10/T11) ----
+
+def _records_summary(n):
+    return {"record_count": n,
+            "record_rows": [
+                {"record_id": f"W{i:03d}", "timestamp": f"t{i}",
+                 "summary": f"Withdrawal {i}",
+                 "address": f"addr-{i}"} for i in range(n)],
+            "streams": {"withdrawals_included": True}}
+
+
+def _records_output():
+    from app.goal_resolution import (
+        ClaimKind, EvidenceType, OutputSatisfaction, RequiredOutput,
+        ScopeLevel)
+    return RequiredOutput(
+        output_id="O4", claim="列出全部提现地址",
+        claim_kind=ClaimKind.RETRIEVAL,
+        claim_description="list all withdrawal addresses",
+        subject_ref="U00010", scope=ScopeLevel.CASE_LEVEL.value,
+        evidence_requirements=[EvidenceType.WITHDRAWAL_RECORDS],
+        satisfaction=OutputSatisfaction.SATISFIED)
+
+
+def test_records_listing_gt_cap_discloses_shown_total():
+    """L1 T10: 11 records → 10 rendered + shown/total disclosure,
+    per-record address rendered for the emitted rows."""
+    out = _records_output()
+    out.detail = None
+    summary = _records_summary(11)
+    text = "\n".join(_gsp_render_output_facts(out, summary, lang="zh"))
+    assert "共 11 条" in text
+    assert "对话内显示前 10 条" in text
+    rendered_ids = [l for l in text.splitlines() if "W0" in l]
+    assert len(rendered_ids) == 10
+
+
+def test_records_listing_le_cap_no_disclosure():
+    """L1 T11: ≤10 records → every row rendered, NO false partial
+    disclosure."""
+    out = _records_output()
+    out.detail = None
+    summary = _records_summary(10)
+    text = "\n".join(_gsp_render_output_facts(out, summary, lang="zh"))
+    assert "对话内显示前" not in text
+    assert "共 10 条" in text
+
+
+def test_records_listing_cap_constant_shared():
+    """L1 T15 (wiring): the postcondition and the composer share ONE chat
+    cap constant (single definition in goal_postconditions) — the 20/10
+    drift class is structurally closed."""
+    from app import agent_loop as al
+    from app.goal_postconditions import RECORDS_CHAT_CAP as cap_pc
+    from app.agent_loop import RECORDS_CHAT_CAP as cap_al
+    assert cap_al is cap_pc == 10
+
+
+# --- L1: file_export delivery brief (chat confirms, artifact carries) ----
+
+from app import agent_loop as al
+from app.goal_resolution import _STREAM_DELIVERY_CLAIMS
+
+
+def test_file_export_output_with_successful_artifact_renders_brief():
+    out = _records_output()
+    out.delivery = "file_export"
+    out.claim = _STREAM_DELIVERY_CLAIMS["withdrawal_records"]
+    summary = _records_summary(10)
+    text = "\n".join(al._gsp_render_output_facts(
+        out, summary, lang="zh",
+        artifact_backed_families={"withdrawal_records"}))
+    assert "已生成" in text and "文件" in text and "10" in text
+    assert "W000" not in text           # no re-pasted record rows
+    assert "addr-0" not in text
+
+
+def test_file_export_without_artifact_success_keeps_full_rows():
+    from app.goal_resolution import _STREAM_DELIVERY_CLAIMS
+    out = _records_output()
+    out.delivery = "file_export"
+    out.claim = _STREAM_DELIVERY_CLAIMS["withdrawal_records"]
+    summary = _records_summary(10)
+    text = "\n".join(al._gsp_render_output_facts(
+        out, summary, lang="zh", artifact_backed_families=set()))
+    assert "W000" in text               # legacy full rendering preserved
+    assert "addr-0" in text

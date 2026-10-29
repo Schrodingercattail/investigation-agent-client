@@ -5,6 +5,7 @@ Drives the real frontend in headless Chrome: navigation, JS evaluation
 code is touched by this module.
 """
 import base64
+import uuid
 import httpx
 import json
 import subprocess
@@ -32,7 +33,11 @@ class Browser:
              f"--remote-debugging-port={self.port}",
              "--headless=new",
              "--no-first-run", "--no-default-browser-check",
-             "--user-data-dir=/tmp/qa-chrome-profile",
+             # unique profile per instance: a shared dir made sequential
+             # launches unstable (live: WS ConnectionReset mid-journey,
+             # 3× on 2026-10-22)
+             "--user-data-dir=/tmp/qa-chrome-profile-"
+             + uuid.uuid4().hex[:8],
              f"--remote-allow-origins=*",
              "--window-size=1500,950",
              "--disable-gpu",

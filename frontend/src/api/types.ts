@@ -29,6 +29,10 @@ export interface InvestigationContext {
   time_window: string | null
   selected_policy_ids: string[]
   preferences: ContextPreferences
+  /** Response language of the user's ORIGINAL creation request
+   * ("zh"/"en"); server-captured so the canonical English intake message
+   * never misattributes the language of a Chinese first request. */
+  initial_response_language?: 'zh' | 'en' | null
 }
 
 export interface Finding {
@@ -326,10 +330,26 @@ export interface TaskActivityResponse {
   artifact_ids: string[]
   activity: AgentActivityRecord[]
   is_terminal: boolean
+  /** GSP WP-GSP-5 derived outcome (complete/partial/unanswerable/
+   * blocked) — served by the activity projection; additive, absent on
+   * pre-GSP persisted states (treated conservatively as partial). */
+  goal_outcome?: string | null
 }
 
 export interface GoalRunResponse {
   task_id: string
   investigation_id: string
+  agent_status: string
+}
+
+/** Unified submission result (POST /investigations/{id}/submit). The
+ * SERVER chose the execution mode: mode="turn" carries the full
+ * TurnResponse; mode="loop" started the bounded Agent Loop (poll
+ * /tasks/{task_id}/activity). route_reason records why — task-level
+ * structure only, never hidden reasoning. */
+export interface SubmitResponse {
+  investigation_id: string
+  task_id: string
+  mode: 'loop'
   agent_status: string
 }

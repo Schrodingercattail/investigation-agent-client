@@ -175,6 +175,11 @@ class RequiredOutput(BaseModel):
     claim: str                           # the judgment/answer requested
     claim_kind: ClaimKind = ClaimKind.RETRIEVAL
     claim_description: str | None = None
+    # Per-turn response-language variant of the user-safe header
+    # (presentation only — never part of claim identity/dedup). Canonical
+    # (registry/heuristic) outputs carry both faces; LLM-coined outputs
+    # leave it None and the composer falls back to claim_description.
+    claim_description_en: str | None = None
     subject_ref: str                     # who/what is investigated
     scope: ScopeLevel                    # where evidence may be collected
     evidence_requirements: list[EvidenceType]  # frozen vocabulary (app.skills)
@@ -185,10 +190,39 @@ class RequiredOutput(BaseModel):
     satisfaction: OutputSatisfaction = OutputSatisfaction.PENDING
     polarity: str | None = None          # "positive" | "negative" | None
     detail: str | None = None            # bounded user-safe boundary text
+    # L1/P1-2: delivery-channel intent (closed vocabulary). detail_list =
+    # the dialogue presents the requested records/fields; file_export = a
+    # generated artifact file is the deliverable. Missing/invalid values
+    # normalize to detail_list (safe fallback — current chat behavior).
+    # Produced by goal understanding (LLM proposes within the enum;
+    # deterministic split/candidate paths assign file_export by
+    # construction); consumed by the composer (file_export + successful
+    # artifact → brief) and postconditions.
+    delivery: str = "detail_list"
+    # Cross-turn candidate-scope intent (plan v2.1): prior_candidates = the
+    # request anaphorically references candidate results produced by an
+    # earlier turn of THIS investigation (e.g. "以上检测到的对冲交易");
+    # fresh = the request does NOT reference prior results. Absent =
+    # unspecified (legacy behavior + the claim-based scope guard). The
+    # value is CLASSIFICATION ONLY — it never binds a scope by itself;
+    # deterministic binding happens at contract acceptance against the
+    # session's resolvable candidate_sets (missing/ambiguous/unresolvable
+    # → not satisfied with a named gap, never a silent full export).
+    candidate_scope: str | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "RequiredOutput":
         from app.skills import EVIDENCE_TYPES
+        # L1: delivery is a closed vocabulary; missing/invalid values
+        # normalize to detail_list (the safe fallback — current chat
+        # behavior), never to file_export (which would suppress the
+        # dialogue detail without a generated artifact).
+        if self.delivery not in ("detail_list", "file_export"):
+            self.delivery = "detail_list"
+        # plan v2.1: scope is a closed enum; unknown values normalize to
+        # None (unspecified) — never silently treated as either side.
+        if self.candidate_scope not in (None, "prior_candidates", "fresh"):
+            self.candidate_scope = None
         if not self.claim or not self.claim.strip():
             raise ValueError("claim is required")
         if self.claim.strip().casefold() in EVIDENCE_TYPES:
@@ -488,6 +522,7 @@ def build_goal_contract(
                               decomposed=decomposed_ids):
             return None, "subject_mismatch"
         description = item.get("claim_description")
+        description_en = item.get("claim_description_en")
         try:
             claim_kind = ClaimKind(str(item.get("claim_kind")
                                        or ClaimKind.RETRIEVAL.value))
@@ -509,10 +544,21 @@ def build_goal_contract(
             claim_kind=claim_kind,
             claim_description=(str(description)[:200]
                                if description else None),
+            claim_description_en=(str(description_en)[:200]
+                                  if description_en else None),
             subject_ref=out_subject,
             scope=scope,
             evidence_requirements=evidence,
             postcondition_facets=[f.value for f in facets],
+            # L1: optional delivery-channel intent from the request
+            # (closed enum; the model normalizes unknown/missing values
+            # to detail_list — the safe fallback).
+            delivery=str(item.get("delivery") or "detail_list"),
+            # plan v2.1: optional cross-turn candidate-scope intent
+            # (closed enum; unknown/missing → None, never guessed).
+            candidate_scope=(str(item["candidate_scope"]) if
+                             item.get("candidate_scope") in
+                             ("prior_candidates", "fresh") else None),
         ))
     # WP-CG-2 (design §10-E2, AD-3): a COMPOUND contract must retain at
     # least two SEMANTICALLY INDEPENDENT outputs after canonical
@@ -692,12 +738,111 @@ def _metric_semantics_output(account_subject: str) -> dict:
         "claim_description": (
             "反向交易率指标指的是账户自身还是跨账户关系，"
             "按什么口径计算"),
+        "claim_description_en": (
+            "what the reverse-trade rate refers to — the account's own "
+            "buy/sell balance vs a cross-account relation — and how it "
+            "is computed"),
         "subject_ref": account_subject,
         "scope": ScopeLevel.ACCOUNT_LEVEL.value,
         "evidence_requirements": [
             EvidenceType.OPPOSITE_TRADE_RELATIONS.value],
         "postcondition_facets": [
             PostconditionFacet.REVERSE_TRADE_METRIC_SEMANTICS.value],
+    }
+
+
+def _finding_policy_output(finding) -> dict:
+    """U00020 fix A — finding-scoped policy-basis deliverable: the user
+    asked for THIS finding's policy basis (the policy ask directly follows
+    a criteria/why ask for the same finding), so the output carries the
+    finding's own anchor (subject_ref = F-id) and finding-scoped wording.
+    policy_lookup then returns the citations the Risk Platform attached
+    to THIS finding (associated) — when none exist, the established
+    no_finding_level_basis disclosure applies (never a neighboring-topic
+    citation presented as applicable)."""
+    return {
+        "claim": (
+            f"发现 {finding.finding_id}「{finding.title}」的政策依据"
+            "（政策引文及其原文摘录）"),
+        "claim_kind": ClaimKind.RETRIEVAL.value,
+        "claim_description": (
+            f"提供发现 {finding.finding_id}「{finding.title}」的政策依据："
+            "Risk Platform 附加于该发现的政策引文及其原文摘录；"
+            "无 finding-level 依据时如实披露"),
+        "claim_description_en": (
+            f"the policy basis for finding {finding.finding_id} "
+            f"\"{finding.title}\": the citations the Risk Platform "
+            "attached to THIS finding, with their cited excerpts; an "
+            "absent finding-level basis is disclosed as such"),
+        "subject_ref": finding.finding_id,
+        "scope": ScopeLevel.FINDING_LEVEL.value,
+        "evidence_requirements": [EvidenceType.POLICY_REFERENCES.value],
+        "postcondition_facets": [],
+    }
+
+
+def _policy_output_for_request(explain_pairs: list,
+                               account_subject: str | None,
+                               focused_finding=None,
+                               request_text: str = "") -> dict:
+    """U00020 fix A — policy intent inheritance: when the request's
+    intent-aware explain decomposition resolves EXACTLY ONE finding, the
+    policy-basis ask is tied to that finding and inherits its anchor
+    (subject_ref = F-id, finding-scoped wording).
+
+    U00029 fix (I1 anaphoric inheritance): when the decomposition is empty
+    but the request refers to the CURRENTLY FOCUSED finding by deixis
+    (“this finding” / 该发现) and that focus resolves to a real finding of
+    this case, the policy output inherits the FOCUS anchor — the finding
+    identity lives in the context, not in the request text.
+
+    Any other shape (several text-derived findings, no deixis, no focus)
+    keeps the account-population citation output — a multi-finding request
+    has no single policy anchor, and inventing one would misattribute
+    citations."""
+    # I3: an EXPLICIT population wording owns the population semantic —
+    # “the linked accounts population” names the population, and the
+    # linked-account domain element must not narrow it to one finding.
+    import re as _re
+    if _re.search(r"population|群体|全部账号", request_text or "",
+                  _re.IGNORECASE):
+        return _policy_citation_output(account_subject)
+    findings: list = []
+    for _domain, f in explain_pairs:
+        if all(f.finding_id != x.finding_id for x in findings):
+            findings.append(f)
+    if len(findings) == 1:
+        return _finding_policy_output(findings[0])
+    if (focused_finding is not None
+            and investigation_concepts.is_anaphoric_finding_reference(
+                request_text)):
+        return _finding_policy_output(focused_finding)
+    return _policy_citation_output(account_subject)
+
+
+def _policy_citation_output(account_subject: str) -> dict:
+    """U00010 F2/F3 canonical citation-original-text deliverable: the
+    policy citations for the case's related-account population, each with
+    its cited document/section and the cited original-text excerpt (the
+    bounded RP snippet — never invented text)."""
+    return {
+        "claim": (
+            f"账户 {account_subject} 中与关联账号相关的政策引文，"
+            "含每条引文的文件/章节及其原文摘录"),
+        "claim_kind": ClaimKind.RETRIEVAL.value,
+        "claim_description": (
+            f"提供 {account_subject} 的关联账号（population）相关政策引"
+            "文与该条政策的原文摘录（Risk Platform 校验引用；population-"
+            "scoped 请求锚定到本案例的关联账号发现）"),
+        "claim_description_en": (
+            f"the policy citations related to account {account_subject}'s "
+            "linked accounts, each with its cited document/section and "
+            "the cited original-text excerpt (validated RP citations)"),
+        "subject_ref": account_subject,
+        "scope": ScopeLevel.CASE_LEVEL.value,
+        "evidence_requirements": [
+            EvidenceType.POLICY_REFERENCES.value],
+        "postcondition_facets": [],
     }
 
 
@@ -709,6 +854,9 @@ def _related_accounts_network_output(account_subject: str) -> dict:
         "claim_description": (
             f"账户 {account_subject} 的关联账号网络归因明细"
             "（Risk Platform 网络归因）"),
+        "claim_description_en": (
+            f"related-account network attribution details for account "
+            f"{account_subject} (Risk Platform network attribution)"),
         "subject_ref": account_subject,
         "scope": ScopeLevel.CASE_LEVEL.value,
         "evidence_requirements": [
@@ -733,6 +881,16 @@ def _hedging_output(account_subject: str, set_internal: bool) -> dict:
             "交易证据" if set_internal else
             f"账户 {account_subject} 是否与其他账户存在满足匹配条件的"
             "对冲交易候选；有则列出涉及该账户的证据明细"),
+        "claim_description_en": (
+            f"whether hedging-trade candidates meeting the matching "
+            f"criteria exist within the related-account set of account "
+            f"{account_subject} (all set members paired; candidates may "
+            "or may not involve the case account); if any, list both "
+            "sides' accounts and trade evidence per candidate"
+            if set_internal else
+            f"whether account {account_subject} has hedging-trade "
+            "candidates meeting the matching criteria with other "
+            "accounts; if any, list the evidence involving the account"),
         "subject_ref": account_subject,
         "scope": ScopeLevel.CASE_LEVEL.value,
         "evidence_requirements": [
@@ -749,6 +907,10 @@ def _destination_identity_output(record_subject: str,
         "claim_description": (
             "这些提现的目的地地址是同一个还是不同地址"
             "（按记录中的目的地标识逐笔比较）"),
+        "claim_description_en": (
+            "whether these withdrawals went to the same address or "
+            "different addresses (per-record comparison of the recorded "
+            "destination identifiers)"),
         "subject_ref": record_subject,
         "scope": record_scope,
         "evidence_requirements": [
@@ -765,6 +927,10 @@ def _new_address_status_output(record_subject: str, record_scope: str) -> dict:
         "claim_description": (
             "逐笔列出哪些提现被标记为新地址、哪些不是"
             "（is_new_address 权威状态）"),
+        "claim_description_en": (
+            "which withdrawals are marked as new addresses and which are "
+            "not, record by record (the authoritative is_new_address "
+            "status)"),
         "subject_ref": record_subject,
         "scope": record_scope,
         "evidence_requirements": [
@@ -821,6 +987,17 @@ _ASPECT_REGISTRY: dict[str, dict] = {
         "build": lambda ctx: _new_address_status_output(
             ctx["record_subject"], ctx["record_scope"]),
     },
+    "policy_citation_original_text": {
+        "description": (
+            "the policy citations for the named population, each with its "
+            "cited document/section and the cited original-text excerpt"),
+        # U00020 fix A: intent-aware — a policy ask tied to exactly one
+        # explain-intent finding inherits that finding's anchor; ctx
+        # carries the precomputed finding-scoped output when the request
+        # text is available (else the population canonical, unchanged).
+        "build": lambda ctx: ctx.get("policy_output")
+        or _policy_citation_output(ctx["account"]),
+    },
 }
 
 
@@ -829,6 +1006,7 @@ def deterministic_contract_proposal(
     resolved_finding_id: str | None,
     case_id: str | None,
     case_findings: list | None = None,
+    fired_aspects: list | None = None,
 ) -> dict | None:
     """Required-outputs proposal for the supported request patterns:
 
@@ -861,8 +1039,72 @@ def deterministic_contract_proposal(
     record_scope = ("finding_level" if resolved_finding_id
                     else "case_level")
     outputs: list[dict] = []
+    # U00020 fix B: intent-aware explain decomposition, computed ONCE —
+    # the explain-compound block AND the policy-intent inheritance share
+    # the same gated pairs, so a domain named inside a comparison/status
+    # clause neither derives an explain output nor becomes a policy
+    # anchor. Dropped domains are recorded (diagnostics only).
+    explain_pairs = investigation_concepts.findings_for_explain_domains(
+        text, case_findings or [], drop_comparison_context=True)
+    _ungated_pairs = investigation_concepts.findings_for_explain_domains(
+        text, case_findings or [])
+    _kept_ids = {f.finding_id for _d, f in explain_pairs}
+    if fired_aspects is not None:
+        for _domain, f in explain_pairs:
+            fired_aspects.append(
+                f"explain_compound:{_domain}:{f.finding_id}")
+        for _domain, f in _ungated_pairs:
+            if f.finding_id not in _kept_ids:
+                fired_aspects.append(
+                    "explain_compound:dropped_comparison_context:"
+                    f"{_domain}:{f.finding_id}")
+    # U00010 F2/F3: a citation ORIGINAL-TEXT ask is the policy-citation
+    # delivery (document/section + cited excerpt) — emitted FIRST so a
+    # citation ask that also names the population renders the citations
+    # in the user's own demand order. U00020 fix A: when the request's
+    # explain decomposition resolves exactly ONE finding, the policy
+    # basis inherits that finding's anchor (finding-scoped output).
+    # U00029 anaphoric policy ask: “Which policy requirements apply to
+    # this finding?” names NO domain — the finding identity lives in the
+    # context focus. With a unique focused finding, the policy output is
+    # finding-scoped to THAT finding (never the population canonical,
+    # whose linked-account wording re-anchors retrieval to another
+    # finding). Without a focused finding the ask stays with the GU LLM
+    # (a case-level policy ask is not deterministically boundable).
+    if (investigation_concepts.is_anaphoric_finding_reference(text)
+            and investigation_concepts.is_policy_requirements_request(text)
+            and resolved_finding_id):
+        _focused_finding = next(
+            (f for f in (case_findings or [])
+             if getattr(f, "finding_id", None)
+             == resolved_finding_id.strip()), None)
+        if _focused_finding is not None:
+            outputs.append(_finding_policy_output(_focused_finding))
+            if fired_aspects is not None:
+                fired_aspects.append(
+                    "policy_anaphoric_focus:"
+                    + _focused_finding.finding_id)
+        else:
+            # focus set but unresolvable in this case: the safe generic
+            # policy delivery is the case-level citation set (population)
+            outputs.append(_policy_citation_output(account_subject))
+    if investigation_concepts.is_policy_citation_original_text_request(
+            text):
+        # U00029 fix (I1): resolve the anaphoric focus ONCE — the same
+        # resolved target the whole request shares (never re-inferred).
+        _focused_finding = next(
+            (f for f in (case_findings or [])
+             if getattr(f, "finding_id", None)
+             == (resolved_finding_id or "").strip()), None)
+        outputs.append(_policy_output_for_request(
+            explain_pairs, account_subject,
+            focused_finding=_focused_finding, request_text=text))
+        if fired_aspects is not None:
+            fired_aspects.append("policy_citation_original_text")
     if investigation_concepts.mentions_reverse_trade_rate(text):
         outputs.append(_metric_semantics_output(account_subject))
+        if fired_aspects is not None:
+            fired_aspects.append("reverse_trade_metric_semantics")
     if investigation_concepts.is_related_account_analysis_request(text):
         # Case-level network attribution. EMITTED BEFORE the hedging
         # outputs so a combined ask ("把关联账户的明细发我，并且查询…对
@@ -886,6 +1128,8 @@ def deterministic_contract_proposal(
             and not investigation_concepts.has_account_delivery_intent(text))
         if not _metric_question:
             outputs.append(_related_accounts_network_output(account_subject))
+        if fired_aspects is not None:
+            fired_aspects.append("related_accounts_network")
     if (investigation_concepts.is_related_account_set_trade_analysis(text)
             or investigation_concepts.is_cross_account_trade_analysis_request(
                 text)):
@@ -893,16 +1137,34 @@ def deterministic_contract_proposal(
             investigation_concepts.is_related_account_set_trade_analysis(
                 text))
         outputs.append(_hedging_output(account_subject, set_internal))
+        if fired_aspects is not None:
+            fired_aspects.append("hedging_set_internal" if set_internal
+                                 else "hedging_target_anchored")
     # Explain-compound decomposition: the user asks WHY one or more risk
     # signals are risk items. Each named domain resolves to THIS case's
     # own finding (metadata match — the same discipline as the planner's
     # multi-domain explain branch); one explanation output per matched
     # finding so every why-ask carries its own verdict. Runs FIRST so a
     # why-ask naming a domain is not simultaneously misread as that
-    # domain's retrieval ask.
-    explain_pairs = investigation_concepts.findings_for_explain_domains(
-        text, case_findings or [])
-    for _domain, _finding in explain_pairs:
+    # domain's retrieval ask. U00020 fix B: the pairs are INTENT-AWARE —
+    # domains mentioned only inside comparison/status clauses do not
+    # derive explain outputs (their records/status deliveries already
+    # carry that ask); the derivation is visible in fired_aspects.
+    # F3 EN delivery fix: with EN domain elements present, a PURE policy
+    # ask ("Which policy requirements apply to finding F3 …") would name
+    # the F3 domain through its finding title — explain outputs are
+    # therefore emitted only when the request also carries an
+    # explain/criteria intent (why / 判定条件 / rule vocabulary). The
+    # inherited policy anchor keeps using the comparison-gated pairs.
+    _explain_intent = (
+        investigation_concepts.is_explain_finding_request(text)
+        or investigation_concepts.is_rule_criteria_request(text))
+    _emitted_explain_pairs = explain_pairs if _explain_intent else []
+    if fired_aspects is not None and explain_pairs and not _explain_intent:
+        fired_aspects.append(
+            "explain_compound:skipped_policy_intent:"
+            + ":".join(sorted({f.finding_id for _d, f in explain_pairs})))
+    for _domain, _finding in _emitted_explain_pairs:
         outputs.append({
             "claim": f"为什么「{_finding.title}」被标记为风险",
             "claim_kind": ClaimKind.EXPLANATION.value,
@@ -910,6 +1172,11 @@ def deterministic_contract_proposal(
                 f"解释发现 {_finding.finding_id}「{_finding.title}」"
                 "被标记为风险的依据：实际观测、规则与阈值（如有）及其"
                 "关系"),
+            "claim_description_en": (
+                f"the grounds on which finding {_finding.finding_id} "
+                f"\"{_finding.title}\" was flagged as a risk: the actual "
+                "observations, the rule and threshold (if any), and "
+                "their relation"),
             "subject_ref": _finding.finding_id,
             "scope": ScopeLevel.FINDING_LEVEL.value,
             "evidence_requirements": [EvidenceType.RULE_EXPLANATION.value],
@@ -919,12 +1186,20 @@ def deterministic_contract_proposal(
     if assess_comparison_intent(text):
         outputs.append(_destination_identity_output(record_subject,
                                                     record_scope))
-    if investigation_concepts.mentions_withdrawal_new_address(text):
+        if fired_aspects is not None:
+            fired_aspects.append("withdrawal_destination_identity")
+    if investigation_concepts.mentions_withdrawal_new_address(
+            text, case_findings):
         # gated: a WHY ask naming the new-address domain is not the
         # which-records retrieval ask (the explain outputs above already
-        # carry that domain's explanation deliverable)
+        # carry that domain's explanation deliverable). case_findings
+        # mask finding-TITLE mentions: a policy ask naming “First
+        # Withdrawal to New Address” references the finding, it does not
+        # demand the per-record check.
         outputs.append(_new_address_status_output(record_subject,
                                                   record_scope))
+        if fired_aspects is not None:
+            fired_aspects.append("withdrawal_new_address_status")
     # (the related-accounts deliverable is emitted EARLIER in this
     # function — before the hedging outputs — so a combined ask renders
     # in the user's mention order; see the block above)
@@ -934,13 +1209,22 @@ def deterministic_contract_proposal(
 
 
 def _canonicalize_llm_outputs(outputs: list, case_id: str | None,
-                              resolved_finding_id: str | None) -> list:
+                              resolved_finding_id: str | None,
+                              substituted_aspects: list | None = None,
+                              request_text: str | None = None,
+                              case_findings: list | None = None,
+                              ) -> list:
     """Substitute system-canonical output dicts for LLM entries tagged
     with a recognized aspect id. The LLM's aspect CHOICE is the intent
     signal; the canonical dict owns wording, subject, scope and evidence
     binding (the LLM never authors scope or evidence vocabulary).
     Untagged entries pass through unchanged (bounded by the existing
-    build_goal_contract acceptance probe)."""
+    build_goal_contract acceptance probe).
+
+    U00020 fix A: when the request text is supplied, the policy-citation
+    canonical is INTENT-AWARE — a policy ask tied to exactly one
+    explain-intent finding inherits that finding's anchor instead of the
+    account-population wording."""
     account_subject = (case_id or "").strip() or None
     if not account_subject:
         return outputs
@@ -951,6 +1235,17 @@ def _canonicalize_llm_outputs(outputs: list, case_id: str | None,
         "record_scope": ("finding_level" if resolved_finding_id
                          else "case_level"),
     }
+    if request_text is not None:
+        _focused = next(
+            (f for f in (case_findings or [])
+             if getattr(f, "finding_id", None)
+             == (resolved_finding_id or "").strip()), None)
+        ctx["policy_output"] = _policy_output_for_request(
+            investigation_concepts.findings_for_explain_domains(
+                request_text, case_findings or [],
+                drop_comparison_context=True),
+            account_subject, focused_finding=_focused,
+            request_text=request_text)
     canonicalized = []
     for entry in outputs:
         if not isinstance(entry, dict):
@@ -960,9 +1255,80 @@ def _canonicalize_llm_outputs(outputs: list, case_id: str | None,
         registered = _ASPECT_REGISTRY.get(aspect)
         if registered is not None:
             canonicalized.append(registered["build"](ctx))
+            if substituted_aspects is not None:
+                substituted_aspects.append(aspect)
         else:
             canonicalized.append(entry)
     return canonicalized
+
+
+# U00010 B1 (Batch H): one deliverable FILE = ONE record stream. An output
+# demanding MULTIPLE record-stream families is a fused file contract — the
+# system deterministically splits it into one single-stream deliverable per
+# family (the same system-ownership boundary as aspect canonicalization;
+# claims reuse the wording the split contracts have always carried).
+_RECORD_STREAM_FAMILIES = ("withdrawal_records", "transaction_records")
+_STREAM_DELIVERY_CLAIMS = {
+    "withdrawal_records": "提现明细文件导出",
+    "transaction_records": "交易明细文件导出",
+}
+
+
+def _split_fused_stream_outputs(outputs: list) -> list:
+    """Split a fused multi-stream file deliverable into per-stream
+    outputs. Delivery outputs only (claim_kind=retrieval); outputs mixing
+    ONE stream with analysis evidence (hedge detail: candidates +
+    records) are untouched — one stream family is always allowed."""
+    out: list = []
+    for o in outputs:
+        if not isinstance(o, dict):
+            out.append(o)
+            continue
+        reqs = [str(e) for e in (o.get("evidence_requirements") or [])]
+        streams = [r for r in reqs if r in _RECORD_STREAM_FAMILIES]
+        if len(streams) >= 2 and str(o.get("claim_kind") or "") == "retrieval":
+            for stream in streams:
+                no = dict(o)
+                no["claim"] = _STREAM_DELIVERY_CLAIMS[stream]
+                no["evidence_requirements"] = [
+                    e for e in reqs
+                    if e == stream or e not in _RECORD_STREAM_FAMILIES]
+                # L1: split outputs are single-stream file deliverables —
+                # mark the delivery channel so the composer's records
+                # branch renders the file brief (not duplicate full rows).
+                no["delivery"] = "file_export"
+                out.append(no)
+            continue
+        out.append(o)
+    return out
+
+
+def _normalize_explanation_evidence(outputs: list) -> list:
+    """U00010 B1 (EN-plan-quality): a criteria/explanation output answers
+    from its rule/signal evidence — policy_references fused into it by
+    understanding variance doubles the acquisition burden (live: 2×
+    retrieve_policy + explains starved the file steps of budget) without
+    being what the user asked for. Policy citations remain available
+    through explicit citation asks (retrieval-kind outputs, unchanged).
+    Demote policy_references from explanation-kind outputs that also
+    require rule/ml evidence."""
+    out: list = []
+    for o in outputs:
+        if not isinstance(o, dict):
+            out.append(o)
+            continue
+        reqs = [str(e) for e in (o.get("evidence_requirements") or [])]
+        if (str(o.get("claim_kind") or "") == "explanation"
+                and "policy_references" in reqs
+                and any(r in reqs for r in (
+                    "rule_explanation", "ml_signal_explanation"))):
+            no = dict(o)
+            no["evidence_requirements"] = [
+                e for e in reqs if e != "policy_references"]
+            out.append(no)
+            continue
+        out.append(o)
+    return out
 
 
 def _apply_output_guards(request_text: str, outputs: list) -> list:
@@ -992,9 +1358,18 @@ def _apply_output_guards(request_text: str, outputs: list) -> list:
     hedge_subject = any(e in text for e in (
         "对冲", "對沖", "对倒", "對倒", "对向", "反向交易",
         "hedge", "hedging"))
+    # U00010 F2/F3: in a citation ORIGINAL-TEXT ask the 关联账号 phrase
+    # scopes WHICH citations — it never demands the network-attribution
+    # list (the journey contract: citation asks must not be answered by
+    # network/device attribution alone).
+    citation_ask = investigation_concepts \
+        .is_policy_citation_original_text_request(text)
     related_vocab = (
-        investigation_concepts.is_related_account_analysis_request(text)
-        or investigation_concepts.has_account_delivery_intent(text))
+        (
+            investigation_concepts.is_related_account_analysis_request(text)
+            or investigation_concepts.has_account_delivery_intent(text)
+        )
+        and not citation_ask)
     kept: list = []
     for entry in outputs:
         if not isinstance(entry, dict):
@@ -1085,6 +1460,12 @@ def heuristic_goal(request_text: str, resolved_finding_id: str | None,
         proposal = deterministic_contract_proposal(
             text, resolved_finding_id, case_id,
             case_findings=case_findings)
+        if proposal:
+            # U00010 F2: the heuristic path's proposal passes the SAME
+            # guards as the LLM-reviewed final set (guard-clean prior).
+            guarded = _apply_output_guards(
+                text, proposal.get("required_outputs") or [])
+            proposal = {"required_outputs": guarded} if guarded else None
         decomposed = [
             o.get("subject_ref")
             for o in (proposal or {}).get("required_outputs", [])
@@ -1188,7 +1569,15 @@ def _build_goal_prompt(request_text: str, resolved_finding_id: str | None,
             '"scope": "<case_level | finding_level | event_level | '
             'account_level | relationship_graph>", '
             '"evidence_requirements": ["<values ONLY from: '
-            + ", ".join(sorted(EVIDENCE_TYPES)) + ">]}]\n"
+            + ", ".join(sorted(EVIDENCE_TYPES)) + ">], "
+            '"candidate_scope": "<prior_candidates | fresh> (prior_candidates ONLY '
+            'when the request explicitly references candidate results '
+            'detected in an earlier turn of this investigation, e.g. '
+            'detected hedge-candidate trades; fresh when it does not '
+            'reference such prior results; omit when unsure)", '
+            '"delivery": "<detail_list | file_export> (how the user '
+            'wants this delivered: dialogue detail or generated file; '
+            'omit for detail_list)"}]\n"'
             "Resolution rule for multi-part requests: when the user asks "
             "for two or more DISTINCT independently answerable "
             "deliverables, set \"goal_resolution\": \"COMPOUND\" and "
@@ -1206,6 +1595,12 @@ def _build_goal_prompt(request_text: str, resolved_finding_id: str | None,
             "evidence_requirements must be non-empty and use ONLY "
             "the listed values. Never drop a requested answer because a "
             "tool for it may not exist.\n"
+            "Language: write \"reason\" and every \"claim_description\" "
+            "in the SAME natural language as the user's request (an "
+            "English request gets English sentences, a Chinese request "
+            "gets Chinese sentences); keep ids and technical terms "
+            "verbatim. The claim_description is shown to the user as a "
+            "section header.\n"
             "Each output MAY also carry \"postcondition_facets\": "
             "[\"destination_address_identity\"] — propose this facet when "
             "the output's claim requires a deterministic same-vs-different "
@@ -1330,6 +1725,13 @@ def understand_goal(
     outputs and deterministic guards re-apply to the final set. Only
     `build_goal_contract` accepts a contract."""
     request_text = (request_text or "").strip()
+    # Slow-request observability: wall-clock window for the WHOLE GU
+    # routine (plan v2 — goal_understanding_started_at/ended_at live in
+    # the diagnostics dict next to attempts; elapsed-free, UTC ISO-8601).
+    from datetime import datetime as _gu_dt, timezone as _gu_tz
+    _gu_now = lambda: _gu_dt.now(_gu_tz.utc).isoformat()
+    if diagnostics is not None:
+        diagnostics["goal_understanding_started_at"] = _gu_now()
 
     def _goal(goal_type: str | None, resolution: GoalResolutionStatus,
               ambiguous: list[str] | None = None, reason: str | None = None,
@@ -1357,10 +1759,23 @@ def understand_goal(
     # heuristic fallback's proposal — a recorded degradation (WP-CG-3
     # diagnostics), never a silently "complete" claim.
     candidate = None
+    _candidate_kinds: list = []
     if _gsp_contract_enabled():
         candidate = deterministic_contract_proposal(
             request_text, resolved_finding_id, case_id,
-            case_findings=case_findings)
+            case_findings=case_findings,
+            fired_aspects=_candidate_kinds)
+        if diagnostics is not None:
+            diagnostics["candidate"] = {
+                "stage_ran": True,
+                "fired": candidate is not None,
+                "kinds": list(_candidate_kinds),
+            }
+    elif diagnostics is not None:
+        # flag OFF: the candidate stage was SKIPPED — recorded as skipped
+        # (fired=None, unknown), never as "no candidate fired"
+        diagnostics["candidate"] = {
+            "stage_ran": False, "fired": None, "kinds": []}
 
     if use_llm:
         # WP-CG-3: optional structured provenance for the caller — an
@@ -1370,6 +1785,11 @@ def understand_goal(
         if diagnostics is not None:
             diagnostics["llm_attempted"] = True
             diagnostics["llm_error"] = None
+        # outcome assigned by ACTUAL control flow: positively after the
+        # payload parses; overwritten by the except on ANY escape; stays
+        # "unknown" only if neither runs (defensive — never defaulted to
+        # llm_success by the absence of an error field).
+        _gu_outcome = "unknown"
         try:
             provider = llm
             if provider is None:
@@ -1478,6 +1898,7 @@ def understand_goal(
                         "resolved": False, "fallback": "heuristic",
                         "error_class": "json_parse"}
                 raise _parse_error
+            _gu_outcome = "llm_success"
             resolution = str(payload.get("goal_resolution", "")).upper()
             goal_type = payload.get("goal_type")
             ambiguous = payload.get("ambiguous_goal_types") or []
@@ -1496,8 +1917,15 @@ def understand_goal(
             if _gsp_contract_enabled():
                 outputs = payload.get("required_outputs")
                 if isinstance(outputs, list) and outputs:
+                    _subst: list = []
                     outputs = _canonicalize_llm_outputs(
-                        outputs, case_id, resolved_finding_id)
+                        outputs, case_id, resolved_finding_id,
+                        substituted_aspects=_subst,
+                        request_text=request_text,
+                        case_findings=case_findings)
+                    if diagnostics is not None and _subst:
+                        diagnostics["canonical_substitution"] = {
+                            "occurred": True, "tags": list(_subst)}
                     outputs = _apply_output_guards(request_text, outputs)
                     # consistency validation: deterministically ENUMERATED
                     # candidate deliverables the LLM dropped are re-admitted
@@ -1510,6 +1938,18 @@ def understand_goal(
                     # as the bounded deterministic understanding (same
                     # fallback semantics as the no-LLM path).
                     outputs = list(candidate.get("required_outputs", []))
+                # U00010 F2: the guards re-apply to the FINAL set (the merge
+                # may re-admit candidate outputs authored for the un-guarded
+                # prior — e.g. the network list a citation ask never
+                # demanded). Guards are pure; the final set is the boundary.
+                if isinstance(outputs, list) and outputs:
+                    # U00010 B1 (Batch H): a fused multi-stream FILE output
+                    # is deterministically split per stream BEFORE
+                    # acceptance — build_goal_contract stays accept-or-
+                    # reject over an already-split proposal.
+                    outputs = _split_fused_stream_outputs(outputs)
+                    outputs = _normalize_explanation_evidence(outputs)
+                    outputs = _apply_output_guards(request_text, outputs)
                 if isinstance(outputs, list) and outputs:
                     # the accepted set's origin: LLM-reviewed ONLY when the
                     # model's own outputs formed the proposal; a candidate
@@ -1560,6 +2000,10 @@ def understand_goal(
                             # request — completeness stays unconfirmed.
                             proposal_origin = "heuristic"
             if resolution not in (r.value for r in GoalResolutionStatus):
+                # E-1: syntactically valid JSON with an ILLEGAL resolution
+                # value — the heuristic fallback here is a structured-
+                # output FAILURE, never a successful understanding.
+                _gu_outcome = "llm_failed_heuristic_fallback"
                 return heuristic_goal(request_text, resolved_finding_id,
                                       case_id,
                                       case_findings=case_findings)
@@ -1569,6 +2013,10 @@ def understand_goal(
                 if len(plausible) >= 2:
                     return _goal(None, GoalResolutionStatus.AMBIGUOUS,
                                  plausible, reason)
+                # E-2: the AMBIGUOUS verdict could not be backed by ≥2
+                # plausible vocabulary candidates — bounded fallback, and
+                # a GU failure by the same taxonomy as E-1.
+                _gu_outcome = "llm_failed_heuristic_fallback"
                 return heuristic_goal(request_text, resolved_finding_id,
                                       case_id,
                                       case_findings=case_findings)
@@ -1611,6 +2059,7 @@ def understand_goal(
             return _goal(None, GoalResolutionStatus.UNRESOLVED, None,
                          reason or "objective could not be determined")
         except Exception as e:
+            _gu_outcome = "llm_failed_heuristic_fallback"
             logger.warning("LLM goal understanding failed: %s", e)
             if diagnostics is not None:
                 diagnostics["llm_error"] = f"{type(e).__name__}: {e}"[:200]
@@ -1618,6 +2067,15 @@ def understand_goal(
                 if _prov is not None:
                     diagnostics["attempts"] = list(getattr(
                         _prov, "last_attempts", None) or [])
+        finally:
+            # ended stamp on EVERY exit (returns, bounded fallback raise,
+            # exceptions) — never swallows, never alters propagation.
+            if diagnostics is not None:
+                diagnostics["goal_understanding_ended_at"] = _gu_now()
+                diagnostics["goal_understanding_outcome"] = _gu_outcome
+    if diagnostics is not None and not use_llm:
+        diagnostics["goal_understanding_ended_at"] = _gu_now()
+        diagnostics["goal_understanding_outcome"] = "not_attempted"
 
     return heuristic_goal(request_text, resolved_finding_id, case_id,
                           case_findings=case_findings)

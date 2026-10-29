@@ -203,7 +203,8 @@ class TestLayerAEvidenceContract:
     def test_missing_evidence_degrades_to_unresolved(self):
         out, _ = self._resolve(_assist_payload(), "提现频率异常")
         assert out.status == ResolutionStatus.UNRESOLVED
-        assert "couldn't safely determine" in (
+        # per-turn response language: zh request → zh clarification face
+        assert "无法安全地确定您问题的调查目标" in (
             out.clarification_message or "")
 
     def test_fabricated_fragment_rejected(self):

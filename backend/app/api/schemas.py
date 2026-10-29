@@ -95,6 +95,11 @@ class TurnRequest(BaseModel):
     message: str = Field(default="")
     context_action: FocusAction | None = None
     follow_up_id: str | None = None
+    # Follow-up clicks only: the client-echoed conversation language
+    # ("zh"/"en") selecting the canonical intent's FACE. The registry —
+    # ids/capabilities/targeting — is language-independent. Free-form
+    # messages ignore it (the server detects from the message itself).
+    lang: str | None = None
 
     @model_validator(mode="after")
     def _validate_message(self) -> "TurnRequest":
@@ -243,6 +248,41 @@ class GoalRunResponse(BaseModel):
     task_id: str
     investigation_id: str
     agent_status: str
+
+
+class SubmitRequest(BaseModel):
+    """POST /api/v2/investigations/{id}/submit — the unified submission
+    entry: ONE user-visible send action. EVERY submission executes on the
+    bounded Agent Loop; the server routes nothing else. A follow_up_id is
+    resolved to the canonical intent server-side (registry truth); the
+    client never supplies tool/skill/argument names."""
+
+    message: str = Field(default="")
+    context_action: FocusAction | None = None
+    follow_up_id: str | None = None
+    # Follow-up clicks only: the client-echoed conversation language
+    # ("zh"/"en") selecting the canonical intent's face (see TurnRequest).
+    lang: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_message(self) -> "SubmitRequest":
+        if not self.follow_up_id and not self.message.strip():
+            raise ValueError(
+                "message is required when follow_up_id is not supplied"
+            )
+        return self
+
+
+class SubmitResponse(BaseModel):
+    """Accepted loop run (every submission executes on the bounded Agent
+    Loop): poll GET /tasks/{task_id}/activity until the terminal
+    agent_status; the composed answer is served by GET
+    /tasks/{task_id}."""
+
+    investigation_id: str
+    task_id: str
+    mode: str = "loop"
+    agent_status: str = "running"
 
 
 class TaskActivityResponse(BaseModel):

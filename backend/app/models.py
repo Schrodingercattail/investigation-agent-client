@@ -245,6 +245,12 @@ class InvestigationContext(BaseModel):
     time_window: str | None = None              # free-form Week 1 (e.g. "24h")
     selected_policy_ids: list[str] = Field(default_factory=list)
     preferences: ContextPreferences = Field(default_factory=ContextPreferences)
+    # Response language of the user's ORIGINAL creation request ("zh"/"en"),
+    # captured at investigation creation. The canonical Case Intake turn
+    # request ("Investigate <case>", English) is a server-generated
+    # identification artifact — the intake ANSWER follows the user's own
+    # phrasing language, not the canonical message's.
+    initial_response_language: str | None = None
 
     @model_validator(mode="before")
     @classmethod

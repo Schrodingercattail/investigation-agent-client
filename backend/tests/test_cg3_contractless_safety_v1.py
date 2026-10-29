@@ -128,10 +128,11 @@ class TestAmbiguousDisposition:
         runner.planner.plan = _spy
         result = _run(runner, findings, "INV-CG3-A", "TASK-CG3-A")
         s = result.state
-        assert s.goal_contract_decision == {
-            "outcome": "ambiguous_not_executed",
-            "reason": "genuine goal ambiguity; clarification required "
-                      "before investigation"}
+        _dec = s.goal_contract_decision
+        assert _dec["outcome"] == "ambiguous_not_executed"
+        assert _dec["reason"] == ("genuine goal ambiguity; clarification "
+                                  "required before investigation")
+        assert _dec["understanding"]["schema"] == "gu-decision/1"
         assert s.agent_status == "blocked"
         assert s.stop_reason == "clarification_needed"
         assert planner_calls == []              # planner never ran
@@ -157,7 +158,10 @@ class TestAmbiguousDisposition:
         s = result.state
         assert s.agent_status == "completed"     # legacy flow unchanged
         assert s.stop_reason == "goal_satisfied"
-        assert s.goal_contract_decision is None  # no provenance under OFF
+        # B1: flag OFF is a RECORDED decision state (not silence)
+        assert s.goal_contract_decision["outcome"] == "flag_off"
+        assert s.goal_contract_decision["understanding"][
+            "flag_enabled"] is False
         assert s.goal_contract is None
         # WP-GS-A INV-C: the completion-claim guard is flag-independent —
         # the coverage boundary renders under OFF as well (the only
@@ -176,8 +180,9 @@ class TestDecisionProvenance:
         runner, findings = _runner(
             store, monkeypatch=monkeypatch, goal_repr=repr_obj)
         result = _run(runner, findings, "INV-CG3-P", "TASK-CG3-P")
-        assert result.state.goal_contract_decision == {
-            "outcome": "contract_accepted", "reason": None}
+        _dec = result.state.goal_contract_decision
+        assert _dec["outcome"] == "contract_accepted" and _dec["reason"] is None
+        assert _dec["understanding"]["contract"]["decision"] == "accepted"
         assert result.state.goal_contract is not None
 
     def test_invalid_proposal_distinguished_and_not_unsupported(self, monkeypatch):
@@ -405,8 +410,9 @@ class TestBackwardCompat:
             decisions=("STOP",), goal_repr=None)
         result = _run(runner, findings, "INV-CG3-K", "TASK-CG3-K")
         proj = project_task_activity(result.state)
-        assert proj["goal_contract_decision"] == {
-            "outcome": "no_proposal", "reason": "no goal representation"}
+        assert proj["goal_contract_decision"]["outcome"] == "no_proposal"
+        assert (proj["goal_contract_decision"]["understanding"]["schema"]
+                == "gu-decision/1")
         stop_rows = [r for r in proj["activity"]
                      if r["event_type"] == "decision.made"]
         assert "GoalContract 未建立" in stop_rows[-1]["summary"]
@@ -436,8 +442,10 @@ class TestResolverCompat:
                       goal=NEUTRAL_GOAL)
         assert calls == [1]                       # exactly one call
         assert result.state.agent_status == "completed"
-        assert result.state.goal_contract_decision == {
-            "outcome": "no_proposal", "reason": "no goal representation"}
+        _dec = result.state.goal_contract_decision
+        assert _dec["outcome"] == "no_proposal"
+        assert _dec["reason"] == "no goal representation"
+        assert _dec["understanding"]["path"] == "loop_internal"
 
     def test_four_arg_resolver_receives_live_diagnostics(
             self, monkeypatch):
@@ -460,8 +468,9 @@ class TestResolverCompat:
         assert calls == [1]                       # exactly one call
         # the SAME dict the loop reads provenance from was passed through
         assert captured["diag"].get("touched_by_resolver") is True
-        assert result.state.goal_contract_decision == {
-            "outcome": "no_proposal", "reason": "no goal representation"}
+        _dec = result.state.goal_contract_decision
+        assert _dec["outcome"] == "no_proposal"
+        assert _dec["understanding"]["schema"] == "gu-decision/1"
 
     def test_four_arg_internal_typeerror_not_swallowed(self, monkeypatch):
         calls = []

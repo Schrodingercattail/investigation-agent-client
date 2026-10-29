@@ -1,0 +1,58 @@
+{
+ "contract_id": "GC-50261d5b",
+ "goal_type": null,
+ "subject_ref": "U00010",
+ "outputs": [
+  {
+   "output_id": "O1",
+   "claim": "高频提现判定条件",
+   "claim_kind": "explanation",
+   "claim_description": "说明该案件中“高频提现”命中的判定条件（阈值与规则）。",
+   "claim_description_en": null,
+   "subject_ref": "U00010",
+   "scope": "finding_level",
+   "evidence_requirements": [
+    "rule_explanation"
+   ],
+   "postcondition_facets": [],
+   "satisfaction": "pending",
+   "polarity": null,
+   "detail": null
+  },
+  {
+   "output_id": "O2",
+   "claim": "新账号高频活动判定条件",
+   "claim_kind": "explanation",
+   "claim_description": "说明该案件中“新账号高频活动”命中的判定条件（阈值与规则）。",
+   "claim_description_en": null,
+   "subject_ref": "U00010",
+   "scope": "finding_level",
+   "evidence_requirements": [
+    "rule_explanation"
+   ],
+   "postcondition_facets": [],
+   "satisfaction": "pending",
+   "polarity": null,
+   "detail": null
+  },
+  {
+   "output_id": "O3",
+   "claim": "提现与交易明细文件",
+   "claim_kind": "retrieval",
+   "claim_description": "生成该案件的提现明细和交易明细文件。",
+   "claim_description_en": null,
+   "subject_ref": "U00010",
+   "scope": "case_level",
+   "evidence_requirements": [
+    "withdrawal_records",
+    "transaction_records"
+   ],
+   "postcondition_facets": [],
+   "satisfaction": "unresolved",
+   "polarity": null,
+   "detail": "Evidence was gathered and recorded; no deterministic postcondition can adjudicate this output."
+  }
+ ],
+ "asserted_record_population": null,
+ "intent_source": "llm"
+}

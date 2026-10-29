@@ -149,7 +149,10 @@ def build_scenarios():
             _C("context_unchanged", previous_focused_finding_id="F1"),
             _C("tool_not_called", tool_name="risk_case_fetch"),
             _C("tool_not_called", tool_name="artifact_bundle"),
-            _C("response_contains", "U90001", "start a new investigation"),
+            # per-turn response language: the zh request gets the zh
+            # guidance face (the en face "start a new investigation" is
+            # the undeterminable-language default)
+            _C("response_contains", "U90001", "新建一个调查"),
         ],
         notes="Cross-case invariant: bounded guidance, zero execution.",
     ))

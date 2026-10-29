@@ -72,7 +72,9 @@ from app.skills import (
     STEP_TOOL_MAP,
     eligible_skills_for_finding,
 )
-from app.goal_postconditions import derive_goal_outcome
+from app.goal_postconditions import (
+    RECORDS_CHAT_CAP, derive_goal_outcome, requires_explanation_evidence,
+    _claim_references_prior_detection)
 from app import telemetry as _telemetry
 from app import target_validity
 
@@ -279,7 +281,8 @@ def _render_new_address_status(output, summary: dict,
     return lines
 
 
-def _render_population_reconciliation(summary: dict) -> list[str]:
+def _render_population_reconciliation(summary: dict,
+                                      lang: str = "zh") -> list[str]:
     """User-visible reconciliation lines: per governed metric/rule claim,
     the scoped window or recomputation is shown alongside the exposed
     population — both numbers verifiable; mismatches are explicit and
@@ -289,17 +292,27 @@ def _render_population_reconciliation(summary: dict) -> list[str]:
     if not metrics and not (pr.get("unmapped_metrics") or []):
         return []
     ref = str(pr.get("reference_time") or "")
+    en = lang == "en"
     lines: list[str] = []
     for m in metrics:
         if m.get("type") == "window_count":
             noun = "提现" if "withdrawal" in str(m.get("metric")) else "交易"
+            noun_en = ("withdrawals"
+                       if "withdrawal" in str(m.get("metric"))
+                       else "transactions")
             if m.get("verdict") == "population_mismatch":
                 lines.append(
                     f"⚠ 总体口径不一致：摘要指标 {m.get('claimed')} 笔{noun}/24 小时"
                     f"与参考时点（{ref}）前 24 小时窗口重算的 "
                     f"{m.get('observed_in_window')} 笔不符（明细共 "
                     f"{m.get('exposed_total')} 笔）；该差异已记录，"
-                    "不构成完整一致。")
+                    "不构成完整一致。" if not en else
+                    f"⚠ Population mismatch: the summary metric "
+                    f"{m.get('claimed')} {noun_en}/24h does not match the "
+                    f"{m.get('observed_in_window')} recomputed over the 24h "
+                    f"window before the reference point ({ref}) "
+                    f"(details total {m.get('exposed_total')}); the "
+                    "difference is recorded and is NOT a verified match.")
             else:
                 lines.append(
                     f"总体口径说明：摘要指标「{m.get('claimed')} 笔{noun}/"
@@ -307,29 +320,58 @@ def _render_population_reconciliation(summary: dict) -> list[str]:
                     f"（窗口内 {m.get('observed_in_window')} 笔）；下方明细"
                     f"为该账号全部 {m.get('exposed_total')} 笔（另有 "
                     f"{m.get('outside_window')} 笔在评分窗口之前）——两个数字"
-                    "口径不同、均可追溯。")
+                    "口径不同、均可追溯。" if not en else
+                    f"Population note: the summary metric \"{m.get('claimed')} "
+                    f"{noun_en}/24h\" is measured over the 24h window before "
+                    f"the feature reference time {ref} "
+                    f"({m.get('observed_in_window')} in window); the details "
+                    f"below are ALL {m.get('exposed_total')} of the account's "
+                    f"{noun_en} (another {m.get('outside_window')} fall "
+                    "before the scoring window) — two different scopes, "
+                    "both traceable.")
         elif m.get("type") == "ratio_recompute":
             if m.get("verdict") == "claim_supported":
                 lines.append(
                     f"口径核实：摘要比例 {m.get('claimed')} 由明细重算证实"
                     f"（{m.get('observed')}，分母为全部 {m.get('denominator')} "
-                    "笔交易）。")
+                    "笔交易）。" if not en else
+                    f"Metric verified: the summary ratio {m.get('claimed')} "
+                    f"is confirmed by recomputing from the details "
+                    f"({m.get('observed')}; denominator all "
+                    f"{m.get('denominator')} transactions).")
             else:
                 lines.append(
                     f"⚠ 比例口径不一致：摘要比例 {m.get('claimed')} 与明细重算 "
                     f"{m.get('observed')} 不符（分母 {m.get('denominator')} 笔）；"
-                    "该差异已记录，不构成完整一致。")
+                    "该差异已记录，不构成完整一致。" if not en else
+                    f"⚠ Ratio mismatch: the summary ratio {m.get('claimed')} "
+                    f"does not match the recomputed {m.get('observed')} "
+                    f"(denominator {m.get('denominator')} transactions); the "
+                    "difference is recorded and is NOT a verified match.")
         elif m.get("type") == "rule_claim":
             if m.get("verdict") == "claim_supported":
-                lines.append("规则主张核实：首笔提现即为新地址，与明细一致。")
+                lines.append(
+                    "规则主张核实：首笔提现即为新地址，与明细一致。"
+                    if not en else
+                    "Rule claim verified: the first withdrawal is already a "
+                    "new address, consistent with the details.")
             else:
-                lines.append("⚠ 规则主张与明细不符：首笔提现并非新地址；"
-                             "该差异已记录，不构成完整一致。")
+                lines.append(
+                    "⚠ 规则主张与明细不符：首笔提现并非新地址；"
+                    "该差异已记录，不构成完整一致。" if not en else
+                    "⚠ Rule claim contradicted by the details: the first "
+                    "withdrawal is NOT a new address; the difference is "
+                    "recorded and is NOT a verified match.")
     unmapped = pr.get("unmapped_metrics") or []
     if unmapped:
-        lines.append(f"说明：以下特征指标暂无可复核的明细口径映射："
-                     f"{', '.join(unmapped)}；其数值来自 Risk Platform 特征"
-                     "计算，尚未与明细逐笔核对。")
+        lines.append(
+            f"说明：以下特征指标暂无可复核的明细口径映射："
+            f"{', '.join(unmapped)}；其数值来自 Risk Platform 特征"
+            "计算，尚未与明细逐笔核对。" if not en else
+            f"Note: the following feature metrics have no verifiable "
+            f"detail-level mapping yet: {', '.join(unmapped)}; their "
+            "values come from Risk Platform feature computation and have "
+            "not been reconciled record-by-record.")
     return lines
 
 
@@ -358,11 +400,56 @@ def _destination_identity_summary(block: dict | None) -> dict | None:
     }
 
 
+_FINDING_SUMMARY_LIMIT = 280
+_OMIT_NOTE_EN = "… (Additional details omitted; see the evidence bundle.)"
+_OMIT_NOTE_ZH = "……（部分细节已省略，完整说明见证据包。）"
+_SENTENCE_END_RE = re.compile(r"[。！？!?][\"'”’)]*(?=\s|$)|\.(?=\s|$)")
+
+
+def _bounded_finding_summary(text: str, limit: int = _FINDING_SUMMARY_LIMIT,
+                             lang: str | None = None) -> str:
+    """Bounded finding summary with a SAFE cut boundary and an explicit
+    omission disclosure — never a silent mid-sentence slice.
+
+    U00008 audit: RP embeds multi-block explanatory text in one finding
+    summary ("…positions.\nAccount Age (contextual)\nThe account is 19
+    days old. …"); the old [:280] slice cut mid-sentence and the rendered
+    body appeared to stop inside a sentence. Behavior:
+      - text within the limit → unchanged;
+      - otherwise cut at the LAST sentence boundary inside the budget,
+        falling back to the last whitespace (word boundary), falling
+        back to the hard budget cut — the omission note is ALWAYS
+        appended, so the rendered body never ends silently mid-sentence;
+      - the note follows the per-turn response language.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    note = _OMIT_NOTE_EN if (lang or "") == "en" else _OMIT_NOTE_ZH
+    budget = max(limit - len(note), 80)
+    window = text[:budget]
+    # boundary priority: last sentence ender → last paragraph break →
+    # last word boundary → hard budget cut (the note is always appended,
+    # so even the hard cut is disclosed, never silent)
+    cut = 0
+    for m in _SENTENCE_END_RE.finditer(window):
+        cut = m.end()
+    if cut < 40:
+        cut = window.rfind("\n")
+    if cut < 40:
+        cut = window.rfind(" ")
+    if cut < 40:
+        cut = budget
+    trimmed = window[:cut].rstrip()
+    return f"{trimmed} {note}"
+
+
 def project_observation(
     tool_name: str,
     step_type: str,
     result: ToolResult | None,
     error: ExecutorError | None = None,
+    lang: str | None = None,
 ) -> dict[str, Any]:
     """Deterministic compact projection of one ToolResult for the
     decision/planner context (baseline §13 — GLOBAL rule). Kind-specific
@@ -403,11 +490,21 @@ def project_observation(
         if tool_name == "risk_case_fetch" and data.get("findings") is not None:
             findings = list(data.get("findings") or [])[:_MAX_SUMMARY_ITEMS]
             obs["summary"]["finding_count"] = len(data.get("findings") or [])
+            # U00033: keep each finding's RP explanatory summary (from the
+            # RP explanation key_findings text) — this is the substantive
+            # content the case-intake answer renders; the old turn path
+            # showed it and the loop composer consumes the same whitelist.
+            # U00008 fix: the bound cuts at a SAFE sentence boundary with
+            # an explicit omission note — never a silent mid-sentence
+            # slice ("…The account is" rendered as if a section stopped).
             obs["summary"]["findings"] = [
                 {"id": f.finding_id if hasattr(f, "finding_id")
                  else f.get("finding_id"),
                  "title": (f.title if hasattr(f, "title")
-                           else f.get("title", ""))[:80]}
+                           else f.get("title", ""))[:80],
+                 "summary": _bounded_finding_summary(
+                     (f.summary if hasattr(f, "summary")
+                      else f.get("summary", "")) or "", lang=lang)}
                 for f in findings
             ]
             # GSP WP-GSP-4: authoritative case-level risk facts (from the
@@ -439,13 +536,22 @@ def project_observation(
             rows = [
                 {"record_id": r.get("record_id"),
                  "timestamp": r.get("timestamp"),
-                 "summary": r.get("summary")}
+                 "summary": r.get("summary"),
+                 # evidence field preservation: keep the record's own
+                 # address when the source record carries one (generic —
+                 # withdrawal records carry it today; absence stays None,
+                 # never synthesized)
+                 "address": r.get("address")}
                 for r in records[:20] if isinstance(r, dict)
             ]
             obs["summary"] = {
                 "record_count": data.get("record_count"),
                 "record_ids": _ids_of(records, "record_id"),
                 "streams": data.get("streams"),
+                # L1: the evidence-view provenance, copied in-band so the
+                # postcondition's completeness rule reads a summary-level
+                # fact instead of a key that never reaches this dict.
+                "view": "evidence",
                 "record_rows": rows,
                 # WP-GS-B: bounded destination-identity comparison facts
                 # (deterministic; counts + group provenance; raw values
@@ -484,9 +590,23 @@ def project_observation(
             events = data.get("events") or []
             obs["semantic_status"] = "timeline"
             obs["summary"] = {
+                # R6 (U00010 F7): bounded event summaries + the finding
+                # this timeline belongs to (subject binding for the
+                # timeline-ask output) — provenance, timestamps, scope.
+                "finding_id": data.get("finding_id"),
                 "total_events": data.get("total_events", len(events)),
                 "event_ids": _ids_of(events, "event_id"),
                 "truncated": data.get("truncated", False),
+                "event_summaries": [
+                    {"event_id": getattr(ev, "event_id", None)
+                     if not isinstance(ev, dict) else ev.get("event_id"),
+                     "timestamp": getattr(ev, "timestamp", None)
+                     if not isinstance(ev, dict) else ev.get("timestamp"),
+                     "summary": (getattr(ev, "summary", "")
+                                 if not isinstance(ev, dict)
+                                 else (ev.get("summary") or ""))[:160]}
+                    for ev in (events if isinstance(events, list) else [])
+                ],
             }
         elif data.get("analysis") == "cross_account_trade_analysis":
             # The tool's own observation contract is already compact
@@ -607,10 +727,14 @@ def project_observation(
                 "cluster_risk_score": graph.get("cluster_risk_score"),
                 # list-completeness metadata: the related_accounts field
                 # is an RP server-side preview, never the full membership
+                # R5 (U00010 F6): the preview/total metadata lives on the
+                # graph EXPLANATION (top level), not inside cluster —
+                # without it the zh face presented a 5-entry preview as
+                # the complete population.
                 "related_accounts_preview":
-                    graph.get("related_accounts_preview"),
+                    explanation.get("related_accounts_preview"),
                 "related_accounts_total":
-                    graph.get("related_accounts_total"),
+                    explanation.get("related_accounts_total"),
                 "shared_devices": (explanation.get("shared_devices")
                                    or [])[:5],
                 "related_accounts": (explanation.get("related_accounts")
@@ -634,10 +758,26 @@ def project_observation(
                 "associated_citations": [
                     {"citation_id": m.get("citation_id"),
                      "document": m.get("document"),
-                     "section": m.get("section")}
+                     "section": m.get("section"),
+                     "snippet": (m.get("snippet") or "")[:200]}
                     for m in associated[:5]
                 ],
                 "finding_policy_status": data.get("finding_policy_status"),
+                # R3 (U00010 F5): the GSP POLICY_REFERENCES evaluator and
+                # composer read these fields from the projected summary —
+                # carry them (bounded) so an ASSOCIATED policy renders its
+                # citation document/section on the GSP surface too.
+                "matches": [
+                    {"citation_id": m.get("citation_id"),
+                     "document": m.get("document"),
+                     "section": m.get("section"),
+                     "snippet": (m.get("snippet") or "")[:200]}
+                    for m in matches[:8]
+                ],
+                "associated_policy_refs": [
+                    {"citation_id": p.get("citation_id")}
+                    for p in (data.get("associated_policy_refs") or [])[:8]
+                ],
             }
         elif isinstance(data.get("artifact"), dict):
             artifact = data["artifact"]
@@ -645,6 +785,27 @@ def project_observation(
             obs["summary"] = {"artifact_id": artifact.get("artifact_id"),
                               "title": artifact.get("title"),
                               "scope": artifact.get("scope")}
+            # U00047 file-delivery closure: bounded completion evidence for
+            # file_export outputs — which source steps fed the bundle and
+            # whether the tool-layer record-parity check passed. Metadata
+            # only (never the artifact body).
+            if data.get("source_step_ids"):
+                obs["summary"]["source_step_ids"] = list(
+                    data["source_step_ids"])[:8]
+            if data.get("record_parity_failed") is not None:
+                obs["summary"]["record_parity_failed"] = bool(
+                    data["record_parity_failed"])
+            obs["summary"]["record_parity_checked"] = bool(
+                data.get("record_parity_checked"))
+            # Plan v2.1: candidate-set export verification / rejection —
+            # projected so the scoped postcondition and the composer can
+            # verify the export deterministically.
+            if data.get("candidate_set_export") is not None:
+                obs["summary"]["candidate_set_export"] = data[
+                    "candidate_set_export"]
+            if data.get("candidate_set_export_rejected") is not None:
+                obs["summary"]["candidate_set_export_rejected"] = data[
+                    "candidate_set_export_rejected"]
         else:
             # Known-success shape with no specific whitelist: a bare shape
             # marker only — never the payload body, never even key names.
@@ -661,73 +822,101 @@ def project_observation(
             obs["complete"] = not bool(data.get("truncated"))
 
         # user-facing phrase (QA-05): separate from the machine digest —
-        # this is what the Activity timeline renders
-        obs["display"] = _user_phrase(tool_name, obs)
+        # this is what the Activity timeline renders (per-turn response
+        # language; undeterminable keeps the historical default face)
+        obs["display"] = _user_phrase(tool_name, obs, lang=lang)
     elif outcome == ToolResultOutcome.EMPTY.value:
         obs["summary"]["empty"] = True
     return obs
 
 
-def _user_phrase(tool_name: str, obs: dict[str, Any]) -> str:
+def _user_phrase(tool_name: str, obs: dict[str, Any],
+                 lang: str | None = None) -> str:
     """Analyst-facing one-line result phrase (QA-05) — product language,
-    never the machine digest. Factual scope only; no overclaiming."""
+    never the machine digest. Factual scope only; no overclaiming.
+    Per-turn response language; None keeps the English default face."""
+    zh = lang == "zh"
     outcome = obs.get("outcome")
     s = obs.get("summary") or {}
     if outcome == ToolResultOutcome.INTEGRATION_ERROR.value:
-        return "The Risk Platform could not be reached for this step."
+        return ("此步骤无法连接 Risk Platform。" if zh else
+                "The Risk Platform could not be reached for this step.")
     if outcome == ToolResultOutcome.EMPTY.value:
-        return "No matching data was found for this step."
+        return ("此步骤未检索到匹配数据。" if zh else
+                "No matching data was found for this step.")
     if outcome != ToolResultOutcome.SUCCESS.value:
-        return f"Step finished with outcome: {outcome}."
+        return (f"步骤以 {outcome} 结束。" if zh else
+                f"Step finished with outcome: {outcome}.")
     status = obs.get("semantic_status")
     if tool_name == "risk_case_fetch" and s.get("finding_count") is not None:
         n = s["finding_count"]
-        return (f"Case retrieved: {n} finding"
+        return (f"已取得案例：识别出 {n} 个风险发现。" if zh else
+                f"Case retrieved: {n} finding"
                 f"{'s' if n != 1 else ''} identified.")
     if status == "MATCH_FOUND":
         n = s.get("candidates_found")
         target = s.get("target_account")
         scope_txt = f" involving account {target}" if target else ""
-        return (f"Found {n} candidate cross-account opposite-trade "
+        scope_zh = f"（涉及账户 {target}）" if target else ""
+        return (f"发现 {n} 组候选跨账户对冲交易关系{scope_zh}"
+                "（仅为候选，非结论）。" if zh else
+                f"Found {n} candidate cross-account opposite-trade "
                 "relationship"
                 f"{'s' if n != 1 else ''}{scope_txt} "
                 "(candidates only, not conclusions).")
     if status == "RELATED_ACCOUNTS_FOUND":
         n = s.get("related_accounts_count")
-        return (f"Risk Platform network attribution: {n} related account"
+        return (f"Risk Platform 网络归因：该账户有 {n} 个关联账号。"
+                if zh else
+                f"Risk Platform network attribution: {n} related account"
                 f"{'s' if n != 1 else ''} for this account.")
     if status == "NO_NETWORK_EVIDENCE":
-        return ("The Risk Platform provides no network attribution for "
+        return ("Risk Platform 未提供该案例的网络归因。" if zh else
+                "The Risk Platform provides no network attribution for "
                 "this case.")
     if status == "NO_MATCH":
         target = s.get("target_account")
         scope_txt = f" involving account {target}" if target else ""
-        return ("No candidate cross-account opposite-trade relationships "
+        scope_zh = f"涉及账户 {target} 的" if target else ""
+        return (f"在所分析范围的既定容差内，未匹配到{scope_zh}"
+                "候选跨账户对冲交易关系。" if zh else
+                "No candidate cross-account opposite-trade relationships "
                 f"{scope_txt + ' ' if scope_txt else ''}matched within the "
                 "configured tolerances for the analyzed scope.")
     if status == "self_opposite_trades":
         ratio = s.get("opposite_trade_ratio")
         if ratio is None:
-            return ("Opposite-side trading activity data is not available "
+            return ("该账户的反向交易活动数据不可用。" if zh else
+                    "Opposite-side trading activity data is not available "
                     "for this account.")
         if ratio == 0:
-            return ("No opposite-side trading activity observed for this "
+            return ("该账户未观察到反向交易活动（比例 0%）。" if zh else
+                    "No opposite-side trading activity observed for this "
                     "account (ratio 0%).")
-        return ("Opposite-side trading activity by this same account "
+        return (f"该账户自身的反向交易活动（反向交易比例 {ratio:.1%}）；"
+                "仅限同一账户。" if zh else
+                "Opposite-side trading activity by this same account "
                 f"(opposite-trade ratio {ratio:.1%}); same-account only.")
     if status == "timeline":
         n = s.get("total_events")
-        return f"Timeline reviewed: {n} events."
+        return (f"已核查时间线：共 {n} 个事件。" if zh else
+                f"Timeline reviewed: {n} events.")
     if status == "evidence":
         n = s.get("record_count")
-        return f"Complete record set reviewed: {n} records."
+        return (f"已核查完整记录集：共 {n} 条记录。" if zh else
+                f"Complete record set reviewed: {n} records.")
     if status == "policy_matches":
-        return f"Policy review: {s.get('match_count', 0)} reference(s) found."
+        return (f"政策核查：找到 {s.get('match_count', 0)} 条引用。"
+                if zh else
+                f"Policy review: {s.get('match_count', 0)} reference(s) "
+                "found.")
     if s.get("artifact_id"):
-        return f"Investigation bundle created ({s['artifact_id']})."
+        return (f"已生成调查证据包（{s['artifact_id']}）。" if zh else
+                f"Investigation bundle created ({s['artifact_id']}).")
     if s.get("evidence_missing"):
-        return "The available evidence was insufficient for this step."
-    return "Step completed successfully."
+        return ("当前可用证据不足以完成此步骤。" if zh else
+                "The available evidence was insufficient for this step.")
+    return ("步骤成功完成。" if zh else "Step completed successfully.")
 
 
 def _observation_line(obs: dict[str, Any]) -> str:
@@ -778,6 +967,23 @@ class AgentLoopState(BaseModel):
     # so the composer can disclose the ACTUAL failure class of a degraded
     # (heuristic-fallback) contract instead of a generic claim.
     goal_understanding_diagnostics: dict | None = None
+    # U00008 planner reliability fix: the planner's per-attempt LLM
+    # diagnostics (attempts + response meta — stop_reason, usage, content
+    # block types/lengths; never prompt or reasoning content), persisted
+    # symmetrically with goal_understanding_diagnostics so budget/transport
+    # failures are evidence-backed instead of NOT RECORDED.
+    planning_diagnostics: dict | None = None
+    # which invocation produced the understanding (B1 gu-decision/1):
+    # "run_turn" = handed off precomputed by the unified submission;
+    # "loop_internal" = the loop's own resolver call.
+    goal_understanding_path: str | None = None
+    # Plan v2.1 cross-turn candidate-scope bindings (per output):
+    # {"<output_id>": {"kind": "candidate_set_export", "status":
+    #   "bound"|"unresolved"|"ambiguous", "set_ref": str|None,
+    #   "entry": dict|None, "sets": list|None}} — resolved against the
+    # session's candidate_sets right after contract acceptance; consumed
+    # by the deterministic plan adjustment and the scoped postcondition.
+    scope_bindings: dict | None = None
     # GSP WP-GSP-2: the ACCEPTED Goal Semantic Contract for this run
     # (deterministic validation of the goal-understanding proposal; None
     # when the flag is off, the proposal was rejected, or the state is
@@ -1256,7 +1462,23 @@ class LoopPolicy:
         #    the proposer may legitimately continue past a success for
         #    goals needing more work; the iteration bound guarantees
         #    termination either way.
-        if state.criteria_satisfied():
+        #
+        #    Satisfaction definition (real execution INV-727c5a264c85 /
+        #    TASK-740e83a1b5f5): with an ACCEPTED goal contract, "goal
+        #    satisfied" means the CONTRACT's output set is satisfied — the
+        #    same definition the stop-label logic uses. The looser
+        #    question_answered criteria (any authoritative success
+        #    observation) must never accept a STOP while a contract output
+        #    is unsatisfied: that acceptance short-circuited the
+        #    corrective RE_PLAN coercion and let an explanation deliverable
+        #    be closed out by a generic case bundle.
+        _goal_fully_satisfied = (
+            (state.goal_contract is None
+             and state.criteria_satisfied())
+            or (state.goal_contract is not None
+                and all(o.satisfaction == OutputSatisfaction.SATISFIED
+                        for o in state.goal_contract.outputs)))
+        if _goal_fully_satisfied:
             if proposal_decision == LoopDecision.BLOCK.value:
                 proposal_decision = LoopDecision.STOP.value
             if proposal_decision == LoopDecision.STOP.value:
@@ -1393,10 +1615,24 @@ class LoopPolicy:
                     coerced_from=proposal_decision, limit_reached=True)
             if proposal_decision == LoopDecision.CONTINUE.value \
                     and not state.pending_steps():
+                # Completion dominance for exhausted plans (U00033): when
+                # the goal's completion criteria/contract are already
+                # satisfied, an exhausted plan means the work is DONE —
+                # converge to STOP instead of re-planning to pursue a goal
+                # that has been answered.
+                if state.criteria_satisfied() or (
+                        state.goal_contract is not None
+                        and all(o.satisfaction == OutputSatisfaction.SATISFIED
+                                for o in state.goal_contract.outputs)):
+                    return EnforcedDecision(
+                        decision=LoopDecision.STOP,
+                        reason="plan exhausted and the goal's completion "
+                               "criteria are satisfied",
+                        coerced_from=proposal_decision)
                 return EnforcedDecision(
                     decision=LoopDecision.RE_PLAN,
                     reason="plan exhausted; re-planning to pursue the goal",
-                    coerced_from="CONTINUE")
+                    coerced_from=proposal_decision)
 
         # 4) BLOCK: never rendered as completion; accepted as-is (the
         #    reason travels to the terminal state)
@@ -1516,6 +1752,63 @@ def _scripted_goal_llm_resolver(scripts: list):
     return resolve
 
 
+def _gu_flag_source() -> str:
+    """Bounded provenance for the contract flag's effective value —
+    mirrors the Settings mechanism (env var > cwd env_file > default).
+    Names only; never values beyond the boolean itself."""
+    import os
+    from pathlib import Path as _Path
+    name = "ENABLE_GOAL_SEMANTIC_CONTRACT"
+    if name in os.environ:
+        return "env"
+    try:
+        env_file = _Path(".env")
+        if env_file.exists() and any(
+                line.split("=", 1)[0].strip() == name
+                for line in env_file.read_text().splitlines()
+                if "=" in line):
+            return "env_file:.env"
+    except Exception:                     # noqa: BLE001 — provenance only
+        return "env_file:unreadable"
+    return "default"
+
+
+def _gu_understanding_record(state, contract) -> dict:
+    """B1 gu-decision/1 `understanding` sub-object — write-only
+    observation merged into the persisted decision. Best-effort: any
+    failure degrades to record_complete=false and NEVER alters the
+    decision outcome (no business code reads these fields)."""
+    rec: dict = {
+        "schema": "gu-decision/1",
+        "flag_enabled": True,
+        "flag_source": _gu_flag_source(),
+        "path": state.goal_understanding_path or "loop_internal",
+        "record_complete": True,
+    }
+    try:
+        gu = dict(state.goal_understanding_diagnostics or {})
+        rec["llm_attempted"] = gu.get("llm_attempted")
+        rec["llm_error"] = gu.get("llm_error")
+        rec["candidate"] = dict(gu.get("candidate") or {
+            "stage_ran": None, "fired": None, "kinds": []})
+        rec["canonical_substitution"] = dict(
+            gu.get("canonical_substitution")
+            or {"occurred": False, "tags": []})
+        if contract is not None:
+            rec["contract"] = {"decision": "accepted",
+                               "contract_id": contract.contract_id}
+            rec["facets_mounted"] = sorted({
+                f for o in contract.outputs
+                for f in (o.postcondition_facets or [])})
+        else:
+            rec["contract"] = {"decision": "none", "contract_id": None}
+            rec["facets_mounted"] = []
+    except Exception as exc:              # noqa: BLE001 — isolation
+        rec["record_complete"] = False
+        rec["record_error"] = f"{type(exc).__name__}: {exc}"[:160]
+    return rec
+
+
 def _call_goal_resolver(resolver, goal, focused_finding_id, case_id, diag,
                         case_findings=None):
     """Invoke the configured goal resolver, deciding the calling
@@ -1564,6 +1857,10 @@ class AgentLoopResult(BaseModel):
     # artifact BODIES produced by this run (ids alone live on state/task) —
     # lets callers persist them into the investigation read model (AL-2.5)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    # the run's ToolCallV2 audit records — persisted into the investigation
+    # session read model by the API layer (U00047 persistence fix: plan,
+    # tool calls and findings must survive reopen like turn runs)
+    tool_calls: list[ToolCallV2] = Field(default_factory=list)
 
 
 class AgentLoopRunner:
@@ -1647,6 +1944,8 @@ class AgentLoopRunner:
         task_id: str | None = None,
         findings_provider: Any | None = None,
         response_language: str | None = None,
+        goal_understanding_diag: dict | None = None,
+        submitted_at: str | None = None,
     ) -> AgentLoopResult:
         from datetime import datetime, timezone
 
@@ -1699,15 +1998,32 @@ class AgentLoopRunner:
                     return self._terminate(
                         state, task, AgentStatus.BLOCKED,
                         StopReason.DEPENDENCY_UNAVAILABLE,
-                        "The investigation cannot start right now: the "
-                        "Risk Platform is unavailable. No investigation "
-                        "was fabricated — please retry later.", _now)
+                        (
+                            "The investigation cannot start right now: the "
+                            "Risk Platform is unavailable. No investigation "
+                            "was fabricated — please retry later."
+                            if _turn_lang(state) != "zh" else
+                            "当前无法开始调查：Risk Platform 不可用。系统"
+                            "不会虚构调查结果——请稍后重试。"), _now)
             # Stage 2.1: the structured goal representation is produced
             # BEFORE target resolution so every run — including
             # blocked/unresolved ones — carries its understood objective
             # (baseline §35b).
+            # B1: a precomputed understanding handed off by the unified
+            # submission seeds the diagnostics + path BEFORE the loop's
+            # own resolver capture — the loop-internal call (when it
+            # runs) may REPLACE both (it owns the field after its call).
+            if goal_understanding_diag:
+                state.goal_understanding_diagnostics = dict(
+                    goal_understanding_diag)
+                state.goal_understanding_path = "run_turn"
             produced = None
             goal_diag: dict = {}
+            # entry-time anchor from the submission surface (slow-request
+            # observability): reaches the GU diagnostics so the pre-loop
+            # segment is auditable next to goal_understanding_started_at.
+            if submitted_at:
+                goal_diag.setdefault("submitted_at", submitted_at)
             contract_reason: str | None = None
             resolution_error: str | None = None
             if self.goal_resolver is not None:
@@ -1727,7 +2043,24 @@ class AgentLoopRunner:
                     # failure class (parse/empty/timeout/…) instead of a
                     # generic "service unavailable" claim.
                     if goal_diag:
-                        state.goal_understanding_diagnostics = dict(goal_diag)
+                        # Slow-request observability: the loop-internal
+                        # call owns the field only when it ran its own
+                        # understanding (the seeded record from the
+                        # submission's GU call carries the real
+                        # goal_understanding window). A resolver that just
+                        # returns the precomputed representation must not
+                        # erase that record — merge the anchor instead.
+                        _loop_gu_ran = (
+                            "goal_understanding_started_at" in goal_diag
+                            or "llm_attempted" in goal_diag
+                            or "attempts" in goal_diag)
+                        if _loop_gu_ran:
+                            state.goal_understanding_diagnostics = dict(
+                                goal_diag)
+                            state.goal_understanding_path = "loop_internal"
+                        else:
+                            state.goal_understanding_diagnostics.update(
+                                goal_diag)
                     if produced is not None:
                         state.goal_representation = produced.project()
                         # GSP WP-GSP-2: deterministic acceptance of the
@@ -1821,28 +2154,87 @@ class AgentLoopRunner:
                                   if state.goal_contract else []))
                     if not has_facet:
                         decision["coverage"] = "comparison_intent_uncovered"
+                # B1 gu-decision/1: write-only understanding provenance —
+                # isolated so a diagnostics failure cannot change the
+                # decision outcome (the outcome fields above are final).
+                try:
+                    decision["understanding"] = _gu_understanding_record(
+                        state, state.goal_contract)
+                except Exception as _gu_exc:      # noqa: BLE001
+                    decision["understanding"] = {
+                        "schema": "gu-decision/1", "record_complete": False,
+                        "record_error": f"{type(_gu_exc).__name__}"}
                 if decision["outcome"] == "ambiguous_not_executed":
                     # Genuine ambiguity: bounded clarification-shaped
                     # termination BEFORE any planning or tool execution.
                     # The system never picks the conveniently-classifiable
                     # single goal and presents it as the whole request.
+                    # The candidate readings are ENUMERATED from the
+                    # structured ambiguous_goal_types field (closed
+                    # vocabulary) so the user knows what to choose; any
+                    # unmappable/missing candidate falls back to the
+                    # generic clarification text. The LLM's free-text
+                    # reason is never projected.
                     self._persist(state, task)
                     return self._terminate(
                         state, task, AgentStatus.BLOCKED,
                         StopReason.CLARIFICATION_NEEDED,
-                        "无法确定您要调查的目标：该请求存在多种可能的理解，"
-                        "系统不会默认只调查其中一项。请明确您希望优先调查的"
-                        "目标后重新发起。",
+                        _ambiguous_clarification_message(
+                            state, _turn_lang(state)),
                         _now)
+            else:
+                # B1: flag OFF is a RECORDED decision state, not silence —
+                # the contract path was skipped (candidate stage included);
+                # nothing is inferred about candidates or the LLM.
+                try:
+                    _gu = dict(state.goal_understanding_diagnostics or {})
+                    state.goal_contract_decision = {
+                        "outcome": "flag_off",
+                        "reason": ("goal semantic contract feature "
+                                   "disabled at runtime"),
+                        "understanding": {
+                            "schema": "gu-decision/1",
+                            "flag_enabled": False,
+                            "flag_source": _gu_flag_source(),
+                            "path": (state.goal_understanding_path
+                                     or "loop_internal"),
+                            "llm_attempted": _gu.get("llm_attempted"),
+                            "llm_error": _gu.get("llm_error"),
+                            "candidate": dict(_gu.get("candidate") or {
+                                "stage_ran": False, "fired": None,
+                                "kinds": []}),
+                            "contract": {"decision": "none",
+                                         "contract_id": None},
+                            "facets_mounted": [],
+                            "record_complete": True,
+                        },
+                    }
+                except Exception:         # noqa: BLE001 — isolation
+                    state.goal_contract_decision = {
+                        "outcome": "flag_off",
+                        "reason": ("goal semantic contract feature "
+                                   "disabled at runtime"),
+                        "understanding": {
+                            "schema": "gu-decision/1",
+                            "record_complete": False},
+                    }
+            # Plan v2.1: resolve prior_candidates scope bindings against
+            # the session's candidate_sets BEFORE planning/execution.
+            try:
+                self._resolve_candidate_scope_bindings(state)
+            except Exception:
+                logger.exception("candidate scope binding failed")
             return self._run_loop(goal, context, resolved_findings, state,
-                                  task, _now)
+                              task, _now, submitted_at=submitted_at)
         except Exception as e:                    # bounded: never silently OK
             logger.exception("Agent loop failed")
             state.agent_status = AgentStatus.FAILED.value
             state.stop_reason = StopReason.PERSISTENT_ERROR
             state.response = (
                 "The investigation stopped because of an unexpected "
-                "internal error. Partial results are preserved.")
+                "internal error. Partial results are preserved."
+                if _turn_lang(state) != "zh" else
+                "调查因意外内部错误而停止。已保留部分结果。")
             state.updated_at = _now()
             task.status = TaskStatusV2.FAILED
             task.error = f"{type(e).__name__}"
@@ -1899,8 +2291,12 @@ class AgentLoopRunner:
             return self._terminate(
                 state, task, AgentStatus.BLOCKED,
                 StopReason.DEPENDENCY_UNAVAILABLE,
-                "The investigation cannot be resumed right now: the Risk "
-                f"Platform is unavailable ({e}).", _now)
+                (
+                    "The investigation cannot be resumed right now: the Risk "
+                    f"Platform is unavailable ({e})."
+                    if _turn_lang(state) != "zh" else
+                    f"当前无法恢复调查：Risk Platform 不可用（{e}）。"),
+                _now)
         context = InvestigationContext(
             case_id=state.case_id,
             focused_finding_id=state.focused_finding_id,
@@ -1913,7 +2309,8 @@ class AgentLoopRunner:
                               _now, resume_mode=True)
 
     def _run_loop(self, goal, context, findings, state, task, _now,
-                  resume_mode: bool = False) -> AgentLoopResult:
+                  resume_mode: bool = False,
+                  submitted_at: str | None = None) -> AgentLoopResult:
         # --- 1) context resolution -------------------------------------------
         # (skipped on resume: the persisted state already carries the
         # resolved focus and the adopted plan — WP-M2-1 AL-1 recovery)
@@ -2028,7 +2425,10 @@ class AgentLoopRunner:
                     if resolution.status == ResolutionStatus.AMBIGUOUS
                     else StopReason.CONTEXT_UNRESOLVED,
                     resolution.clarification_message
-                    or "The investigation target could not be resolved.",
+                    or (
+                        "The investigation target could not be resolved."
+                        if _turn_lang(state) != "zh" else
+                        "无法从该请求确定调查目标。"),
                     _now)
             if resolution.status == \
                     ResolutionStatus.SEMANTIC_RESOLUTION_UNAVAILABLE:
@@ -2038,10 +2438,14 @@ class AgentLoopRunner:
                     state, task, AgentStatus.BLOCKED,
                     StopReason.SEMANTIC_RESOLUTION_UNAVAILABLE,
                     resolution.clarification_message
-                    or "The semantic resolution service is currently "
-                       "unavailable; the target cannot be safely "
-                       "determined. Please select the finding directly or "
-                       "retry later.",
+                    or (
+                        "The semantic resolution service is currently "
+                        "unavailable; the target cannot be safely "
+                        "determined. Please select the finding directly or "
+                        "retry later."
+                        if _turn_lang(state) != "zh" else
+                        "语义解析服务当前不可用，无法安全地确定目标。请直接"
+                        "选择该发现，或稍后重试。"),
                     _now)
             if resolution.status == ResolutionStatus.CAPABILITY_GUIDANCE:
                 guidance = resolution.clarification_message \
@@ -2127,18 +2531,26 @@ class AgentLoopRunner:
                 return self._terminate(
                     state, task, AgentStatus.BLOCKED,
                     StopReason.CONTEXT_UNRESOLVED,
-                    "I couldn't reliably determine which finding you "
-                    "mean. Select the finding in the Findings panel, or "
-                    "name it explicitly.", _now)
+                    (
+                        "I couldn't reliably determine which finding you "
+                        "mean. Select the finding in the Findings panel, or "
+                        "name it explicitly."
+                        if _turn_lang(state) != "zh" else
+                        "无法可靠地确定您指的是哪个发现。请在发现面板中选择"
+                        "该发现，或明确写出其编号。"), _now)
             if decision.state == target_validity.TARGET_INVALID:
                 # v1: log + clarify (telemetry above) — never a hard
                 # block, never execution on the contradicted target.
                 return self._terminate(
                     state, task, AgentStatus.BLOCKED,
                     StopReason.CONTEXT_UNRESOLVED,
-                    "The finding you named doesn't match what this "
-                    "request resolved to. Please name the finding "
-                    "explicitly or select it in the Findings panel.",
+                    (
+                        "The finding you named doesn't match what this "
+                        "request resolved to. Please name the finding "
+                        "explicitly or select it in the Findings panel."
+                        if _turn_lang(state) != "zh" else
+                        "您指定的发现与该请求实际解析到的目标不一致。请明确"
+                        "写出发现编号，或在发现面板中选择它。"),
                     _now)
             # TARGET_VALID / TARGET_AMBIGUOUS(≠resolved) → proceed;
             # ambiguous resolutions never reach this point (terminated
@@ -2193,32 +2605,56 @@ class AgentLoopRunner:
                                             finding_caps,
                                             goal_contract=state.goal_contract,
                                             findings=findings)
+            # U00008 planner reliability fix: persist the planner's LLM
+            # attempt diagnostics (safe fields only — stop_reason, usage,
+            # content block types/lengths; never prompt or reasoning
+            # content) symmetrically with goal_understanding_diagnostics.
+            # Three explicit states — llm_called distinguishes "the LLM was
+            # not called (deterministic planning: detail=null)" from
+            # "called with diagnostics" from "called but the provider
+            # captured no attempt records"; null never represents more
+            # than one of them.
+            _llm_diag = getattr(self, "_last_plan_llm_diagnostics", None)
+            state.planning_diagnostics = {
+                "code": failure_code,
+                "llm_called": bool(_llm_diag and _llm_diag.get("called")),
+                "detail": _llm_diag,
+            }
             if plan is None:
                 # per-code accurate feedback: an empty model response, a
                 # timeout, rate limiting, a misconfiguration, and a genuine
                 # planning-surface failure are DIFFERENT user-visible states
+                _zh = _turn_lang(state) == "zh"
                 _planning_messages = {
                     "LLM_EMPTY_RESPONSE":
-                        "The model returned empty responses, so this "
-                        "request could not be planned. Please try again "
-                        "in a moment.",
+                        ("模型多次返回空响应，无法为该请求建立计划。请稍后"
+                         "重试。" if _zh else
+                         "The model returned empty responses, so this "
+                         "request could not be planned. Please try again "
+                         "in a moment."),
                     "LLM_TIMEOUT":
-                        "The planning request timed out. Please try again "
-                        "in a moment.",
+                        ("规划请求超时。请稍后重试。" if _zh else
+                         "The planning request timed out. Please try again "
+                         "in a moment."),
                     "LLM_RATE_LIMITED":
-                        "The planning service was rate limited. Please "
-                        "try again after a short delay.",
+                        ("规划服务被限流。请稍等片刻后重试。" if _zh else
+                         "The planning service was rate limited. Please "
+                         "try again after a short delay."),
                     "LLM_CONFIGURATION_ERROR":
-                        "The planning service is misconfigured. This "
-                        "needs operator attention.",
+                        ("规划服务配置有误，需要运维处理。" if _zh else
+                         "The planning service is misconfigured. This "
+                         "needs operator attention."),
                     "PLANNING_UNEXPECTED_ERROR":
-                        "An unexpected error occurred during planning. "
-                        "Please try again.",
+                        ("规划过程中发生意外错误。请重试。" if _zh else
+                         "An unexpected error occurred during planning. "
+                         "Please try again."),
                 }
                 _planning_msg = _planning_messages.get(
                     failure_code,
-                    f"The investigation could not be planned within the "
-                    f"supported investigation surface ({failure_code}).")
+                    (f"当前支持的调查范围内无法为该请求建立计划"
+                     f"（{failure_code}）。" if _zh else
+                     f"The investigation could not be planned within the "
+                     f"supported investigation surface ({failure_code})."))
                 return self._terminate(
                     state, task, AgentStatus.FAILED,
                     StopReason.PLANNING_FAILURE,
@@ -2232,6 +2668,18 @@ class AgentLoopRunner:
             # covered outputs proceed to execution.
             if getattr(settings, "ENABLE_GOAL_SEMANTIC_CONTRACT", False) \
                     and state.goal_contract is not None:
+                # Delivery-intent gate (real execution U00004
+                # TASK-2cba50000104): the planner proposed a lone
+                # generate_artifact step for a policy-citation ask whose
+                # accepted contract carries delivery=detail_list — the
+                # file was executed and left an orphan artifact. The
+                # system decides: with an accepted contract lacking
+                # file_export intent, planned generate_artifact steps are
+                # stripped BEFORE coverage admission (the supplement then
+                # fills the real evidence gap; contract-less runs keep
+                # their legacy artifact behavior unchanged).
+                self._strip_delivery_contradicted_artifact_steps(
+                    plan, state)
                 # GSP-6 coverage completion (deterministic, general): an
                 # accepted output whose evidence path is registry-declarable
                 # but whose covering step the proposed plan omitted gets its
@@ -2242,7 +2690,8 @@ class AgentLoopRunner:
                 # survive when no legal step exists to append — which
                 # admission records as no_eligible_capability → UNSUPPORTED
                 # (the honest capability boundary), never silent omission.
-                self._supplement_plan_coverage(state, plan)
+                self._supplement_plan_coverage(state, plan,
+                                               findings=findings)
                 from app.planning_coverage import (
                     CoverageStatus, admit_plan_coverage)
                 coverage = admit_plan_coverage(
@@ -2270,6 +2719,15 @@ class AgentLoopRunner:
                                                          state.goal_contract)})
                     if mapped:
                         map_entries[step.step_id] = mapped
+                # Plan v2.1: cross-turn candidate-scope export — a bound
+                # output is served by a deterministic candidate-detail
+                # synthesis from the persisted session snapshot; the
+                # generic full-stream retrieval/bundle steps proposed for
+                # it are replaced. Unresolved/ambiguous scopes strip the
+                # artifact step: the export cannot be verified this run,
+                # and a full-stream bundle must never pass for a
+                # candidate-scoped ask.
+                self._apply_candidate_scope_to_plan(plan, state)
                 state.step_output_map = map_entries
                 for r in coverage:
                     if r.coverage_status == "no_eligible_capability":
@@ -2303,6 +2761,9 @@ class AgentLoopRunner:
             task.status = TaskStatusV2.EXECUTING
 
         provenance_pool: list[ToolCallV2] = []
+        # U00047 persistence fix: the API layer reads this reference from
+        # the runner after termination to persist the session tool_calls.
+        self.last_run_tool_calls = provenance_pool
         # artifact BODIES produced by this run (ids alone are already
         # mirrored onto state/task; the bodies must survive the run so the
         # API layer can persist them into the investigation read model —
@@ -2348,12 +2809,12 @@ class AgentLoopRunner:
                     if arg_val and str(arg_val) in observed_ids:
                         arg_prov[arg_key] = "prior_observation"
                 if arg_prov:
-                    _emit("tool.selected", state, task,
-                          step_id=step.step_id, step_type=step.type,
-                          tool_name=step.tool_name,
-                          summary=json.dumps(
-                              {"argument_sources": arg_prov},
-                              ensure_ascii=False))
+                    self._emit("tool.selected", state, task,
+                               step_id=step.step_id, step_type=step.type,
+                               tool_name=step.tool_name,
+                               summary=json.dumps(
+                                   {"argument_sources": arg_prov},
+                                   ensure_ascii=False))
                 state.arg_provenance.append({
                     "step_id": step.step_id, "tool_name": step.tool_name,
                     "arguments": dict(step.arguments),
@@ -2420,10 +2881,22 @@ class AgentLoopRunner:
                 # --- observation -------------------------------------------------
                 observation = project_observation(
                     step.tool_name or "", step.type,
-                    tool_call.result if tool_call else None, exec_error)
+                    tool_call.result if tool_call else None, exec_error,
+                    lang=_turn_lang(state))
                 observation["iteration"] = state.iteration
                 observation["step_id"] = step.step_id
                 observation["step_type"] = step.type
+                # U00047 file-delivery closure: record WHICH streams a
+                # generated bundle was built from, so the association pass
+                # can tie the artifact to file_export outputs and the
+                # postcondition can verify file completeness. Metadata
+                # only.
+                if observation.get("semantic_status") == "artifact":
+                    _src_streams = (step.arguments or {}).get(
+                        "source_streams") or []
+                    if _src_streams:
+                        observation["summary"]["source_streams"] = list(
+                            _src_streams)[:8]
                 # GSP WP-GSP-3: deterministic evidence-type seed
                 # association (flag-gated; no contract → unassociated).
                 # ASSOCIATION IS NOT SATISFACTION: `for_outputs` marks the
@@ -2606,9 +3079,13 @@ class AgentLoopRunner:
                         return self._terminate(
                             state, task, AgentStatus.COMPLETED,
                             StopReason.BOUNDED_DATA,
-                            "investigation iteration budget reached; "
-                            "delivering the evidence acquired so far — "
-                            "unresolved items remain unresolved", _now,
+                            (
+                                "investigation iteration budget reached; "
+                                "delivering the evidence acquired so far — "
+                                "unresolved items remain unresolved"
+                                if _turn_lang(state) != "zh" else
+                                "已达到调查迭代预算上限；交付目前已取得的"
+                                "证据——未解决的项目保持未解决状态"), _now,
                             plan=plan,
                             artifacts=produced_artifacts)
                     return self._terminate(
@@ -2685,15 +3162,80 @@ class AgentLoopRunner:
                     return self._terminate(
                         state, task, AgentStatus.COMPLETED,
                         StopReason.BOUNDED_DATA,
-                        "the last plan revision produced no new "
-                        "information; delivering the evidence acquired "
-                        "so far — unresolved items remain unresolved",
+                        (
+                            "the last plan revision produced no new "
+                            "information; delivering the evidence acquired "
+                            "so far — unresolved items remain unresolved"
+                            if _turn_lang(state) != "zh" else
+                            "最后一轮计划未产生新信息；交付目前已取得的"
+                            "证据——未解决的项目保持未解决状态"),
                         _now, plan=plan,
                         artifacts=produced_artifacts)
                 new_plan = self._re_plan(planner, state, goal, ctx,
                                          eligible_ids, finding_caps,
                                          goal_contract=state.goal_contract,
                                          findings=findings)
+                # U00005 B-回归: re-plan steps carry the SAME anchoring
+                # discipline as the initial plan — a re-plan that inserts
+                # finding-level steps without anchors would execute
+                # INVALID_ARGUMENT (and historically left the artifact
+                # bound to a stale source step). Same title-evidence rule,
+                # same exactly-one guard; no anchors when the request does
+                # not name a single authoritative title.
+                if new_plan is not None:
+                    from app.planner_v2 import (
+                        _anchor_unanchored_finding_steps as _anchor_steps)
+                    _anchor_steps(new_plan.steps, goal, findings)
+                    # Same delivery-intent gate on the RE_PLAN adoption
+                    # path — a re-plan never reintroduces generate_artifact
+                    # steps that the accepted contract's delivery intent
+                    # does not call for (audited identically).
+                    self._strip_delivery_contradicted_artifact_steps(
+                        new_plan, state)
+                # U00033: an IDENTICAL re-plan (same step types and
+                # arguments as the plan just executed) after a
+                # fully-successful execution cannot close an unchanged gap
+                # — the evidence is already in hand and the composer
+                # answers from it. Collapse to the bounded completion
+                # instead of re-running the same fetches; failed or
+                # partially-successful executions still allow the re-plan
+                # (bounded recovery semantics unchanged).
+                if plan is not None and plan.steps and new_plan is not None \
+                        and [(s.type, json.dumps(s.arguments or {},
+                                                 sort_keys=True))
+                             for s in new_plan.steps] == [
+                            (s.type, json.dumps(s.arguments or {},
+                                                sort_keys=True))
+                            for s in plan.steps] \
+                        and all(s.status == PlanStepStatus.SUCCESS
+                                for s in plan.steps):
+                    self._mark_current_done(state)
+                    # U00008 fix: emit the LAST step's completion event —
+                    # the collapse previously terminated right after
+                    # _mark_current_done, so the activity stream was left
+                    # without the final step.completed (the activity
+                    # block's started+completed count under-reported the
+                    # executed steps: "3 steps" for a 2/2 plan). Mirrors
+                    # the STOP branch's explicit emit; emitted exactly
+                    # once on this path (collapse semantics unchanged).
+                    self._emit("step.completed", state, task,
+                               step_id=(state.current_step or {})
+                               .get("step_id"),
+                               step_type=(state.current_step or {})
+                               .get("type"),
+                               iteration=state.iteration)
+                    return self._terminate(
+                        state, task, AgentStatus.COMPLETED,
+                        StopReason.BOUNDED_DATA,
+                        (
+                            "the re-planned plan is identical to the plan "
+                            "just executed; delivering the evidence already "
+                            "acquired"
+                            if _turn_lang(state) != "zh" else
+                            "重新规划得到的计划与刚执行的计划相同；交付已"
+                            "取得的证据"),
+                        _now, plan=plan,
+                        artifacts=produced_artifacts)
                 if new_plan is None:
                     # Bounded partial completion: when no legal re-plan
                     # exists but the run already holds REAL evidence
@@ -2716,10 +3258,22 @@ class AgentLoopRunner:
                     return self._terminate(
                         state, task, AgentStatus.FAILED,
                         StopReason.REPLAN_FAILURE,
-                        "The investigation could not re-plan within the "
-                        "supported surface after the latest observation.",
+                        (
+                            "The investigation could not re-plan within the "
+                            "supported surface after the latest observation."
+                            if _turn_lang(state) != "zh" else
+                            "在最新观察结果之后，系统无法在受支持范围内重新"
+                            "规划。"),
                         _now, plan=plan,
                         artifacts=produced_artifacts)
+                # B14 rule 2 (re-plan path): the new plan's artifact step
+                # bindings are revised against the re-plan's own producer
+                # steps so required evidence added by the re-plan is not
+                # lost from the bundle.
+                self._revise_artifact_source_bindings(
+                    new_plan, state.goal_contract,
+                    [s for s in new_plan.steps
+                     if s.type != "generate_artifact"])
                 plan = new_plan
                 self._adopt_plan(state, plan)
                 self._obs_count_at_adoption = len(state.observations)
@@ -2760,6 +3314,15 @@ class AgentLoopRunner:
                         if mapped:
                             map_entries[step.step_id] = mapped
                     state.step_output_map = map_entries
+                # Plan v2.1: cross-turn candidate-scope export — a bound
+                # output is served by a deterministic candidate-detail
+                # synthesis from the persisted session snapshot; the
+                # generic full-stream retrieval/bundle steps proposed for
+                # it are replaced. Unresolved/ambiguous scopes strip the
+                # artifact step: the export cannot be verified this run,
+                # and a full-stream bundle must never pass for a
+                # candidate-scoped ask.
+                self._apply_candidate_scope_to_plan(plan, state)
 
                 # R2a: a re-plan step whose covering outputs are ALL
                 # already SATISFIED delivers nothing new — drop it instead
@@ -2802,9 +3365,13 @@ class AgentLoopRunner:
                         return self._terminate(
                             state, task, AgentStatus.COMPLETED,
                             StopReason.BOUNDED_DATA,
-                            "re-plan offered no new work beyond already-"
-                            "delivered outputs; terminating with the "
-                            "evidence acquired", _now, plan=plan,
+                            (
+                                "re-plan offered no new work beyond already-"
+                                "delivered outputs; terminating with the "
+                                "evidence acquired"
+                                if _turn_lang(state) != "zh" else
+                                "重新规划没有提供已交付内容之外的新工作；"
+                                "以已取得的证据终止"), _now, plan=plan,
                             artifacts=produced_artifacts)
                 self._emit("plan.created", state, task,
                            summary=f"re-plan {plan.plan_id} "
@@ -2827,12 +3394,351 @@ class AgentLoopRunner:
                 and current["step_id"] not in state.completed_step_ids:
             state.completed_step_ids.append(current["step_id"])
 
-    def _supplement_plan_coverage(self, state: AgentLoopState, plan: Plan) \
+    def _anchored_supplement_steps(self, state, specs, findings,
+                                   first_id, reason_prefix):
+        """Build the coverage-supplement steps for `specs` with the SAME
+        deterministic anchoring discipline the planner applies (U00010 F1):
+        a finding-level step type with no focus and no spec pin resolves
+        its finding_id from the OUTPUT it serves — the output's claim/
+        subject matched against THIS case's own findings metadata
+        (planner_v2._output_target_finding; never a guessed id). An output
+        whose claim names SEVERAL explain domains gets one anchored step
+        per matched finding (bounded by the explain-domain table, deduped)
+        — a fused criteria claim answers per finding, not once for the
+        first match. Unresolvable outputs stay unpinned (the honest
+        pending/INVALID_ARGUMENT path). Returns (steps, next_id)."""
+        from app.models import PlanStep as _PlanStep
+        from app.planner_v2 import (_FINDING_LEVEL_STEP_TYPES,
+                                    _output_target_finding)
+        from app.investigation_concepts import findings_for_explain_domains
+        contract = state.goal_contract
+        outputs_by_id = {o.output_id: o for o in (contract.outputs or [])} \
+            if contract is not None else {}
+        next_id = first_id
+        steps: list = []
+        for spec in specs:
+            binding = STEP_TOOL_MAP[spec.step_type]
+            base_args = dict(binding.parameter_locks)
+            if spec.finding_target:
+                base_args["finding_id"] = spec.finding_target
+                targets = None
+            elif state.focused_finding_id or spec.step_type not in \
+                    _FINDING_LEVEL_STEP_TYPES or not findings:
+                # focused runs get the focus injected at execution; case-
+                # level step types never take a finding anchor
+                targets = None
+            else:
+                output = outputs_by_id.get((spec.output_ids or [""])[0])
+                targets = None
+                # U00010 B1 (EN-loose trace): RECORDS producer steps
+                # anchor by the STREAM rule first — the claim/request
+                # tiers resolved the transaction producer to the
+                # withdrawal finding (first domain match) and executed
+                # EVIDENCE_STREAM_NOT_SUPPORTED twice.
+                from app.skills import STEP_TOOL_MAP as _STMs
+                _rec_binding = _STMs.get(spec.step_type)
+                _rec_decls = {getattr(t, "value", str(t)) for t in (
+                    _rec_binding.supported_evidence_types or [])} \
+                    if _rec_binding else set()
+                _rec_only = _rec_decls & {
+                    "withdrawal_records", "transaction_records"}
+                if len(_rec_only) == 1:
+                    from app.planner_v2 import (
+                        _evidence_stream_anchor as _esa)
+                    fnd = _esa(spec.step_type,
+                               [(None, f) for f in (findings or [])])
+                    if fnd is not None:
+                        targets = [fnd]
+                if targets is None and output is not None:
+                    domain_pairs = findings_for_explain_domains(
+                        output.claim or "", findings)
+                    distinct = []
+                    for _d, f in domain_pairs:
+                        if all(f.finding_id != x.finding_id
+                               for x in distinct):
+                            distinct.append(f)
+                    if len(distinct) >= 2:
+                        targets = distinct
+                    else:
+                        fnd = _output_target_finding(
+                            output, state.goal or "", findings)
+                        targets = [fnd] if fnd is not None else None
+                    # U00010 B1 (EN): a RECORDS delivery step whose output
+                    # carries exactly one record-stream family anchors by
+                    # the STREAM rule (the finding whose OWN evidence_refs
+                    # carry that stream) — file claims carry no title/
+                    # domain vocabulary, so title-based resolution fails
+                    # for them (live: "Withdrawal detail file" →
+                    # INVALID_ARGUMENT finding_id).
+                    if targets is None:
+                        from app.skills import STEP_TOOL_MAP as _STM
+                        binding = _STM.get(spec.step_type)
+                        decl = {getattr(t, "value", str(t)) for t in
+                                (binding.supported_evidence_types or [])
+                                } if binding else set()
+                        _FAM = {"withdrawal_records": "inspect_withdrawals",
+                                "transaction_records":
+                                    "inspect_transactions"}
+                        stream_steps = {_FAM[r] for r in decl
+                                        if r in _FAM}
+                        if len(stream_steps) == 1:
+                            from app.planner_v2 import (
+                                _evidence_stream_anchor as _anchor)
+                            fnd = _anchor(
+                                next(iter(stream_steps)),
+                                [(None, f) for f in findings])
+                            if fnd is not None:
+                                targets = [fnd]
+            if targets is None:
+                steps.append(_PlanStep(
+                    step_id=f"S{next_id}", type=spec.step_type,
+                    reason=(f"{reason_prefix}: contract output "
+                            f"{spec.output_ids[0]} not covered by the "
+                            "proposed plan"),
+                    status=PlanStepStatus.PENDING,
+                    tool_name=binding.tool_name,
+                    arguments=base_args))
+                next_id += 1
+                continue
+            for fnd in targets:
+                args = dict(base_args)
+                args["finding_id"] = fnd.finding_id
+                steps.append(_PlanStep(
+                    step_id=f"S{next_id}-{fnd.finding_id}",
+                    type=spec.step_type,
+                    reason=(f"{reason_prefix}: contract output "
+                            f"{spec.output_ids[0]} anchored at "
+                            f"{fnd.finding_id} (output claim names this "
+                            "finding)"),
+                    status=PlanStepStatus.PENDING,
+                    tool_name=binding.tool_name,
+                    arguments=args))
+                next_id += 1
+        return steps, next_id
+
+    def _strip_delivery_contradicted_artifact_steps(
+            self, plan: Plan, state: AgentLoopState) -> list[dict]:
+        """Deterministic delivery-intent gate over the ADOPTED plan (real
+        execution U00004 TASK-2cba50000104: a policy-citation ask with an
+        all-detail_list contract was planned as a lone generate_artifact
+        step and executed, leaving an orphan artifact). The planner may
+        PROPOSE generate_artifact; the system enforces the accepted
+        contract's delivery intent: with a contract whose outputs are all
+        detail_list, planned generate_artifact steps are stripped and the
+        reason is recorded for audit (planning_diagnostics + log).
+        Contract-less runs keep their legacy artifact behavior unchanged
+        (no delivery signal exists there — the artifact criteria flow
+        depends on it); any file_export output (GU-proposed or assigned by
+        the deterministic split paths) keeps artifact steps allowed.
+
+        Returns the stripped-step audit records (empty when nothing was
+        stripped). Coverage admission, the re-plan identical-collapse
+        comparison, the executor and the postconditions all see the
+        post-strip plan — a stripped step can never be reported as
+        executed."""
+        contract = state.goal_contract
+        if contract is None:
+            return []
+        if any((o.delivery or "detail_list") == "file_export"
+               for o in contract.outputs):
+            return []
+        stripped: list[dict] = []
+        for step in list(plan.steps):
+            if step.type != "generate_artifact":
+                continue
+            plan.steps.remove(step)
+            for other in plan.steps:
+                if step.step_id in (other.depends_on or []):
+                    other.depends_on = [
+                        d for d in (other.depends_on or [])
+                        if d != step.step_id]
+            stripped.append({
+                "step_id": step.step_id, "type": step.type,
+                "reason": "delivery_intent_gate: the accepted contract "
+                          "has no file_export delivery intent"})
+        if stripped:
+            logger.warning(
+                "delivery-intent gate stripped generate_artifact step(s) "
+                "%s — the accepted contract has no file_export delivery "
+                "intent", [s["step_id"] for s in stripped])
+            state.planning_diagnostics = dict(
+                state.planning_diagnostics or {})
+            state.planning_diagnostics["delivery_intent_gate"] = stripped
+        return stripped
+
+    def _resolve_candidate_scope_bindings(self, state: AgentLoopState) -> None:
+        """Plan v2.1: resolve `candidate_scope="prior_candidates"` outputs
+        against the session's candidate_sets. Exactly one resolvable set
+        binds (set_ref); an explicit `CS-…` token in the request wins;
+        multiple sets → ambiguous (clarify; never the most-recent by
+        default); none → unresolved (the bounded planner may re-run the
+        set analysis; the scoped export stays unsatisfied this run)."""
+        sets: list[dict] = []
+        if self.store is not None:
+            try:
+                doc = self.store.get_session(state.investigation_id) or {}
+                # defensive dedup: identical set_refs collapse (real
+                # duplicate: INV-c470162af74f) — they are one set.
+                seen_refs = set()
+                for s in doc.get("candidate_sets") or []:
+                    ref = s.get("set_ref")
+                    if ref and ref not in seen_refs:
+                        seen_refs.add(ref)
+                        sets.append(s)
+            except Exception:
+                logger.exception("candidate_sets read failed")
+        explicit = None
+        m = re.search(r"\bCS-[A-Za-z0-9_-]+", state.goal or "")
+        if m:
+            explicit = m.group(0)
+        bindings: dict = {}
+        # no accepted contract → no scope semantics; nothing to resolve
+        if state.goal_contract is None:
+            return
+        for output in state.goal_contract.outputs:
+            if output.candidate_scope != "prior_candidates":
+                continue
+            if explicit and any(s.get("set_ref") == explicit
+                                for s in sets):
+                entry = next(s for s in sets
+                             if s.get("set_ref") == explicit)
+                bindings[output.output_id] = {
+                    "kind": "candidate_set_export", "status": "bound",
+                    "set_ref": explicit, "entry": entry}
+            elif len(sets) == 1:
+                bindings[output.output_id] = {
+                    "kind": "candidate_set_export", "status": "bound",
+                    "set_ref": sets[0].get("set_ref"),
+                    "entry": sets[0]}
+            elif len(sets) > 1:
+                bindings[output.output_id] = {
+                    "kind": "candidate_set_export", "status": "ambiguous",
+                    "sets": [{"set_ref": s.get("set_ref"),
+                              "created_at": s.get("created_at"),
+                              "source_task_id": s.get("source_task_id"),
+                              "candidates": len(s.get("candidates") or [])}
+                             for s in sets]}
+            else:
+                bindings[output.output_id] = {
+                    "kind": "candidate_set_export", "status": "unresolved"}
+        if bindings:
+            state.scope_bindings = bindings
+
+    def _session_candidate_sets(self, investigation_id: str) -> list[dict]:
+        sets: list[dict] = []
+        if self.store is not None:
+            try:
+                doc = self.store.get_session(investigation_id) or {}
+                sets = list(doc.get("candidate_sets") or [])
+            except Exception:
+                logger.exception("candidate_sets read failed")
+        return sets
+
+    def _apply_candidate_scope_to_plan(self, plan: Plan,
+                                       state: AgentLoopState) -> None:
+        """Plan v2.1: cross-turn candidate-scope export.
+
+        For outputs the GU marked `candidate_scope="prior_candidates"`:
+          - bound (set_ref resolvable) → the generate_artifact step is
+            switched to a deterministic candidate-detail synthesis from
+            the persisted session snapshot (records injected as SYSTEM
+            data, provenance recorded);
+          - unresolved/ambiguous → the artifact step is STRIPPED: the
+            export cannot be verified against a bound scope this run, and
+            a full-stream bundle must never pass for a candidate-scoped
+            ask (the bounded planner may still run the set analysis for
+            the evidence).
+
+        F6 (real failure INV-9cac43a97ac6): an anaphoric export ask whose
+        scope was never structured (no candidate_scope) must not
+        silently deliver a full-stream bundle either — its artifact
+        steps are stripped too, with the named gap recorded. Conservative
+        claim-marker rule over the ACCEPTED claim: blocks only, never
+        inherits or guesses a binding."""
+        if state.scope_bindings is None:
+            state.scope_bindings = {}
+        bindings = state.scope_bindings
+        smap = state.step_output_map or {}
+        # no accepted contract → no scope semantics; nothing to bind/strip
+        if state.goal_contract is None:
+            return
+        outputs = list(state.goal_contract.outputs)
+        by_id = {o.output_id: o for o in outputs}
+
+        def _req_values(o):
+            return {r.value if hasattr(r, "value") else str(r)
+                    for r in (o.evidence_requirements or [])}
+
+        scoped_ids = {o.output_id for o in outputs
+                      if getattr(o, "candidate_scope", None)
+                      == "prior_candidates"}
+        anaphoric_ids = {o.output_id for o in outputs
+                         if _claim_references_prior_detection(o.claim)}
+        strip_ids = set()
+        for output in outputs:
+            oid = output.output_id
+            reqs = _req_values(output)
+            if (oid in anaphoric_ids
+                    and getattr(output, "delivery", "detail_list")
+                    == "file_export"
+                    and reqs & {"opposite_trade_relations",
+                                "transaction_records"}):
+                strip_ids.add(oid)
+        if not scoped_ids and not strip_ids:
+            return
+
+        # pass 1 — bound scopes: switch the artifact step to the
+        # candidate-detail synthesis (records injected by the runner).
+        for output in outputs:
+            if output.output_id not in scoped_ids:
+                continue
+            b = bindings.get(output.output_id) or {}
+            if b.get("status") != "bound" or not b.get("set_ref"):
+                continue
+            for s in plan.steps:
+                if s.type == "generate_artifact":
+                    s.arguments["source_kind"] = "candidate_set"
+                    s.arguments["set_ref"] = b["set_ref"]
+                    s.arguments["bounded_data"] = bool(
+                        b.get("bounded_data"))
+                    s.arguments["source_task_id"] = b.get(
+                        "source_task_id") or state.task_id
+                    # the candidates live INSIDE the resolved entry —
+                    # the binding dict itself carries only the provenance
+                    # envelope (real failure: empty injection → generic
+                    # full-stream export).
+                    s.arguments["candidate_records"] = (
+                        b.get("entry", {}).get("candidates") or [])
+                    b["status"] = "bound_ready"   # injection done
+                    break
+
+        # pass 2 — strip artifact steps for outputs whose candidate scope
+        # could not be delivered (unresolved/ambiguous): never a
+        # full-stream file for these.
+        for step in list(plan.steps):
+            if step.type != "generate_artifact":
+                continue
+            mapped = set(smap.get(step.step_id) or [])
+            if mapped & (scoped_ids | strip_ids):
+                plan.steps.remove(step)
+                if state.scope_bindings is None:
+                    state.scope_bindings = {}
+                for oid in mapped:
+                    b = state.scope_bindings.setdefault(oid, {})
+                    if b.get("status") != "bound_ready":
+                        b["status"] = "unresolved"
+                        b.setdefault("strip_reason",
+                                     "candidate-scoped export could not "
+                                     "be verified this run")
+
+    def _supplement_plan_coverage(self, state: AgentLoopState, plan: Plan,
+                                  findings=None) \
             -> None:
         """GSP-6 coverage completion at INITIAL plan adoption (deterministic,
         general over every planning path): for each accepted contract output
         whose covering step the proposed plan omitted, append its registry
-        eligible step ONCE (subject-pinned for finding subjects). Flag OFF =
+        eligible step ONCE (subject-pinned for finding subjects; per-output
+        finding anchoring for focus-less runs — U00010 F1). Flag OFF =
         byte-for-byte pre-GSP behavior. Completion runs BEFORE coverage
         admission, so admission, the step→output map, and the user-visible
         record all describe a complete plan."""
@@ -2844,6 +3750,39 @@ class AgentLoopRunner:
             return
         from app.planning_coverage import (coverage_insert_index,
                                            coverage_supplement_steps)
+        # B14 rule 2 (U00010 F4): bindings mis-authored BEFORE adoption —
+        # the artifact step was planned bound to a subset of the producers
+        # its contract output requires (e.g. the stream plan binds the file
+        # to its own stream step while the set-internal candidate analysis
+        # sits in the SAME plan). Runs whether or not coverage appends
+        # steps; per-output scoping keeps other artifacts' streams intact.
+        self._repair_artifact_bindings_per_output(plan, contract)
+        # U00010 B1 (EN-plan-quality): a finding-level step serving NO
+        # contract output burns iterations without contributing evidence
+        # (live: an unneeded retrieve_policy starved the file steps).
+        # Deterministic filter — never applies to fetch/artifact steps or
+        # contract-less runs, and never removes steps serving an output.
+        from app.skills import STEP_TOOL_MAP as _STMf
+        served_families: set = set()
+        for o in contract.outputs:
+            served_families |= {getattr(e, "value", str(e)) for e in
+                                (o.evidence_requirements or [])}
+        kept = []
+        for st in plan.steps:
+            if st.type in ("fetch_case", "generate_artifact"):
+                kept.append(st)
+                continue
+            binding = _STMf.get(st.type)
+            decl = {getattr(t, "value", str(t)) for t in
+                    (binding.supported_evidence_types or [])} \
+                if binding else set()
+            if decl and not (decl & served_families):
+                logger.info(
+                    "plan noise filter: dropped %s (%s) — serves no "
+                    "contract output", st.step_id, st.type)
+                continue
+            kept.append(st)
+        plan.steps[:] = kept
         specs = coverage_supplement_steps(contract, plan.steps)
         if not specs:
             return
@@ -2852,25 +3791,19 @@ class AgentLoopRunner:
                     (re.match(r"^S(\d+)$", s.step_id or "")
                      for s in plan.steps) if m]
         next_id = (max(suffixes) if suffixes else len(plan.steps)) + 1
+        new_steps, _next = self._anchored_supplement_steps(
+            state, specs, findings, next_id,
+            "coverage supplement")
         appended: list[tuple] = []
-        for spec in specs:
-            binding = STEP_TOOL_MAP[spec.step_type]
-            args = dict(binding.parameter_locks)
-            if spec.finding_target:
-                args["finding_id"] = spec.finding_target
-            step = _PlanStep(
-                step_id=f"S{next_id}", type=spec.step_type,
-                reason=(f"coverage supplement: contract output "
-                        f"{spec.output_ids[0]} not covered by the "
-                        "proposed plan"),
-                status=PlanStepStatus.PENDING,
-                tool_name=binding.tool_name,
-                arguments=args)
-            next_id += 1
+        for step in new_steps:
             # evidence steps land BEFORE a trailing artifact step so the
             # composed bundle can carry them (answer/artifact consistency)
             plan.steps.insert(coverage_insert_index(plan.steps), step)
-            appended.append((spec, step))
+            appended.append(step)
+        # U00010 B1 (EN-plan-quality): appended records producers get
+        # their per-stream file artifact at INITIAL adoption too — the
+        # file deliverable must exist in the plan the budget executes.
+        self._append_per_stream_pairs(plan, appended)
         _telemetry.emit_event(
             "planning.coverage.supplemented",
             investigation_id=state.investigation_id,
@@ -2879,17 +3812,238 @@ class AgentLoopRunner:
             decision="supplemented",
             summary=json.dumps(
                 {spec.output_ids[0]: spec.step_type
-                 for spec, _ in appended}, ensure_ascii=False),
+                 for spec in specs}, ensure_ascii=False),
             guard_enabled=True)
         logger.info(
             "GSP-6 coverage supplement: appended %s",
-            [(s.step_type, s.output_ids) for s, _ in appended])
+            [(s.step_id, s.type, s.arguments.get("finding_id"))
+             for s in appended])
+        # B14 rule 2 (U00029/U00010 F4/F1): coverage-inserted steps may
+        # produce evidence an EXISTING generate_artifact step needs (its
+        # binding was authored before the insertion). Revise declared
+        # source_step_ids: any inserted step whose evidence types are
+        # required by a contract output joins that artifact's sources —
+        # the bundle then composes from the full required evidence set
+        # instead of a stale subset. Explicitly-declared sources are
+        # never removed.
+        self._revise_artifact_source_bindings(plan, contract, appended)
+
+    def _one_file_one_stream_skip(self, declared_types, producer_types,
+                                  missing):
+        """U00010 B1 (Batch H): ONE deliverable file = ONE record stream.
+        When an artifact's declared sources already carry exactly one
+        record-stream family (withdrawal/transaction), a producer of the
+        OTHER record-stream family must never join it — even when a FUSED
+        contract output nominally requires both (the fused output is then
+        satisfied by the union of the per-stream artifacts, R4). Returns
+        True when the producer must be skipped. Analysis/other evidence
+        families (opposite_trade_relations, rule_explanation, …) are not
+        affected."""
+        from app.goal_resolution import EvidenceType
+        families = {EvidenceType.WITHDRAWAL_RECORDS.value,
+                    EvidenceType.TRANSACTION_RECORDS.value}
+        declared_families = declared_types & families
+        if len(declared_families) != 1:
+            return False
+        producer_families = producer_types & families
+        return bool(producer_families) and not (producer_families
+                                                <= declared_families)
+
+    def _append_per_stream_pairs(self, plan, appended_steps) -> None:
+        """U00010 B1 (EN-plan-quality): every appended RECORDS producer
+        gets its per-stream artifact pair — the file the user asked for
+        is only delivered when a producer exists AND an artifact binds
+        it (proven zh stream-plan shape). Used at initial adoption AND
+        re-plan supplementation."""
+        from app.models import PlanStep as _PairStep
+        _fam_of_type = {"inspect_withdrawals": "withdrawal_records",
+                        "inspect_transactions": "transaction_records"}
+        # a family already covered by a BOUND artifact (LLM-declared
+        # source_streams or a stable reference) never gets a second file
+        covered_families: set = set()
+        for st in plan.steps:
+            if st.type == "generate_artifact":
+                covered_families |= {
+                    str(x) for x in (st.arguments or {})
+                    .get("source_streams", [])}
+        for _ps in appended_steps:
+            _fam = _fam_of_type.get(_ps.type)
+            if not _fam:
+                continue
+            if _fam in covered_families:
+                continue
+            if any(st.type == "generate_artifact"
+                   and _ps.step_id in (st.arguments or {})
+                   .get("source_step_ids", [])
+                   for st in plan.steps):
+                continue
+            plan.steps.append(PlanStep(
+                step_id=f"S{len(plan.steps) + 1}",
+                type="generate_artifact",
+                reason=(f"per-stream file for the supplemented "
+                        f"{_ps.step_id} records producer "
+                        "(one file = one stream)"),
+                status=PlanStepStatus.PENDING,
+                tool_name="artifact_bundle",
+                arguments={"source_step_ids": [_ps.step_id],
+                           "source_streams": [_fam]}))
+
+    def _repair_artifact_bindings_per_output(self, plan, contract) -> int:
+        """B14 rule 2 (U00010 F4): repair an artifact binding authored
+        before all producer steps existed in the plan. Per-OUTPUT rule:
+        the artifact's EXISTING declared sources identify the contract
+        output(s) it serves (evidence-type intersection); only THOSE
+        outputs' still-uncovered requirements pull in additional producer
+        steps — a multi-stream plan's other artifacts keep their own
+        scopes (the F1 withdrawal file must never gain the transaction
+        stream or the rule-explanation steps). No output matches the
+        declared sources → no revision (never guessed). Sources are never
+        removed. Returns the number of artifacts revised."""
+        if contract is None:
+            return 0
+        from app.skills import STEP_TOOL_MAP
+
+        def _etypes(step):
+            binding = STEP_TOOL_MAP.get(step.type)
+            return {t.value if hasattr(t, "value") else str(t)
+                    for t in (binding.supported_evidence_types or [])} \
+                if binding else set()
+
+        def _reqs(output):
+            return {e.value if hasattr(e, "value") else str(e)
+                    for e in (output.evidence_requirements or [])}
+
+        by_id = {s.step_id: s for s in plan.steps}
+        revised = 0
+        for g in [s for s in plan.steps if s.type == "generate_artifact"]:
+            declared = list(g.arguments.get("source_step_ids") or [])
+            if not declared:
+                continue
+            declared_types: set = set()
+            for sid in declared:
+                ps = by_id.get(sid)
+                if ps is not None:
+                    declared_types |= _etypes(ps)
+            if not declared_types:
+                continue
+            serving = [o for o in contract.outputs
+                       if declared_types & _reqs(o)]
+            if not serving:
+                continue
+            required: set = set()
+            for o in serving:
+                required |= _reqs(o)
+            missing = required - declared_types
+            if not missing:
+                continue
+            for p in plan.steps:
+                if p.type == "generate_artifact" or p.step_id in declared:
+                    continue
+                p_types = _etypes(p)
+                if p_types & missing:
+                    if self._one_file_one_stream_skip(declared_types,
+                                                      p_types, missing):
+                        logger.info(
+                            "B14 one-file-one-stream: %s not joined to "
+                            "%s (different record stream)",
+                            p.step_id, g.step_id)
+                        continue
+                    declared.append(p.step_id)
+                    declared_types |= p_types
+                    missing = required - declared_types
+                    if not missing:
+                        break
+            if len(declared) > len(g.arguments.get("source_step_ids") or []):
+                # assign even when partially covered: the bundle must carry
+                # every producer that EXISTS; outputs whose remaining
+                # required evidence has no producer stay honestly uncovered
+                g.arguments["source_step_ids"] = declared
+                revised += 1
+        if revised:
+            logger.info(
+                "B14 rule 2 per-output repair: revised %s artifact "
+                "binding(s) at adoption", revised)
+        return revised
+
+    def _revise_artifact_source_bindings(self, plan, contract,
+                                         inserted_steps) -> None:
+        """B14 rule 2: when steps producing evidence required by a
+        contract output are inserted after an artifact step was authored,
+        extend that artifact step's declared source_step_ids with the
+        inserted steps. Per-OUTPUT scoping (U00010 F1): an artifact with
+        DECLARED sources serves the outputs its sources' evidence types
+        intersect — only THOSE outputs' uncovered requirements pull in
+        inserted steps (a multi-stream plan's withdrawal file must never
+        gain the transaction stream or the rule-explanation steps). An
+        artifact with NO declared sources keeps the whole-contract union
+        fallback (the bundle composes from the full required evidence
+        set). Declared sources are never removed; already-covered
+        evidence is not re-added. No-op without a contract."""
+        if contract is None or not inserted_steps:
+            return
+        from app.skills import STEP_TOOL_MAP
+
+        def _evidence_types(step):
+            binding = STEP_TOOL_MAP.get(step.type)
+            return {t.value if hasattr(t, "value") else str(t)
+                    for t in (binding.supported_evidence_types or [])} \
+                if binding else set()
+
+        def _reqs(output):
+            return {e.value if hasattr(e, "value") else str(e)
+                    for e in (output.evidence_requirements or [])}
+
+        union_required: set = set()
+        for o in contract.outputs:
+            union_required |= _reqs(o)
+        for g in [s for s in plan.steps if s.type == "generate_artifact"]:
+            declared = list(g.arguments.get("source_step_ids") or [])
+            declared_types: set = set()
+            for sid in declared:
+                for ps in plan.steps:
+                    if ps.step_id == sid:
+                        declared_types |= _evidence_types(ps)
+            if declared and declared_types:
+                # per-output scoping: the declared sources identify the
+                # outputs this artifact serves
+                serving = [o for o in contract.outputs
+                           if declared_types & _reqs(o)]
+                if not serving:
+                    continue
+                required: set = set()
+                for o in serving:
+                    required |= _reqs(o)
+            else:
+                required = union_required
+            missing = required - declared_types
+            if not missing:
+                continue
+            for ins in inserted_steps:
+                types = _evidence_types(ins)
+                if (types & missing and ins.step_id not in declared
+                        and not self._one_file_one_stream_skip(
+                            declared_types, types, missing)):
+                    declared.append(ins.step_id)
+                    declared_types |= types
+                    missing = required - declared_types
+                    if not missing:
+                        break
+            if len(declared) > len(g.arguments.get("source_step_ids") or []):
+                g.arguments["source_step_ids"] = declared
 
     def _plan(self, planner, goal, ctx, eligible_ids, caps,
               goal_contract=None, findings=None):
         """Returns (plan | None, bounded_failure_code | None). The failure
         code surfaces in the loop state so planning failures are
-        diagnosable from the activity trace (QA-01 retest observability)."""
+        diagnosable from the activity trace (QA-01 retest observability).
+
+        U00008 diagnostics wiring fix: the diagnostics live on the planner
+        INSTANCE that actually executed this planning — when production
+        passes planner=None, the instance created HERE is the only place
+        they exist, so they are captured on the runner (previously the
+        loop read them from runner.planner=None and every LLM attempt
+        looked like `detail: null`). None ⇒ the LLM was not called
+        (deterministic planning path)."""
         if planner is None:
             from app.planner_v2 import PlannerV2
             planner = PlannerV2()
@@ -2897,6 +4051,8 @@ class AgentLoopRunner:
                               finding_capabilities=caps,
                               goal_contract=goal_contract,
                               case_findings=findings)
+        self._last_plan_llm_diagnostics = getattr(
+            planner, "last_llm_diagnostics", None)
         if hasattr(result, "steps"):
             return result, None
         return None, getattr(result, "code", None) or "PLANNING_FAILURE"
@@ -3004,30 +4160,128 @@ class AgentLoopRunner:
         if gsp_on and state.goal_contract is not None:
             from app.planning_coverage import (coverage_insert_index,
                                                coverage_supplement_steps)
-            from app.models import PlanStep as _PlanStep
             specs = coverage_supplement_steps(
                 state.goal_contract, result.steps, skip_satisfied=True)
             if specs:
-                _sid = len(result.steps)
-                for spec in specs:
-                    _sid += 1
-                    binding = STEP_TOOL_MAP[spec.step_type]
-                    args = dict(binding.parameter_locks)
-                    if spec.finding_target:
-                        args["finding_id"] = spec.finding_target
-                    result.steps.insert(
-                        coverage_insert_index(result.steps),
-                        _PlanStep(
-                            step_id=f"S{_sid}", type=spec.step_type,
-                            reason=("bounded supplement: contract output "
-                                    f"{spec.output_ids[0]} not covered by "
-                                    "the re-planned script"),
-                            status=PlanStepStatus.PENDING,
-                            tool_name=binding.tool_name,
-                            arguments=args))
+                _sid = len(result.steps) + 1
+                new_steps, _ = self._anchored_supplement_steps(
+                    state, specs, findings, _sid,
+                    "bounded supplement")
+                for step in new_steps:
+                    result.steps.insert(coverage_insert_index(result.steps),
+                                        step)
+                # U00010 B1 (EN-replan): appended records producers get
+                # their per-stream artifact pair (same invariant as the
+                # initial-adoption site).
+                self._append_per_stream_pairs(result, new_steps)
+                logger.info(
+                    "GSP bounded supplement: appended %s",
+                    [(s.step_id, s.type, s.arguments.get("finding_id"))
+                     for s in new_steps])
+        # U00010 B1 (EN-replan): a file-delivery output keeps its records
+        # producer across re-plans. If a records producer already
+        # SUCCEEDED in this run but the re-planned plan neither serves
+        # the stream nor binds the prior step, append a per-stream
+        # artifact bound to the prior step (STABLE REFERENCE: the bundle
+        # composes from the existing successful evidence via its
+        # TC-<step_id>- id prefix — no duplicate re-fetch, no hollow
+        # shell). Satisfaction-by-conversation evidence never substitutes
+        # for the file the user asked for.
+        if gsp_on and state.goal_contract is not None:
+            from app.models import PlanStep as _PlanStep
+            from app.goal_resolution import EvidenceType as _ET
+            _family_stream = {_ET.WITHDRAWAL_RECORDS.value: "withdrawals",
+                              _ET.TRANSACTION_RECORDS.value: "transactions"}
+            _stream_fam = {v: k for k, v in _family_stream.items()}
+            # prior successful records producers in THIS run
+            prior: dict = {}
+            for ref in state.plan_steps:
+                if ref.get("status") != "success":
+                    continue
+                stream = (ref.get("arguments") or {}).get("stream")
+                if stream in prior:
+                    continue
+                if stream in _stream_fam:
+                    prior[stream] = ref.get("step_id")
+            for out in state.goal_contract.outputs:
+                reqs = {getattr(e, "value", str(e)) for e in
+                        (out.evidence_requirements or [])}
+                for fam, stream in _family_stream.items():
+                    if fam not in reqs or stream not in prior:
+                        continue
+                    sid = prior[stream]
+                    served = any(
+                        STEP_TOOL_MAP.get(st.type) is not None
+                        and fam in {getattr(t, "value", str(t)) for t in
+                                    (STEP_TOOL_MAP[st.type]
+                                     .supported_evidence_types or [])}
+                        for st in result.steps)
+                    bound = any(
+                        st.type == "generate_artifact"
+                        and sid in (st.arguments or {})
+                        .get("source_step_ids", [])
+                        for st in result.steps)
+                    if served or bound:
+                        continue
+                    result.steps.append(_PlanStep(
+                        step_id=f"S{len(result.steps) + 1}",
+                        type="generate_artifact",
+                        reason=(f"stable reference: the successful "
+                                f"{stream} records step {sid} delivers "
+                                f"output {out.output_id} (re-plan must "
+                                "not drop a file producer)"),
+                        status=PlanStepStatus.PENDING,
+                        tool_name="artifact_bundle",
+                        arguments={"source_step_ids": [sid],
+                                   "source_streams": [fam]}))
                     logger.info(
-                        "GSP bounded supplement: appended %s for output %s",
-                        spec.step_type, spec.output_ids[0])
+                        "re-plan stable reference: %s artifact bound to "
+                        "prior successful %s step %s", fam, stream, sid)
+        # U00010 B1 (EN-loose-artifact): in a records-file run, a LOOSE
+        # generate_artifact (no declared producers) can no longer deliver
+        # anything legitimate once every contract-required record stream
+        # is covered by a properly BOUND per-stream artifact — its only
+        # possible content is the cross-stream explain/policy soup that
+        # shipped the 1,100-char shell (ART-691254bf9c). Remove it
+        # deterministically. Artifacts WITH declared producers are never
+        # touched (hedge files, per-stream pairs, stable references),
+        # and runs with no records-family requirement keep their
+        # artifacts (non-records contracts are out of scope for this
+        # invariant).
+        # A contractless re-plan (contract rejected, or flag OFF — no
+        # contract is ever produced) has NO required record families, so
+        # this filter is a no-op there: skip it with the SAME precondition
+        # as the two sibling blocks above (live: TASK-3a6c011cf659
+        # AttributeError on a subject_mismatch rejection).
+        if gsp_on and state.goal_contract is not None:
+            required_record_fams = set()
+            for out in state.goal_contract.outputs:
+                required_record_fams |= {
+                    getattr(e, "value", str(e))
+                    for e in (out.evidence_requirements or [])
+                } & set(_family_stream)
+            if required_record_fams:
+                bound_families: set = set()
+                for g in [x for x in result.steps
+                          if x.type == "generate_artifact"]:
+                    bound_families |= {
+                        str(x) for x in (g.arguments or {})
+                        .get("source_streams", [])}
+                if required_record_fams <= bound_families:
+                    loose = [x for x in result.steps
+                             if x.type == "generate_artifact"
+                             and not (x.arguments or {})
+                             .get("source_step_ids")]
+                    if loose:
+                        dropped = [x.step_id for x in loose]
+                        result.steps = [x for x in result.steps
+                                        if x not in loose]
+                        logger.info(
+                            "re-plan loose-artifact filter: dropped %s — "
+                            "all required record streams (%s) are bound "
+                            "covered; an unbound artifact can only compose "
+                            "cross-stream soup", dropped,
+                            sorted(required_record_fams))
         return result
 
     def _revision_acquisition_added_no_new_info(self, state) -> bool:
@@ -3063,6 +4317,27 @@ class AgentLoopRunner:
                     ref["status"] = ps.status.value
 
     def _adopt_plan(self, state: AgentLoopState, plan: Plan) -> None:
+        # U00010 B1 (Batch H): stamp each artifact's declared record
+        # stream(s) so the bundle tool can verify content-vs-declaration
+        # at the deliverable boundary (one file = one stream).
+        from app.skills import STEP_TOOL_MAP as _STM
+        from app.goal_resolution import EvidenceType as _ET
+        _families = {_ET.WITHDRAWAL_RECORDS.value,
+                     _ET.TRANSACTION_RECORDS.value}
+        by_id = {s.step_id: s for s in plan.steps}
+        for g in [s for s in plan.steps if s.type == "generate_artifact"]:
+            streams: set = set()
+            for sid in (g.arguments or {}).get("source_step_ids") or []:
+                ps = by_id.get(sid)
+                binding = _STM.get(ps.type) if ps is not None else None
+                if binding is None:
+                    continue
+                for t in (binding.supported_evidence_types or []):
+                    v = t.value if hasattr(t, "value") else str(t)
+                    if v in _families:
+                        streams.add(v)
+            if streams:
+                g.arguments["source_streams"] = sorted(streams)
         state.plan_id = plan.plan_id
         state.plan_revisions += 1
         # snapshot carries arguments: required for AL-1 recovery (a
@@ -3164,7 +4439,10 @@ class AgentLoopRunner:
         return AgentLoopResult(state=state,
                                response=compose_loop_response(state),
                                task=task,
-                               artifacts=list(artifacts or []))
+                               artifacts=list(artifacts or []),
+                               tool_calls=list(
+                                   getattr(self, "last_run_tool_calls",
+                                           None) or []))
 
     def _apply_records_artifact_satisfaction(
             self, state, task, provenance_pool, produced_artifacts):
@@ -3444,6 +4722,15 @@ class AgentLoopRunner:
 # User-safe terminal response (bounded; explains WHY execution stopped)
 # ---------------------------------------------------------------------------
 
+def _turn_lang(state) -> str | None:
+    """This run's per-turn response language ("zh"/"en"); None when
+    undeterminable — callers then keep their historical default face
+    byte-for-byte (per-turn language rule: decided by the CURRENT user
+    request only, never by history, goals, or tool payloads)."""
+    lang = getattr(state, "response_language", None)
+    return lang if lang in ("zh", "en") else None
+
+
 _STATUS_PHRASES = {
     AgentStatus.COMPLETED.value: "The investigation completed.",
     AgentStatus.STOPPED_BY_LIMIT.value: (
@@ -3552,13 +4839,34 @@ def _signal_answer_lines(s: dict[str, Any],
         return lines
     if s.get("evidence_missing"):
         return ["信号解释:Risk Platform 未提供该发现的规则/模型归因明细"
-                "(数据不足,如实报告);上方为本发现自身的信号与摘要。"]
+                "(数据不足,如实报告);上方为本发现自身的信号与摘要。"
+                if lang != "en" else
+                "Signal explanation: the Risk Platform provides no "
+                "rule/model attribution detail for this finding "
+                "(insufficient data, reported as such); the finding's own "
+                "signal and summary are shown above."]
     lines: list[str] = []
     if s.get("rule_name"):
         trig = s.get("trigger_values") or {}
         observed = ", ".join(
             f"{_feature_label(k)} = {v}" for k, v in trig.items())
         desc = (s.get("rule_description") or "").strip()
+        if lang == "en":
+            parts = [f"Risk signal: rule '{s['rule_name']}' triggered"]
+            if observed:
+                parts.append(f"observed {observed}")
+            if desc:
+                parts.append(f"rule description: '{desc}'")
+            if s.get("threshold"):
+                parts.append("the rule condition is "
+                             f"{_humanize_threshold(s['threshold'])}")
+            if s.get("contribution") is not None:
+                parts.append("contribution to the risk score: "
+                             f"{s['contribution']}")
+            lines.append(" — ".join(parts) + ". That is: this behavior met "
+                         "the rule's trigger condition and was therefore "
+                         "flagged as a risk item.")
+            return lines
         parts = [f"风险信号:规则「{s['rule_name']}」触发"]
         if observed:
             parts.append(f"观测到 {observed}")
@@ -3582,6 +4890,19 @@ def _signal_answer_lines(s: dict[str, Any],
             parts.append(f"{s['member_count']} accounts in the cluster")
         if s.get("cluster_risk_score") is not None:
             parts.append(f"cluster risk score {s['cluster_risk_score']}")
+        if lang == "en":
+            lines.append("Risk signal: graph detection places this account "
+                         "inside a risk network — "
+                         + ", ".join(parts) + ".")
+            devices = s.get("shared_devices") or []
+            if devices:
+                lines.append("Currently confirmed shared devices: "
+                             + "; ".join(str(d) for d in devices) + ".")
+            accounts = s.get("related_accounts") or []
+            if accounts:
+                lines.append("Related accounts: "
+                             + ", ".join(str(a) for a in accounts) + ".")
+            return lines
         lines.append("风险信号:图关系检测发现该账号处于风险网络中 — "
                      + ", ".join(parts) + "。")
         devices = s.get("shared_devices") or []
@@ -3590,8 +4911,17 @@ def _signal_answer_lines(s: dict[str, Any],
                          + "; ".join(str(d) for d in devices) + "。")
         accounts = s.get("related_accounts") or []
         if accounts:
-            lines.append("相关账号:" + ", ".join(str(a) for a in accounts)
-                         + "。")
+            total = s.get("related_accounts_total")
+            is_preview = s.get("related_accounts_preview") is True
+            if is_preview and total and len(accounts) < total:
+                lines.append(
+                    "同一集群中的关联账号（图证据样例，非完整清单，"
+                    f"共 {total} 个关联账号，显示前 {len(accounts)} 个）: "
+                    + ", ".join(str(a) for a in accounts)
+                    + f"。完整的关联账号清单可通过关联账号网络分析查看。")
+            else:
+                lines.append("相关账号:" + ", ".join(str(a) for a in accounts)
+                             + "。")
         return lines
     if s.get("feature_facts"):
         feats = s["feature_facts"]
@@ -3601,6 +4931,32 @@ def _signal_answer_lines(s: dict[str, Any],
         more = (f"(前 5 项,共 {len(feats)} 项)" if len(feats) > 5 else "")
         rf = s.get("risk_factor") or {}
         severity = (rf.get("severity") if isinstance(rf, dict) else None)
+        if lang == "en":
+            more_en = (f"(first 5 of {len(feats)})"
+                       if len(feats) > 5 else "")
+            lines.append("Risk signal: this entry is a behavioral-feature "
+                         "observation record"
+                         + (f" (risk-factor record, severity {severity})"
+                            if severity else "")
+                         + "; the existence of an observation record does "
+                         "NOT mean a rule triggered — "
+                         + (f"observed {shown}{more_en}." if shown else ""))
+            # Consistency II: reconcile the feature-window metric with the
+            # broader exposed detail population (both numbers traceable).
+            lines.extend(_render_population_reconciliation(s, lang=lang))
+            finding_statement = (s.get("finding_summary") or "").strip()
+            if finding_statement:
+                lines.append("Risk Platform's authoritative statement for "
+                             f"this finding: {finding_statement}")
+            lines.append("The account's actual behavioral feature values "
+                         "are the grounds on which the Risk Platform "
+                         "flagged this finding. The current RP data "
+                         "provides no feature attribution, so it cannot be "
+                         "asserted how much any specific feature "
+                         "contributed to the score; the system does not "
+                         "reconstruct or infer thresholds or trigger "
+                         "states.")
+            return lines
         lines.append("风险信号:该条目为行为特征观察记录"
                      + (f"（风险因子记录，严重度 {severity}）"
                         if severity else "")
@@ -3629,12 +4985,14 @@ def _feature_label(key: str) -> str:
         return key
 
 
-def _evidence_answer_lines(state: AgentLoopState) -> list[str]:
+def _evidence_answer_lines(state: AgentLoopState,
+                           lang: str = "zh") -> list[str]:
     """COMPLETE-scope evidence rendering (AL-2.12 Issue C): an explicit
     detail request is answered by the FULL record set the tool returned —
     as a compact table — never by examples. Bounded display (20 rows) is
     disclosed explicitly and never presented as complete. Identical
     repeated observations render once (AL-2.13)."""
+    en = lang == "en"
     lines: list[str] = []
     empty_streams: list[str] = []
     seen: set[str] = set()
@@ -3655,17 +5013,29 @@ def _evidence_answer_lines(state: AgentLoopState) -> list[str]:
             if obs.get("outcome") == ToolResultOutcome.EMPTY.value:
                 streams = s.get("streams") or {}
                 empty_streams.append(
-                    "提现" if streams.get("withdrawals_included")
-                    else "交易" if streams.get("transactions_included")
-                    else "记录级")
+                    ("withdrawal" if streams.get("withdrawals_included")
+                     else "transaction"
+                     if streams.get("transactions_included")
+                     else "record-level") if en else
+                    ("提现" if streams.get("withdrawals_included")
+                     else "交易" if streams.get("transactions_included")
+                     else "记录级"))
             continue
         count = s.get("record_count") or len(rows)
         streams = s.get("streams") or {}
-        stream_txt = ("提现记录" if streams.get("withdrawals_included")
-                      else "交易记录" if streams.get("transactions_included")
-                      else "证据记录")
-        lines.append(f"完整证据共 {count} 条({stream_txt})：")
-        lines.extend(_render_population_reconciliation(s))
+        stream_txt = (
+            ("withdrawal records"
+             if streams.get("withdrawals_included")
+             else "transaction records"
+             if streams.get("transactions_included")
+             else "evidence records") if en else
+            ("提现记录" if streams.get("withdrawals_included")
+             else "交易记录" if streams.get("transactions_included")
+             else "证据记录"))
+        lines.append(
+            f"Complete evidence — {count} records ({stream_txt}):"
+            if en else f"完整证据共 {count} 条({stream_txt})：")
+        lines.extend(_render_population_reconciliation(s, lang=lang))
         # WP-GS-B: per-record destination identifiers (when the evidence
         # view's comparison facts are present) surface in the table so
         # users can verify same-vs-different destinations themselves.
@@ -3674,7 +5044,9 @@ def _evidence_answer_lines(state: AgentLoopState) -> list[str]:
                   or []):
             for rid in (g.get("record_ids") or []):
                 dest_by_record[rid] = g
-        lines.append("| # | 记录 ID | 时间 | 目的地 | 明细 |")
+        lines.append(
+            "| # | Record ID | Time | Destination | Details |" if en else
+            "| # | 记录 ID | 时间 | 目的地 | 明细 |")
         lines.append("|---|---|---|---|---|")
         for i, r in enumerate(rows, 1):
             d = dest_by_record.get(r.get("record_id"))
@@ -3685,11 +5057,18 @@ def _evidence_answer_lines(state: AgentLoopState) -> list[str]:
                          f"{dest_cell} | "
                          f"{r.get('summary', '')} |")
         if s.get("rows_truncated"):
-            lines.append(f"（显示前 {len(rows)} 条;完整集合共 {count} 条,"
-                         "受对话显示上限约束,全量见本任务的证据结果）")
+            lines.append(
+                f"(showing the first {len(rows)} of {count} records; "
+                "bounded by the dialogue display limit — the complete set "
+                "is in this task's evidence result)" if en else
+                f"（显示前 {len(rows)} 条;完整集合共 {count} 条,"
+                "受对话显示上限约束,全量见本任务的证据结果）")
         else:
-            lines.append(f"以上为 Risk Platform 权威证据的全部 {count} 条"
-                         "记录。")
+            lines.append(
+                f"The {count} records above are the Risk Platform's "
+                "complete authoritative evidence." if en else
+                f"以上为 Risk Platform 权威证据的全部 {count} 条"
+                "记录。")
     return lines, empty_streams
 
 
@@ -3698,11 +5077,13 @@ def _case_level_answer_lines(state: AgentLoopState) -> list[str]:
     business question in the conversation. Identical repeated
     observations (a re-plan re-running the same deterministic query) are
     rendered ONCE — a repeated execution is not new information."""
+    en = _turn_lang(state) == "en"
     lines: list[str] = []
     seen: set[str] = set()
     for obs in state.observations:
         if obs.get("tool_name") not in ("cross_account_trade_analysis",
-                                        "related_account_analysis"):
+                                        "related_account_analysis",
+                                        "risk_case_fetch"):
             continue
         if obs.get("outcome") != ToolResultOutcome.SUCCESS.value:
             continue
@@ -3711,6 +5092,50 @@ def _case_level_answer_lines(state: AgentLoopState) -> list[str]:
             continue                        # identical result — deduped
         if fp:
             seen.add(fp)
+        if obs.get("tool_name") == "risk_case_fetch":
+            # U00033 answer closure: a case-intake run's fetch result IS
+            # the case overview — render it from the bounded summary
+            # whitelist (count, risk level/score, finding id+title).
+            s = obs.get("summary") or {}
+            n = s.get("finding_count")
+            if n is None:
+                continue
+            case_id = state.case_id
+            level = s.get("risk_level")
+            score = s.get("risk_score")
+            _en = _turn_lang(state) == "en"
+            if _en:
+                head = (f"Case {case_id} overview: the Risk Platform "
+                        f"retrieved {n} identified risk findings")
+                if level:
+                    head += f", overall risk level {level}"
+                if score is not None:
+                    head += f" (risk score {score:g})"
+                lines.append(head + ".")
+            else:
+                head = (f"案例 {case_id} 概况:Risk Platform 检索到 {n} 条"
+                        "已识别的风险发现")
+                if level:
+                    head += f"，总体风险等级 {level}"
+                if score is not None:
+                    head += f"（风险分 {score:g}）"
+                lines.append(head + "。")
+            findings_shown = s.get("findings") or []
+            for f in findings_shown[:10]:
+                summary = (f.get("summary") or "").strip()
+                if summary:
+                    lines.append(
+                        f"- {f.get('id')} {f.get('title', '')}: {summary}")
+                else:
+                    lines.append(f"- {f.get('id')} {f.get('title', '')}")
+            shown = len(findings_shown)
+            if shown < n:
+                lines.append(
+                    f"（对话内列出前 {shown} 条；完整清单见证据包与"
+                    "发现面板）" if not _en else
+                    f"(first {shown} listed; the complete set is in the "
+                    "evidence bundle and the Findings panel)")
+            continue
         if obs.get("tool_name") == "cross_account_trade_analysis":
             s = obs.get("summary") or {}
             status = obs.get("semantic_status")
@@ -3731,7 +5156,16 @@ def _case_level_answer_lines(state: AgentLoopState) -> list[str]:
                     "计算,分子为较少一侧的交易笔数（min(BUY, SELL)）,"
                     "分母为该账户交易总笔数。它衡量的是同一账户内的买卖"
                     "平衡,不是跨账户匹配率,与下面的跨账户调查结果相互"
-                    "独立。")
+                    "独立。" if not en else
+                    f"About the reverse-trade rate: {ratio:.2%} "
+                    "(opposite_trade_ratio) is account "
+                    f"{target}'s OWN opposite-trade ratio: computed over "
+                    "that account's own trade stream, the numerator is "
+                    "the smaller side's trade count (min(BUY, SELL)) and "
+                    "the denominator is the account's total trades. It "
+                    "measures same-account buy/sell balance, NOT a "
+                    "cross-account match rate, and is independent of the "
+                    "cross-account investigation below.")
             # Case-4 correction scope echo: what the analysis actually
             # retrieved (target stream + counterparty window stream).
             scope_parts: list[str] = []
@@ -3742,13 +5176,26 @@ def _case_level_answer_lines(state: AgentLoopState) -> list[str]:
                     f"目标账户 {target} 的交易 "
                     f"{t_ret.get('transactions_retrieved', 0)} 笔"
                     + ("（检索不完整）" if t_ret.get("truncated")
-                       else "（完整检索）"))
+                       else "（完整检索）")
+                    if not en else
+                    f"{t_ret.get('transactions_retrieved', 0)} trades of "
+                    f"target account {target}"
+                    + (" (retrieval incomplete)"
+                       if t_ret.get("truncated")
+                       else " (complete retrieval)"))
             if isinstance(c_ret, dict) and c_ret:
                 scope_parts.append(
                     "对手账户在匹配可达时间窗内的交易 "
                     f"{c_ret.get('transactions_retrieved', 0)} 笔"
                     f"（{c_ret.get('accounts_queried', 0)} 个关联账户"
-                    + ("，检索不完整）" if c_ret.get("truncated") else "）"))
+                    + ("，检索不完整）" if c_ret.get("truncated") else "）")
+                    if not en else
+                    f"{c_ret.get('transactions_retrieved', 0)} trades of "
+                    "counterparty accounts within the matchable time "
+                    f"window ({c_ret.get('accounts_queried', 0)} related "
+                    "accounts"
+                    + (", retrieval incomplete)"
+                       if c_ret.get("truncated") else ")"))
             if status == "MATCH_FOUND":
                 n = s.get("candidates_found")
                 if target:
@@ -3756,32 +5203,60 @@ def _case_level_answer_lines(state: AgentLoopState) -> list[str]:
                         f"有。关于账户 {target} 的跨账户对冲调查:在当前"
                         f"检索范围内发现 {n} 个涉及 {target} 的候选跨"
                         "账户对冲交易关系（每个候选都包含该账户的一笔"
-                        "交易）。")
+                        "交易）。" if not en else
+                        f"Yes. Cross-account hedging investigation for "
+                        f"account {target}: within the retrieved scope, "
+                        f"{n} candidate cross-account hedging relations "
+                        f"involving {target} were found (each candidate "
+                        "includes one trade of that account).")
                 else:
                     lines.append(
                         f"有。在当前检索范围内发现 {n} 个候选跨账户对冲"
-                        "交易关系。")
+                        "交易关系。" if not en else
+                        f"Yes. Within the retrieved scope, {n} candidate "
+                        "cross-account hedging trade relations were "
+                        "found.")
                 delta = s.get("max_time_delta_seconds")
                 rel = s.get("value_tolerance_relative")
                 if delta is not None and rel is not None:
                     lines.append(
                         f"匹配条件:两笔交易时间相差不超过 {delta:g} 秒,"
                         f"且价值差异在 {rel:.0%} 以内。这些候选关系是量化"
-                        "匹配的调查线索,不构成对操纵或交易意图的结论。")
+                        "匹配的调查线索,不构成对操纵或交易意图的结论。"
+                        if not en else
+                        f"Matching criteria: the two trades are at most "
+                        f"{delta:g}s apart and their value difference is "
+                        f"within {rel:.0%}. These candidate relations are "
+                        "quantitative matching leads for investigation — "
+                        "not conclusions about manipulation or trading "
+                        "intent.")
                 if scope_parts:
-                    lines.append("分析范围:" + ";".join(scope_parts) + "。")
+                    lines.append("分析范围:" + ";".join(scope_parts) + "。"
+                                 if not en else
+                                 "Analysis scope: " + ";".join(scope_parts)
+                                 + ".")
                 retrieval = s.get("retrieval") or {}
                 if isinstance(retrieval, dict) and retrieval.get(
                         "truncated"):
                     lines.append(
                         "注意:本次检索受到系统预算限制,覆盖范围不完整,"
-                        "因此不能据此证明未检索范围内不存在更多关系。")
+                        "因此不能据此证明未检索范围内不存在更多关系。"
+                        if not en else
+                        "Note: this retrieval was bounded by the system "
+                        "budget and its coverage is incomplete, so the "
+                        "absence of further relations beyond the retrieved "
+                        "range cannot be concluded from it.")
                 cands = s.get("candidates") or []
                 if cands:
-                    lines.append("已发现的候选关系如下：")
-                    lines.append("| # | 候选 | 账户 A | 方向 | 账户 B | "
-                                 "方向 | 币种 | 时间差(s) | 价值 A | "
-                                 "价值 B | 差异 | 交易 |")
+                    lines.append("已发现的候选关系如下：" if not en else
+                                 "The candidate relations found:")
+                    lines.append(
+                        "| # | Candidate | Account A | Side | Account B "
+                        "| Side | Symbol | Gap(s) | Value A | Value B | "
+                        "Diff | Trades |" if en else
+                        "| # | 候选 | 账户 A | 方向 | 账户 B | "
+                        "方向 | 币种 | 时间差(s) | 价值 A | "
+                        "价值 B | 差异 | 交易 |")
                     lines.append("|---|---|---|---|---|---|---|---:|---:|"
                                  "---:|---:|---|")
                     for i, cd in enumerate(cands, 1):
@@ -3805,20 +5280,45 @@ def _case_level_answer_lines(state: AgentLoopState) -> list[str]:
                         f"没有。在当前检索范围内未发现涉及账户 {target} "
                         "的满足匹配条件的跨账户对冲交易候选关系。该结论"
                         "仅适用于已分析的账户与数据窗口;其他账户之间的"
-                        f"候选关系不会作为 {target} 的对冲证据。")
+                        f"候选关系不会作为 {target} 的对冲证据。"
+                        if not en else
+                        f"No. Within the retrieved scope, no "
+                        "cross-account hedging candidates meeting the "
+                        f"matching criteria involve account {target}. "
+                        "This conclusion applies only to the analyzed "
+                        "accounts and data window; candidate relations "
+                        "between other accounts are not treated as "
+                        f"hedging evidence for {target}.")
                 else:
                     lines.append(
                         "没有。在当前检索范围内未发现满足匹配条件的跨账户"
                         "对冲交易关系。该结论仅适用于已分析的账户与数据"
-                        "窗口。")
+                        "窗口。" if not en else
+                        "No. Within the retrieved scope, no "
+                        "cross-account hedging trade relations meeting "
+                        "the matching criteria were found. This "
+                        "conclusion applies only to the analyzed accounts "
+                        "and data window.")
                 if scope_parts:
-                    lines.append("分析范围:" + ";".join(scope_parts) + "。")
+                    lines.append("分析范围:" + ";".join(scope_parts) + "。"
+                                 if not en else
+                                 "Analysis scope: " + ";".join(scope_parts)
+                                 + ".")
             elif status == "INSUFFICIENT_DATA":
                 lines.append(
                     "无法得出可靠结论:可用交易证据不完整或不足(检索受限或"
-                    "为空)。这不是\"未发现\"——是当前数据不足以支持判断。")
+                    "为空)。这不是\"未发现\"——是当前数据不足以支持判断。"
+                    if not en else
+                    "No reliable conclusion is possible: the available "
+                    "trade evidence is incomplete or insufficient "
+                    "(retrieval bounded or empty). This is NOT a \"not "
+                    "found\" — the current data cannot support a "
+                    "judgment.")
                 if scope_parts:
-                    lines.append("分析范围:" + ";".join(scope_parts) + "。")
+                    lines.append("分析范围:" + ";".join(scope_parts) + "。"
+                                 if not en else
+                                 "Analysis scope: " + ";".join(scope_parts)
+                                 + ".")
         elif obs.get("tool_name") == "related_account_analysis":
             # AL-2.13: the combined request asks TWO questions — why this
             # relationship is a risk signal, and which related accounts
@@ -3840,7 +5340,14 @@ def _case_level_answer_lines(state: AgentLoopState) -> list[str]:
                     "账号与其他账号存在网络/共享设备关系（"
                     + ", ".join(parts) + "）。这类关系会作为需要进一步"
                     "调查的风险信号记录;当前数据本身不能证明这些账号之间"
-                    "存在违规或恶意意图。")
+                    "存在违规或恶意意图。" if not en else
+                    "Why this is a risk signal: the Risk Platform's "
+                    "network detection found network/shared-device "
+                    "relations between this account and other accounts ("
+                    + ", ".join(parts) + "). Such relations are recorded "
+                    "as a risk signal warranting further investigation; "
+                    "the data itself does not prove any violation or "
+                    "malicious intent among these accounts.")
             total = s.get("related_accounts_count")
             accounts = s.get("related_accounts") or []
             if total and len(accounts) < total:
@@ -3849,15 +5356,25 @@ def _case_level_answer_lines(state: AgentLoopState) -> list[str]:
                     f"关联账号,但当前返回的数据只包含其中 {len(accounts)}"
                     f" 个账号 ID(其余 {total - len(accounts)} 个 ID 未在"
                     "当前数据中提供),因此只能列出这 "
-                    f"{len(accounts)} 个:")
+                    f"{len(accounts)} 个:" if not en else
+                    f"Related accounts: the Risk Platform reports {total} "
+                    "related accounts in this network, but the returned "
+                    f"data contains only {len(accounts)} account IDs (the "
+                    f"other {total - len(accounts)} IDs are not provided "
+                    "in the current data), so only these "
+                    f"{len(accounts)} can be listed:")
             elif accounts:
-                lines.append(f"关联账号共 {len(accounts)} 个:")
+                lines.append(f"关联账号共 {len(accounts)} 个:" if not en
+                             else f"Related accounts ({len(accounts)}):")
             for a in accounts:
                 lines.append(f"- {a}")
             devices = s.get("shared_devices") or []
             if devices:
                 lines.append("连接这些账号的共享设备:"
-                             + "; ".join(str(d) for d in devices) + "。")
+                             + "; ".join(str(d) for d in devices) + "。"
+                             if not en else
+                             "Shared devices connecting these accounts: "
+                             + "; ".join(str(d) for d in devices) + ".")
     return lines
 
 
@@ -3866,6 +5383,7 @@ def _finding_answer_lines(state: AgentLoopState) -> list[str]:
     (observed-vs-threshold / feature / graph semantics), then the
     COMPLETE evidence table, then policy context; honest about the
     boundary between what is known and what the data does not provide."""
+    en = _turn_lang(state) == "en"
     body: list[str] = []
     saw_signal_facts = False
     saw_empty_evidence = False
@@ -3876,7 +5394,7 @@ def _finding_answer_lines(state: AgentLoopState) -> list[str]:
         s = obs.get("summary") or {}
         tool = obs.get("tool_name")
         if tool == "signal_explain":
-            body.extend(_signal_answer_lines(s))
+            body.extend(_signal_answer_lines(s, lang="en" if en else "zh"))
             if not s.get("evidence_missing"):
                 saw_signal_facts = True
         elif tool == "policy_lookup" and s.get("match_count") is not None:
@@ -3893,13 +5411,23 @@ def _finding_answer_lines(state: AgentLoopState) -> list[str]:
                 body.append(
                     f"政策依据:Risk Platform 为该发现关联到 "
                     f"{s.get('associated_count')} 处 finding-level 政策"
-                    f"引用" + (f",包括 {refs}。" if refs else "。"))
+                    f"引用" + (f",包括 {refs}。" if refs else "。")
+                    if not en else
+                    f"Policy basis: the Risk Platform associates "
+                    f"{s.get('associated_count')} finding-level policy "
+                    "references with this finding"
+                    + (f", including {refs}." if refs else "."))
             else:
                 body.append(
                     "政策依据:Risk Platform 未为该发现提供 finding-level "
                     "政策依据(检索到的引用为调查级参考,不作为本发现的"
-                    "解释依据)。")
-    evidence_lines, empty_streams = _evidence_answer_lines(state)
+                    "解释依据)。" if not en else
+                    "Policy basis: the Risk Platform provides no "
+                    "finding-level policy basis for this finding (the "
+                    "retrieved references are investigation-wide context, "
+                    "not an explanation of this finding).")
+    evidence_lines, empty_streams = _evidence_answer_lines(
+        state, lang="en" if en else "zh")
     body.extend(evidence_lines)
     for obs in state.observations:
         if (obs.get("tool_name") == "finding_drilldown"
@@ -3910,12 +5438,20 @@ def _finding_answer_lines(state: AgentLoopState) -> list[str]:
         # does not exist for this finding; the facts above are what the
         # platform provides. Never worded as a "conclusive empty result".
         stream_txt = "/".join(sorted(set(empty_streams))) \
-            if empty_streams else "记录级"
+            if empty_streams else ("record-level" if en else "记录级")
         body.append(
             f"关于\"全部明细\"的数据边界:该发现在 Risk Platform 中"
             f"没有{stream_txt}证据可枚举(检索返回零条记录);平台"
             "提供的是上方已列出的聚合/图级别事实。因此我不能把现有摘要"
-            "描述为\"全部明细\"——这是当前调查数据的真实边界,而非遗漏。")
+            "描述为\"全部明细\"——这是当前调查数据的真实边界,而非遗漏。"
+            if not en else
+            f"Data boundary for \"complete details\": the Risk Platform "
+            f"holds no enumerable {stream_txt} evidence for this finding "
+            "(the retrieval returned zero records); what the platform "
+            "provides are the aggregate/graph-level facts listed above. I "
+            "therefore cannot describe the existing summary as "
+            "\"complete details\" — this is the real boundary of the "
+            "investigation data, not an omission.")
     # a re-plan may legitimately re-execute the same kind of step; the
     # answer must not repeat itself when it does
     deduped: list[str] = []
@@ -3923,11 +5459,65 @@ def _finding_answer_lines(state: AgentLoopState) -> list[str]:
         if line not in deduped:
             deduped.append(line)
     if deduped and state.focused_finding_title:
-        head = f"关于发现 {state.focused_finding_id}「{state.focused_finding_title}」:"
+        head = (f"Regarding finding {state.focused_finding_id} "
+                f"'{state.focused_finding_title}':" if en else
+                f"关于发现 {state.focused_finding_id}"
+                f"「{state.focused_finding_title}」:")
         if state.focused_finding_summary:
             head += state.focused_finding_summary[:220]
         deduped.insert(0, head)
     return deduped
+
+
+def _timeline_section_lines(summary: dict, lang: str) -> list[str]:
+    """Timeline section of a GSP output section — renders the COMPLETE
+    projected event set (the tool's ordinary contract is completeness;
+    only an explicit user-requested top_n subset bounds it, and that
+    subset is disclosed with the actual rendered/total counts).
+
+    The event source is `event_summaries` — the full uncapped projection —
+    together with the tool's authoritative `total_events`. The bounded
+    `event_ids` metadata list (_MAX_IDS) is never used as a completeness
+    measure. Language follows the per-turn response language.
+    """
+    en = lang == "en"
+    events = [e for e in (summary.get("event_summaries") or [])
+              if isinstance(e, dict)]
+    total = summary.get("total_events")
+    lines: list[str] = []
+    scope_label = ("Finding timeline events (Risk Platform timeline "
+                   "for this finding)"
+                   if en else "发现时间线事件（Risk Platform 该发现的时间线）")
+    lines.append(f"{scope_label}:")
+    for ev in events:
+        lines.append(
+            f"- {ev.get('event_id', '')} | {ev.get('timestamp', '')} | "
+            f"{ev.get('summary', '')}")
+    truncated = bool(summary.get("truncated"))
+    total_int = (total if isinstance(total, int)
+                 and not isinstance(total, bool) else None)
+    if truncated and events and (
+            total_int is None or len(events) < total_int):
+        shown = len(events)
+        known_total = total_int if total_int is not None else shown
+        lines.append(
+            f"（应用户要求仅显示前 {shown} 条，共 {known_total} 条；"
+            "完整时间线见证据结果）"
+            if not en else
+            f"(showing the first {shown} of {known_total} events at your "
+            "request; the complete timeline is in the evidence result)")
+    return lines
+
+
+def _maybe_timeline_section(reqs, summary: dict, lang: str) -> list[str]:
+    """Timeline lines for a COMPOUND output whose requirements include
+    both a record stream and TIMELINE_EVENTS: the records branch must
+    not silently swallow the timeline delivery — both render (A2)."""
+    if EvidenceType.TIMELINE_EVENTS not in reqs:
+        return []
+    if not (summary.get("event_summaries") or []):
+        return []
+    return _timeline_section_lines(summary, lang)
 
 
 def _record_stream_label(reqs, summary: dict, lang: str = "zh") -> str:
@@ -3943,6 +5533,8 @@ def _record_stream_label(reqs, summary: dict, lang: str = "zh") -> str:
             return "transaction records"
         if has_wd and not has_tx:
             return "withdrawal records"
+        if has_tx and has_wd:
+            return "transaction and withdrawal records"
     if has_tx and not has_wd:
         return "交易记录"
     if has_wd and not has_tx:
@@ -3969,9 +5561,19 @@ def _match_rule_entries(summary: dict, output) -> list[dict]:
 
 
 def _gsp_render_output_facts(output, summary: dict,
-                             lang: str = "zh") -> list[str]:
+                             lang: str = "zh",
+                             artifact_backed_families=None,
+                             run_policy=None
+                             ) -> list[str]:
+    from app.goal_resolution import _RECORD_STREAM_FAMILIES
     """Grounded fact lines for a SATISFIED(positive) output, rendered from
-    the combined summary whitelist (bounded; no invented facts)."""
+    the combined summary whitelist (bounded; no invented facts).
+    artifact_backed_families: stream families whose generate_artifact step
+    succeeded in this run — file_export outputs backed by one render the
+    file brief instead of record rows.
+    run_policy: optional (citations, finding_attached, has_policy_section)
+    from this run's policy evidence — used only for the explanation
+    narrative's grounded fact↔policy correspondence line."""
     lines: list[str] = []
     reqs = output.evidence_requirements
     subject = output.subject_ref
@@ -4002,7 +5604,8 @@ def _gsp_render_output_facts(output, summary: dict,
                 lines.append(f"- 说明: {r['description']}"
                              if lang != "en" else
                              f"- Description: {r['description']}")
-        lines.extend(_render_population_reconciliation(summary))
+        lines.extend(_render_population_reconciliation(summary,
+                                                        lang=lang))
         return lines
     def _has(*keys):
         return any(summary.get(k) for k in keys)
@@ -4057,7 +5660,13 @@ def _gsp_render_output_facts(output, summary: dict,
                 _cap_note = (
                     f"；受系统候选上限：共发现 {_found} 组候选，本次回复"
                     f"已完整交付其内的 {_len_c} 组（其余 {_beyond_cap} 组"
-                    "受系统候选上限未列出；当前没有其他可访问的完整清单）")
+                    "受系统候选上限未列出；当前没有其他可访问的完整清单）"
+                    if lang != "en" else
+                    f"; system candidate cap: {_found} candidates were "
+                    f"found in total and this reply fully delivers "
+                    f"{_len_c} of them (the remaining {_beyond_cap} are "
+                    "unlisted due to the system candidate cap; no other "
+                    "accessible complete listing exists)")
             if lang == "en":
                 lines.append(
                     f"Found {len(summary['candidates'])} candidate "
@@ -4179,7 +5788,13 @@ def _gsp_render_output_facts(output, summary: dict,
                 _t_note = (
                     f"；受系统候选上限：共发现 {_t_found} 组候选，本次回复"
                     f"已完整交付其内的 {len(involved)} 组（其余 "
-                    f"{_t_found - len(involved)} 组受系统候选上限未列出）")
+                    f"{_t_found - len(involved)} 组受系统候选上限未列出）"
+                    if lang != "en" else
+                    f"; system candidate cap: {_t_found} candidates were "
+                    f"found in total and this reply fully delivers "
+                    f"{len(involved)} of them (the remaining "
+                    f"{_t_found - len(involved)} are unlisted due to the "
+                    "system candidate cap)")
             if lang == "en":
                 lines.append(
                     f"Found {len(involved)} candidate hedging "
@@ -4258,8 +5873,49 @@ def _gsp_render_output_facts(output, summary: dict,
             or EvidenceType.TRANSACTION_RECORDS in reqs:
         count = summary.get("record_count")
         rows = summary.get("record_rows") or []
+        label = _record_stream_label(reqs, summary, lang=lang)
+        # L1 (file-export delivery): a file_export output whose stream
+        # artifact was successfully generated delivers the file — the chat
+        # section confirms generation (with the record count) instead of
+        # re-pasting the whole record set; the artifact itself carries the
+        # complete content (Address column, timestamps). Failure or absence
+        # of the artifact keeps the legacy full rendering (no false success
+        # claim), per the approved delivery-channel semantics.
+        out_families = {
+            (r.value if hasattr(r, "value") else str(r))
+            for r in reqs} & set(_RECORD_STREAM_FAMILIES)
+        if (getattr(output, "delivery", "detail_list") == "file_export"
+                and out_families
+                and out_families <= artifact_backed_families):
+            # Plan v2.1: a candidate-scoped export delivers the BOUND
+            # candidate set — the brief states the candidate file's own
+            # record count (the bound set), never the full-stream count
+            # (real failure: the chat claimed 85 records for a 12-record
+            # candidate file).
+            cs = summary.get("candidate_set_export") or {}
+            if isinstance(cs, dict) and cs.get("verification", {}).get(
+                    "passed"):
+                v = cs.get("verification") or {}
+                n_c = v.get("candidates")
+                n_t = len(v.get("transaction_ids") or [])
+                lines.append(
+                    f"已生成对冲候选明细文件（{n_c} 组候选、共 {n_t} 笔"
+                    "交易，含账号/时间/方向/金额）。"
+                    if lang != "en" else
+                    f"The hedge-candidate detail file has been generated "
+                    f"({n_c} candidate pairs, {n_t} transactions, with "
+                    "account/time/direction/amount).")
+                return lines + _maybe_timeline_section(reqs, summary, lang)
+            lines.append(
+                f"已生成{label}文件（完整记录 {count} 条，含地址字段）。"
+                if lang != "en" else
+                f"The {label.lower()} file has been generated "
+                f"(complete set of {count} records, with addresses).")
+            # A2 (timeline completeness): a compound timeline+records
+            # output must still deliver its timeline section — the file
+            # brief covers only the records family (L1 semantics kept).
+            return lines + _maybe_timeline_section(reqs, summary, lang)
         if count:
-            label = _record_stream_label(reqs, summary, lang=lang)
             lines.append(f"完整{label}共 {count} 条:"
                          if lang != "en" else
                          f"Complete {label.lower()} — {count} records:")
@@ -4270,18 +5926,63 @@ def _gsp_render_output_facts(output, summary: dict,
             # output — rendered by the rule/metric-explanation branches
             # when the user actually asks for verification, never
             # auto-attached to a plain export.
-            for r in rows[:10]:
+            for r in rows[:RECORDS_CHAT_CAP]:
+                line = (f"- {r.get('record_id')} | {r.get('timestamp')} | "
+                        f"{r.get('summary')}")
+                addr = r.get("address")
+                if addr:
+                    line += (f" | 地址: {addr}" if lang != "en"
+                             else f" | address: {addr}")
+                lines.append(line)
+            # L1: the disclosure boundary is the ACTUAL chat cap (10),
+            # not the 20-row observation cap — 11–20 record sets were
+            # silently truncated with no disclosure before this fix.
+            if count > RECORDS_CHAT_CAP:
                 lines.append(
-                    f"- {r.get('record_id')} | {r.get('timestamp')} | "
-                    f"{r.get('summary')}")
-            if summary.get("rows_truncated"):
-                lines.append("（对话内显示前 10 条；完整集合见证据结果）"
-                             if lang != "en" else
-                             "(dialogue shows the first 10 records; the "
-                             "complete set is in the evidence result)")
-            return lines
+                    f"（对话内显示前 {RECORDS_CHAT_CAP} 条，共 {count} 条；"
+                    "完整集合见证据结果）"
+                    if lang != "en" else
+                    f"(dialogue shows the first {RECORDS_CHAT_CAP} of "
+                    f"{count} records; the complete set is in the "
+                    "evidence result)")
+            # A2 (timeline completeness): the records section previously
+            # returned before the timeline branch could render, so a
+            # compound timeline+records output delivered ZERO timeline
+            # lines (the records table silently replaced the timeline).
+            # Both sections now render per the output contract; the
+            # records rendering itself (10-row chat cap + shown/total
+            # disclosure) is L1-accepted behavior, unchanged.
+            return lines + _maybe_timeline_section(reqs, summary, lang)
     if EvidenceType.NETWORK_RELATIONS in reqs \
             and summary.get("related_accounts"):
+        from app.goal_postconditions import requires_explanation_evidence
+        _wants_explanation = requires_explanation_evidence(reqs)
+        if _wants_explanation and summary.get("cluster_name"):
+            # Explanation delivery (real execution TASK-268228ad0559): the
+            # cluster attribution IS the detection basis — state it, never
+            # just the member list. All fields are RP's own echo.
+            _dtype = summary.get("detection_type") or "unknown"
+            _members = summary.get("member_count")
+            _score = summary.get("cluster_risk_score")
+            _role = summary.get("role_in_cluster")
+            _bits = [f"检测类型 {_dtype}" if lang != "en" else
+                     f"detection type {_dtype}"]
+            if isinstance(_members, int):
+                _bits.append(f"集群成员 {_members} 个" if lang != "en"
+                             else f"{_members} cluster members")
+            if isinstance(_score, (int, float)) and not isinstance(_score, bool):
+                _bits.append(f"集群风险分 {_score:g}" if lang != "en"
+                             else f"cluster risk score {_score:g}")
+            if _role:
+                _bits.append(f"本账户角色 {_role}" if lang != "en"
+                             else f"this account's role: {_role}")
+            lines.append(
+                "Risk Platform 的关联归因：该账号被归入集群"
+                f"「{summary['cluster_name']}」（{'; '.join(_bits)}）。"
+                if lang != "en" else
+                f"Risk Platform attribution: this account belongs to "
+                f"cluster \"{summary['cluster_name']}\" "
+                f"({'; '.join(_bits)}).")
         lines.append(
             f"关联账号共 {summary.get('related_accounts_count') or len(summary['related_accounts'])} 个:"
             if lang != "en" else
@@ -4293,13 +5994,101 @@ def _gsp_render_output_facts(output, summary: dict,
         if len(_rel_shown) < _rel_total:
             lines.append(
                 f"（对话内展示前 {len(_rel_shown)} 个；关联账号共 "
-                f"{_rel_total} 个，完整清单见证据结果。）")
+                f"{_rel_total} 个，完整清单见证据结果。）"
+                if lang != "en" else
+                f"(first {len(_rel_shown)} shown; {_rel_total} related "
+                "accounts in total — the complete list is in the evidence "
+                "result.)")
         if summary.get("shared_devices"):
             lines.append(
                 f"连接这些账号的共享设备: "
-                f"{', '.join(summary['shared_devices'])}。")
+                f"{', '.join(summary['shared_devices'])}。"
+                if lang != "en" else
+                "Shared devices connecting these accounts: "
+                f"{', '.join(summary['shared_devices'])}.")
+        if _wants_explanation:
+            # The risk-signal judgment is bounded: relation facts are the
+            # detection basis and support review-priority — never a
+            # violation/fraud conclusion. The policy correspondence is
+            # stated ONLY when RP itself attached the citation to the
+            # related-account finding (grounded, never inferred here).
+            lines.append(
+                "风险信号判断：以上关系事实是 Risk Platform 标记该账号的"
+                "检测依据；该类关系信号支持的是优先复核的判断——不构成"
+                "对违规、欺诈或共谋行为的认定。"
+                if lang != "en" else
+                "Risk-signal reading: the relation facts above are the "
+                "detection basis Risk Platform used to flag this account; "
+                "they support a review-priority judgment — they do NOT "
+                "establish any violation, fraud, or collusion.")
+            if run_policy:
+                citations, finding_attached, has_policy_section = run_policy
+                if citations:
+                    first = citations[0] or {}
+                    _sec = str(first.get("section") or "")
+                    _where = ("本回答的政策引用部分" if has_policy_section
+                              else "本次已取得的引用记录")
+                    if finding_attached:
+                        lines.append(
+                            f"政策对应：{_sec} 引用由 Risk Platform 直接"
+                            "关联到该关联账号发现（finding 级依据）；本次"
+                            "观察到的关联关系事实即该引用所述关联信号的"
+                            f"具体内容，政策原文见{_where}。"
+                            if lang != "en" else
+                            f"Policy correspondence: the citation "
+                            f"\"{_sec}\" is attached by Risk Platform to "
+                            "this related-account finding (finding-level "
+                            "basis); the relation facts observed above are "
+                            f"the concrete content of its linkage signals "
+                            f"— original text in {_where}.")
+                    else:
+                        lines.append(
+                            f"政策参考：{_sec} 为案件级参考引用；本次关系"
+                            "事实与该引用所述关联信号的对应关系尚未由 "
+                            "Risk Platform 在发现级确认——不据此宣称直接"
+                            "适用。"
+                            if lang != "en" else
+                            f"Policy note: \"{_sec}\" is a case-level "
+                            "reference; Risk Platform has not confirmed a "
+                            "finding-level link between the observed "
+                            "relations and this citation — no direct "
+                            "applicability is claimed.")
+        return lines
+    if EvidenceType.TIMELINE_EVENTS in reqs and summary.get(
+            "event_summaries"):
+        # R6 (U00010 F7): a timeline ask renders the FOCUSED finding's
+        # timeline events with explicit scope — never a case-wide summary.
+        # Completeness fix: the tool's ordinary contract is a COMPLETE
+        # event set (top_n only bounds an explicit user subset), so the
+        # section renders every projected event — a fixed render cap
+        # silently dropped events 9+ while the run was still judged
+        # fully answered. Disclosure fires only for a real subset, with
+        # the ACTUAL rendered/total counts (never a hardcoded number).
+        lines.extend(_timeline_section_lines(summary, lang))
         return lines
     if EvidenceType.ML_SIGNAL_EXPLANATION in reqs and summary.get("ml_score") is not None:
+        if lang == "en":
+            method = summary.get('detection_method') or 'not provided'
+            lines.append(
+                f"ML signal score {summary['ml_score']}/100 "
+                f"(detection method: {method}) — a system detection "
+                "signal, NOT a calibrated fraud probability.")
+            feats = summary.get("available_feature_values") or {}
+            if isinstance(feats, dict) and feats:
+                shown = ", ".join(
+                    f"{_feature_label(k)} = {v}" for k, v in
+                    list(feats.items())[:10])
+                lines.append(
+                    "Model context features (Risk Platform authoritative "
+                    f"values): {shown}.")
+            if summary.get("attribution_available") is False:
+                lines.append(
+                    "Boundary: the Risk Platform provides no per-feature "
+                    "contribution attribution, so the specific influence "
+                    "of each feature on the score or the model's "
+                    "reasoning process cannot be stated; the facts above "
+                    "are all that can be determined.")
+            return lines
         lines.append(
             f"ML 信号分数 {summary['ml_score']}/100"
             f"（检测方法: {summary.get('detection_method') or '未提供'}）— "
@@ -4334,7 +6123,8 @@ def _gsp_render_output_facts(output, summary: dict,
                 lines.append(f"- 判定条件: {r['threshold']}")
             if r.get("description"):
                 lines.append(f"- 说明: {r['description']}")
-        lines.extend(_render_population_reconciliation(summary))
+        lines.extend(_render_population_reconciliation(summary,
+                                                       lang=lang))
         return lines
     if EvidenceType.RULE_EXPLANATION in reqs and (
             summary.get("rule_name") or summary.get("rule_description")):
@@ -4358,16 +6148,28 @@ def _gsp_render_output_facts(output, summary: dict,
         rf = summary.get("risk_factor") or {}
         severity = (rf.get("severity") if isinstance(rf, dict) else None)
         _ff_total = len(summary["feature_facts"])
-        lines.append(
-            "该条目为 Risk Platform 的行为特征观察记录"
-            + (f"（风险因子记录，严重度 {severity}）" if severity else "")
-            + (f"（观测值前 5 项,共 {_ff_total} 项）" if _ff_total > 5 else "")
-            + "；观测记录的存在不等于规则已触发 — 其观测值:")
+        en = lang == "en"
+        if en:
+            lines.append(
+                "This entry is a Risk Platform behavioral-feature "
+                "observation record"
+                + (f" (risk-factor record, severity {severity})"
+                   if severity else "")
+                + (f" (first 5 of {_ff_total} observed values)"
+                   if _ff_total > 5 else "")
+                + "; the existence of an observation record does NOT mean "
+                "a rule triggered — its observed values:")
+        else:
+            lines.append(
+                "该条目为 Risk Platform 的行为特征观察记录"
+                + (f"（风险因子记录，严重度 {severity}）" if severity else "")
+                + (f"（观测值前 5 项,共 {_ff_total} 项）" if _ff_total > 5 else "")
+                + "；观测记录的存在不等于规则已触发 — 其观测值:")
         for f in summary["feature_facts"][:5]:
             if isinstance(f, dict) and f.get("name"):
                 lines.append(f"- {_feature_label(f['name'])} = "
                              f"{f.get('value', '')}")
-        lines.extend(_render_population_reconciliation(summary))
+        lines.extend(_render_population_reconciliation(summary, lang=lang))
         finding_statement = (summary.get("finding_summary") or "").strip()
         rf = summary.get("risk_factor") or {}
         rf_desc = (rf.get("description") or "").strip() \
@@ -4375,24 +6177,44 @@ def _gsp_render_output_facts(output, summary: dict,
         if finding_statement:
             # the platform's OWN complete statement — carries the
             # rule/threshold/trigger-state semantics when RP states them
-            lines.append(f"Risk Platform 对该风险发现的权威说明: "
-                         f"{finding_statement}")
+            lines.append(
+                f"Risk Platform's authoritative statement for this finding: "
+                f"{finding_statement}" if en else
+                f"Risk Platform 对该风险发现的权威说明: "
+                f"{finding_statement}")
         elif rf_desc:
-            lines.append(f"Risk Platform 对该风险因子的权威说明: "
-                         f"{rf_desc}")
+            lines.append(
+                f"Risk Platform's authoritative statement for this risk "
+                f"factor: {rf_desc}" if en else
+                f"Risk Platform 对该风险因子的权威说明: "
+                f"{rf_desc}")
         else:
             # no authoritative threshold semantics reached the payload:
             # the platform provides no such statement for this feature —
             # say so explicitly instead of leaving the threshold unstated
             lines.append(
+                "Note: the current Risk Platform data provides no "
+                "independent structured decision-threshold field for this "
+                "feature." if en else
                 "说明:当前 Risk Platform 数据未提供该特征的独立"
                 "结构化判定阈值字段。")
-        lines.append("说明:以上权威说明为 Risk Platform 原文,系统不重构、"
-                     "不推断阈值或触发状态;该观察记录的是行为特征本身,"
-                     "不构成风险判定,也不证明或排除欺诈行为。")
+        lines.append(
+            "Note: the authoritative statement above is Risk Platform's "
+            "verbatim text; the system does not reconstruct or infer "
+            "thresholds or trigger states. The record observes the "
+            "behavioral feature itself — it is not a risk verdict and "
+            "neither proves nor rules out fraud." if en else
+            "说明:以上权威说明为 Risk Platform 原文,系统不重构、"
+            "不推断阈值或触发状态;该观察记录的是行为特征本身,"
+            "不构成风险判定,也不证明或排除欺诈行为。")
         return lines
     if summary.get("cluster_name"):
+        en = lang == "en"
         lines.append(
+            f"Graph detection: {summary.get('cluster_name')} "
+            f"({summary.get('detection_type') or 'cluster'}; "
+            f"{summary.get('member_count')} accounts, cluster risk score "
+            f"{summary.get('cluster_risk_score')})." if en else
             f"图关系检测: {summary.get('cluster_name')}"
             f"（{summary.get('detection_type') or 'cluster'}；"
             f"{summary.get('member_count')} 个账号, 集群风险分 "
@@ -4400,6 +6222,10 @@ def _gsp_render_output_facts(output, summary: dict,
         devices = summary.get("shared_devices") or []
         if devices:
             lines.append(
+                f"Actually observed shared infrastructure: "
+                f"{', '.join(str(d) for d in devices[:5])} — the account "
+                "is linked to other accounts through the same device/"
+                "infrastructure." if en else
                 f"实际观察到的共享基础设施: "
                 f"{', '.join(str(d) for d in devices[:5])}"
                 "——该账户与其他账号通过同一设备/基础设施关联。")
@@ -4415,18 +6241,37 @@ def _gsp_render_output_facts(output, summary: dict,
             partial = bool(is_preview and total and shown < total)
             if partial:
                 lines.append(
+                    "Related accounts in the same cluster (graph-evidence "
+                    "sample, NOT the full list): "
+                    + ", ".join(str(a) for a in related[:8])
+                    + (f" — {shown} shown." if shown > 8 else ".")
+                    if en else
                     "同一集群中的关联账号（图证据样例，非完整清单）: "
                     + ", ".join(str(a) for a in related[:8])
                     + (f" 等 {shown} 个。" if shown > 8 else "。"))
                 lines.append(
+                    f"Showing {shown} / {total} related accounts (the Risk "
+                    "Platform graph evidence is a preview list, not the "
+                    "full membership); the complete related-account list "
+                    "is available through the related-account network "
+                    "analysis." if en else
                     f"已展示 {shown} / {total} 个关联账号（Risk Platform "
                     "图证据为预览清单，非全部成员）；完整的关联账号清单"
                     "可通过关联账号网络分析查看。")
             else:
                 lines.append(
+                    f"Related accounts in the same cluster ({shown}): "
+                    + ", ".join(str(a) for a in related)
+                    if en else
                     f"同一集群中的关联账号（共 {shown} 个）: "
                     + ", ".join(str(a) for a in related))
         lines.append(
+            "Risk meaning: shared device/infrastructure relations mean "
+            "multiple accounts are indistinguishably linked on the system "
+            "side — a typical related-network risk signal recorded by the "
+            "Risk Platform (possibly one entity acting through multiple "
+            "accounts, or account proxying). It is a lead for further "
+            "investigation, not proof of fraud." if en else
             "风险含义: 共享设备/基础设施关系意味着多个账号在系统侧不"
             "可区分地关联在一起，这是 Risk Platform 记录的典型关联网"
             "络风险信号（可能指向同一实体的多账号行为或账号代持）。"
@@ -4471,22 +6316,152 @@ def _gsp_render_output_facts(output, summary: dict,
             summary.get("matches") is not None
             or summary.get("associated_citations") is not None
             or summary.get("match_count") is not None):
-        # The policy observation projects its payload as
-        # associated_citations/match_count/finding_policy_status (the
-        # composer's old `matches` key never exists in GSP summaries —
-        # the branch was dead). EN + zh variants both state the
-        # retrieval fact; the citations themselves are data.
-        lines.append("已检索相关政策引用（详见政策部分）。"
-                     if lang != "en" else
-                     "Related policy references were retrieved (see the "
-                     "policy section).")
+        # R3 (U00010 F2/F3): render the ASSOCIATED citations'
+        # document/section/[n] AND the bounded RP excerpt (the "original
+        # text" the citation points to) — the pointer-only line left the
+        # citation original text unanswerable. The projected matches
+        # carry citation_id/document/section (+ bounded snippet); the
+        # associated set is the finding-level support.
+        en = lang == "en"
+        assoc = summary.get("associated_citations") or []
+        all_matches = summary.get("matches") or []
+
+        def _citation_lines(items: list) -> list[str]:
+            out: list[str] = []
+            for m in items:
+                if not isinstance(m, dict):
+                    out.append(f"- {m}")
+                    continue
+                cite = (f" [{m.get('citation_id')}]"
+                        if m.get("citation_id") is not None else "")
+                out.append(
+                    f"- {m.get('document', '')} — "
+                    f"{m.get('section', '')}{cite}")
+                snippet = (m.get("snippet") or "").strip()
+                if snippet:
+                    out.append(
+                        f"  原文摘录{cite}: {snippet[:200]}"
+                        if not en else
+                        f"  Excerpt{cite}: {snippet[:200]}")
+            return out
+
+        if assoc:
+            # L1/P0: distinguish finding-level from case-level citations.
+            # When the finding has no RP-attached policy basis, case-level
+            # references are background context, NOT directly applicable
+            # finding-level requirements.
+            fstatus = summary.get("finding_policy_status")
+            if fstatus == "no_finding_level_basis":
+                lines.append(
+                    "注意：该发现暂无 RP 附加的 finding-level 政策依据；"
+                    "以下引用为案件级背景参考，不能证明其直接适用于该发现。"
+                    if not en else
+                    "Note: no finding-level policy basis was found for this "
+                    "finding; the citations below are case-level background "
+                    "references and may not directly apply to it.")
+            # B1: the EN overview wording follows fstatus like the ZH
+            # face — a finding-level citation was previously introduced
+            # as "case-level" in every English answer.
+            lines.append(
+                f"该发现直接适用 {len(assoc)} 条政策引用："
+                if not en and fstatus != "no_finding_level_basis" else
+                f"以下为与该案例相关的 {len(assoc)} 条政策引用（案件级背景参考）："
+                if not en else
+                f"The following {len(assoc)} policy citations directly "
+                "apply to this finding (finding-level):"
+                if fstatus != "no_finding_level_basis" else
+                f"The following {len(assoc)} case-level policy citations "
+                "may provide context:")
+            lines.extend(_citation_lines(assoc[:3]))
+            return lines
+        if all_matches or summary.get("match_count"):
+            # B2/B3: the no-finding-level-basis note was unreachable (it
+            # lived inside the assoc branch, but assoc is empty exactly
+            # when there is no finding-level basis), so a case-level-only
+            # answer degraded to a bare count pointer that dangled
+            # whenever no policy artifact existed. State the evidence
+            # boundary and render the case-level contextual citations in
+            # the answer itself. Zero-relevance candidates stay
+            # case-level context — never promoted to finding-level.
+            lines.append(
+                "注意：Risk Platform 未对该发现附加 finding-level 政策依据，"
+                "现有证据不足以确认任何引用直接适用于该发现；"
+                "以下引用仅为整个案例的案件级背景参考，"
+                "不代表该发现的特定要求。"
+                if not en else
+                "Note: no finding-level policy basis was found for this "
+                "finding; the available evidence is insufficient to "
+                "confirm that any citation directly applies to it. The "
+                "citations below are case-level context for the whole "
+                "case, not finding-level requirements.")
+            shown = [m for m in all_matches[:3] if isinstance(m, dict)]
+            if shown:
+                lines.append(
+                    f"以下 {len(shown)} 条引用仅提供案件级背景参考："
+                    if not en else
+                    f"The following {len(shown)} citation(s) provide "
+                    "case-level context only:")
+                lines.extend(_citation_lines(shown))
+                mc = summary.get("match_count")
+                if (isinstance(mc, int) and not isinstance(mc, bool)
+                        and mc > len(shown)):
+                    lines.append(
+                        f"（共检索到 {mc} 条案件级引用，此处显示前 "
+                        f"{len(shown)} 条。）"
+                        if not en else
+                        f"({mc} case-level citations were retrieved in "
+                        f"total; showing the first {len(shown)}.)")
+            elif summary.get("match_count"):
+                # projection shortfall: report the count without any
+                # section pointer (never a dangling reference)
+                lines.append(
+                    f"已检索到 {summary['match_count']} 条案件级引用"
+                    "（本次对话未能呈现明细）。"
+                    if not en else
+                    f"{summary['match_count']} case-level citations were "
+                    "retrieved (details could not be rendered in this "
+                    "dialogue).")
+            return lines
+        lines.append(
+            "未检索到适用于该发现的政策引用。"
+            if not en else
+            "No directly applicable policy references were retrieved.")
         return lines
     if EvidenceType.CASE_SUMMARY in reqs and summary.get("finding_count"):
-        lines.append(
-            f"案例共识别 {summary['finding_count']} 个风险发现。"
-            if lang != "en" else
-            f"The case carries {summary['finding_count']} identified "
-            "risk findings.")
+        n = summary["finding_count"]
+        score = summary.get("risk_score")
+        level = summary.get("risk_level")
+        head = f"案例共识别 {n} 个风险发现"
+        if level or score is not None:
+            head += "（总体风险"
+            if level:
+                head += f"：{level}"
+            if score is not None:
+                head += f"{('，') if level else '：'}风险分 {score:g}"
+            head += "）"
+        head += "。"
+        lines.append(head if lang != "en" else
+                     f"The case carries {n} identified risk findings"
+                     + (f" (overall risk: {level}" if level else "")
+                     + (f", score {score:g})" if score is not None
+                        else (")" if level else "")))
+        findings = (summary.get("findings") or [])[:10]
+        if findings:
+            lines.append("" if lang != "en" else "Identified findings:")
+            for f in findings:
+                f_summary = (f.get("summary") or "").strip()
+                if f_summary:
+                    lines.append(
+                        f"- {f.get('id')} {f.get('title', '')}: {f_summary}")
+                else:
+                    lines.append(f"- {f.get('id')} {f.get('title', '')}")
+            shown = len(findings)
+            if shown < n:
+                lines.append(
+                    f"（对话内列出前 {shown} 条；完整清单见证据包与"
+                    "发现面板）" if lang != "en" else
+                    f"(first {shown} of {n} listed; the complete set is "
+                    "in the evidence bundle and the Findings panel)")
         return lines
     lines.append(
         "已取得相关证据，但当前未能从中呈现具体的解释性事实"
@@ -4508,7 +6483,8 @@ from app.goal_resolution import (          # noqa: E402
 
 def _population_reconciliation_line(goal_text: str | None,
                                     records_total: int,
-                                    noun: str = "提现") -> str | None:
+                                    noun: str = "提现",
+                                    lang: str = "zh") -> str | None:
     """Explicit scope reconciliation when the request asserts a record
     population that differs from the authoritative evidence population
     (complete retrieval). The comparison over the complete authoritative
@@ -4517,9 +6493,15 @@ def _population_reconciliation_line(goal_text: str | None,
     asserted = _asserted_record_population(goal_text)
     if asserted is None or asserted == records_total:
         return None
-    return (f"说明：您的请求提及 {asserted} 笔{noun}；权威证据共 "
-            f"{records_total} 笔{noun}（检索完整，无缺页），以下比较与"
-            f"结论已覆盖全部 {records_total} 笔{noun}记录。")
+    noun_en = "withdrawals" if noun == "提现" else noun
+    return (
+        f"说明：您的请求提及 {asserted} 笔{noun}；权威证据共 "
+        f"{records_total} 笔{noun}（检索完整，无缺页），以下比较与"
+        f"结论已覆盖全部 {records_total} 笔{noun}记录。" if lang != "en" else
+        f"Note: your request mentioned {asserted} {noun_en}; the "
+        f"authoritative evidence contains {records_total} {noun_en} "
+        "(retrieval complete, no missing pages). The comparison and "
+        f"conclusion below cover all {records_total} {noun_en} records.")
 
 
 def _render_reverse_trade_metric_facet(output, summary: dict,
@@ -4543,8 +6525,12 @@ def _render_reverse_trade_metric_facet(output, summary: dict,
     # content only — the section header is already emitted by
     # _gsp_render_output_section (never duplicated)
     if lang == "en":
-        return [output.detail or
-                f"{metrics['opposite_trade_ratio']:.2%} "
+        # English face: the metric facts are re-stated from data — the
+        # verdict detail carries the zh face (stamped at coverage /
+        # contract time, not per-turn), so it is never shown in an en
+        # turn (same convention as the destination facet; live defect:
+        # U00033 TASK-71adba5e3614 — an en turn rendered the zh detail).
+        return [f"{metrics['opposite_trade_ratio']:.2%} "
                 "(opposite_trade_ratio) is the account's OWN "
                 "opposite-trade ratio: computed over the account's own "
                 "trade stream as min(BUY count, SELL count) divided by "
@@ -4575,11 +6561,10 @@ def _render_new_address_facet(output, summary: dict,
     nas = summary.get("new_address_status") or {}
     if not nas.get("records"):
         return None
-    header = (output.claim_description or "").strip().rstrip("。")
-    if not header:
-        header = (f"New-address status of {output.subject_ref} withdrawals"
-                  if lang == "en" else
-                  f"关于 {output.subject_ref} 的新地址标记状态")
+    header = _output_header(output, lang=lang) or (
+        f"New-address status of {output.subject_ref} withdrawals"
+        if lang == "en" else
+        f"关于 {output.subject_ref} 的新地址标记状态")
     lines = ([f'About "{header}":'] if lang == "en"
              else [f"关于「{header}」:"])
     if output.detail and lang != "en":
@@ -4665,7 +6650,7 @@ def _render_destination_facet(output, summary: dict,
                 "same/different conclusion:")
             lines.extend(_facet_record_table(summary, lang=lang))
         return lines
-    lines.extend(_render_population_reconciliation(summary))
+    lines.extend(_render_population_reconciliation(summary, lang=lang))
     if lang == "en":
         unique = block.get("unique_destinations")
         total = block.get("records_total")
@@ -4718,19 +6703,103 @@ def _facet_record_table(summary: dict, lang: str = "zh") -> list[str]:
     return lines
 
 
+def _output_header(output, lang: str = "zh") -> str:
+    """The user-safe section header for one RequiredOutput, in the
+    per-turn response language: the canonical English variant
+    (claim_description_en) when the turn answers in English, else the
+    stored claim_description; a generic scope line when neither exists.
+    Presentation-only selection — the contract's semantic claim content
+    is unchanged."""
+    if lang == "en":
+        desc_en = (getattr(output, "claim_description_en", None)
+                   or "").strip()
+        if desc_en:
+            return desc_en.rstrip("。")
+    desc = (output.claim_description or "").strip()
+    if desc:
+        return desc.rstrip("。")
+    return (f"Investigation result for {output.subject_ref}"
+            if lang == "en"
+            else f"关于 {output.subject_ref} 的调查结果")
+
+
+def _ambiguous_clarification_message(state, lang: str) -> str:
+    """User-facing clarification text for a GU AMBIGUOUS resolution
+    (real journey INV-8cc8eb8121ee "ML都检测什么": the generic message
+    left the user without knowing WHICH readings existed). Enumerates the
+    candidate goals from the structured `ambiguous_goal_types` field —
+    a closed vocabulary with a bounded label map; the LLM's free-text
+    reason is never projected. Any missing/unmappable candidate falls
+    back to the existing generic text byte-for-byte. Nothing here picks,
+    weights, or executes a goal."""
+    generic = (
+        "无法确定您要调查的目标：该请求存在多种可能的理解，"
+        "系统不会默认只调查其中一项。请明确您希望优先调查的目标后重新发起。"
+        if lang != "en" else
+        "The investigation target cannot be determined: "
+        "this request has several plausible readings and "
+        "the system will not pick one by default. Please "
+        "clarify which target to investigate and retry.")
+    gr = state.goal_representation
+    if gr is None:
+        return generic
+    candidates = getattr(gr, "ambiguous_goal_types", None)
+    if candidates is None and isinstance(gr, dict):
+        candidates = gr.get("ambiguous_goal_types")
+    if not candidates or not isinstance(candidates, (list, tuple)):
+        return generic
+    labels: list[str] = []
+    for c in candidates:
+        entry = _AMBIGUOUS_GOAL_LABELS.get(str(c))
+        if entry is None:
+            return generic            # unmappable candidate → safe fallback
+        labels.append(entry[0] if lang != "en" else entry[1])
+    if not labels:
+        return generic
+    if lang != "en":
+        enumerated = "；".join(f"{i + 1}. {l}" for i, l in enumerate(labels))
+        return (f"无法确定您要调查的目标：该请求存在多种可能的理解——"
+                f"{enumerated}。系统不会默认只调查其中一项。请明确您希望"
+                "优先调查的目标后重新发起。")
+    enumerated = "; ".join(f"{i + 1}. {l}" for i, l in enumerate(labels))
+    return (f"The investigation target cannot be determined: this request "
+            f"has several plausible readings — {enumerated}. The system "
+            "will not pick one by default. Please clarify which target to "
+            "investigate and retry.")
+
+
+_AMBIGUOUS_GOAL_LABELS: dict[str, tuple[str, str]] = {
+    # Closed GU goal vocabulary (goal_resolution.GOAL_VOCABULARY) → bounded
+    # user-facing category descriptions (zh, en). Data map only — no case
+    # specifics, no candidate weighting, no defaults between candidates.
+    "expand_evidence": ("展开证据细节", "expand the evidence details"),
+    "explain_finding": ("解释该发现的检测信号与得分",
+                        "explain the finding's detection signals and score"),
+    "identify_supporting_records": ("检索支撑记录明细",
+                                    "retrieve the supporting record details"),
+    "timeline": ("查看事件时间线", "view the event timeline"),
+    "cross_account_check": ("跨账户交易核查", "cross-account trade check"),
+    "policy_check": ("政策要求核查", "policy requirements check"),
+    "summarize": ("案件情况总结", "case summary"),
+    "artifact_export": ("生成导出文件", "generate an export file"),
+    "identify_related_accounts": ("关联账号识别",
+                                  "identify related accounts"),
+    "inspect_network_structure": ("查看网络结构",
+                                  "inspect the network structure"),
+}
+
+
 def _gsp_render_output_section(output, summary: dict,
                                goal_text: str | None = None,
-                               lang: str = "zh") -> list[str]:
+                               lang: str = "zh",
+                               artifact_backed_families=None,
+                               run_policy=None) -> list[str]:
     """One RequiredOutput → deterministic user-visible section, driven by
     the output's ACCEPTED satisfaction state (WP-GSP-4 verdict) — never by
     which tools happened to succeed. The raw claim label (LLM-coined) is
     internal and never rendered (P6); the user-safe header is the bounded
-    claim_description or a generic scope line."""
-    header = (output.claim_description or "").strip().rstrip("。")
-    if not header:
-        header = (f"Investigation result for {output.subject_ref}"
-                  if lang == "en"
-                  else f"关于 {output.subject_ref} 的调查结果")
+    claim_description in the response language or a generic scope line."""
+    header = _output_header(output, lang=lang)
     lines = ([f'About "{header}":'] if lang == "en"
              else [f"关于「{header}」:"])
     # WP-GS-D: a declared destination-address-identity facet renders its
@@ -4793,21 +6862,64 @@ def _gsp_render_output_section(output, summary: dict,
                 lines.append("未发现相关事实。" if not en
                              else "No matching facts were found.")
         else:
-            lines.extend(_gsp_render_output_facts(output, summary,
-                                                  lang=lang))
+            lines.extend(_gsp_render_output_facts(
+                output, summary, lang=lang,
+                artifact_backed_families=artifact_backed_families,
+                run_policy=run_policy))
     elif sat == OutputSatisfaction.PARTIALLY_SUPPORTED:
         # grounded facts first (content-driven): a capped/partial trade
-        # listing still shows the candidates it DID find, then the
-        # boundary — never a bare "partial" line over real evidence
-        if summary.get("candidates"):
-            lines.extend(_gsp_render_output_facts(output, summary,
-                                                  lang=lang))
-        lines.append(
-            "已获取部分证据，但覆盖范围不完整；不能据此得出"
-            "完整结论（详见上方边界说明）。" if not en else
-            "Partial evidence was obtained but coverage is incomplete; "
-            "no complete conclusion can be drawn from it (see the "
-            "boundary notes above).")
+        # listing still shows the records/candidates it DID find, then
+        # the boundary — never a bare "partial" line over real evidence.
+        # U00047 fix (D2): records deliverables (record_count present)
+        # render their facts here too — the chat cap that made them
+        # partial is exactly what the shown/total disclosure describes,
+        # so the user sees the delivered rows AND the concrete gap.
+        _facts_rendered = False
+        if summary.get("candidates") or (
+                summary.get("record_count") is not None):
+            _before = len(lines)
+            lines.extend(_gsp_render_output_facts(
+                output, summary, lang=lang,
+                artifact_backed_families=artifact_backed_families,
+                run_policy=run_policy))
+            _facts_rendered = len(lines) > _before
+        if _facts_rendered:
+            # self-contained boundary: the delivered portion and the
+            # concrete gap were just stated by the facts renderer
+            # (shown/total). The "complete set in the generated file"
+            # pointer is allowed ONLY under the same artifact-backing
+            # convention as the L1 file-export branch: this output's
+            # record families must actually be covered by a successfully
+            # generated artifact (real executions — e.g. TASK-88c0e445cce9
+            # — claimed a generated file with ZERO artifacts in the run).
+            # An unrelated artifact never backs this claim; without the
+            # backing the honest partial wording applies.
+            from app.goal_resolution import _RECORD_STREAM_FAMILIES
+            _out_families = {
+                (r.value if hasattr(r, "value") else str(r))
+                for r in output.evidence_requirements} & set(
+                    _RECORD_STREAM_FAMILIES)
+            if _out_families and _out_families <= set(
+                    artifact_backed_families or set()):
+                lines.append(
+                    "以上为已获取的部分记录；其余记录的完整集合见已生成"
+                    "文件。" if not en else
+                    "The records above are the portion obtained so far; "
+                    "the complete set is in the generated file.")
+            else:
+                lines.append(
+                    "已获取部分证据，但覆盖范围不完整；不能据此得出"
+                    "完整结论。" if not en else
+                    "Partial evidence was obtained but coverage is "
+                    "incomplete; no complete conclusion can be drawn from "
+                    "it.")
+        else:
+            lines.append(
+                "已获取部分证据，但覆盖范围不完整；不能据此得出"
+                "完整结论。" if not en else
+                "Partial evidence was obtained but coverage is "
+                "incomplete; no complete conclusion can be drawn from "
+                "it.")
     elif sat == OutputSatisfaction.UNRESOLVED:
         if output.claim_kind == ClaimKind.ASSESSMENT:
             lines.append(
@@ -4821,6 +6933,36 @@ def _gsp_render_output_section(output, summary: dict,
             lines.append("当前证据不足以确定该项。" if not en else
                          "The current evidence is insufficient to "
                          "determine this item.")
+        # Explanation honesty (real execution TASK-268228ad0559 follow-up):
+        # an unresolved explanation output must say WHAT is confirmed and
+        # WHICH basis is missing — never leave a bare relation list to
+        # stand as the answer, and never fill the gap with inference.
+        if requires_explanation_evidence(output.evidence_requirements) \
+                and (summary.get("related_accounts")
+                     or summary.get("shared_devices")):
+            _n = summary.get("related_accounts_count") \
+                or len(summary.get("related_accounts") or [])
+            _facts = f"已确认的关系事实：关联账号 {_n} 个"
+            if summary.get("shared_devices"):
+                _facts += ("；连接这些账号的共享设备: "
+                           f"{', '.join(summary['shared_devices'])}")
+            lines.append(_facts + "。" if not en else
+                         f"Confirmed relation facts: {_n} related accounts"
+                         + (f"; shared devices {', '.join(summary['shared_devices'])}"
+                            if summary.get("shared_devices") else "") + ".")
+            lines.append(
+                "尚缺的解释依据：未取得 Risk Platform 对该关系的信号解释"
+                "事实（规则触发、特征解释或集群归因），因此目前不能确定"
+                "这些关系是否满足更具体的风险条件；不能仅凭关系存在认定"
+                "违规。已取得的相关政策引用仍在下方政策部分提供。"
+                if not en else
+                "Missing explanatory basis: no Risk Platform signal-"
+                "explanation facts (rule trigger, feature explanation, or "
+                "cluster attribution) were retrieved for these relations, "
+                "so whether they meet any more specific risk condition "
+                "cannot be determined; relation existence alone never "
+                "establishes a violation. Any policy citations already "
+                "retrieved are still provided in the policy section below.")
     elif sat == OutputSatisfaction.UNSUPPORTED:
         lines.append("当前系统不具备回答该项所需的核查能力。" if not en
                      else "The current system does not have the "
@@ -4966,6 +7108,23 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
     from app.goal_postconditions import (
         GoalOutcome, _combine_summaries, derive_goal_outcome)
 
+    # L1: families whose generate_artifact step SUCCEEDED in this run —
+    # file_export outputs backed by one render the file brief in chat.
+    # U00047 fix (D5): a bundle generated in an EARLIER revision stays a
+    # valid file deliverable even when the FINAL revision's
+    # generate_artifact step is pending (identical-re-plan collapse) —
+    # successful artifact observations are execution truth, so their
+    # source streams back the file brief exactly like plan steps do.
+    artifact_backed_families = {
+        fam for step in state.plan_steps or []
+        if step.get("type") == "generate_artifact"
+        and step.get("status") == PlanStepStatus.SUCCESS.value
+        for fam in (step.get("arguments") or {}).get("source_streams") or []}
+    for _o in state.observations or []:
+        if _o.get("step_type") == "generate_artifact"                 and _o.get("outcome") == ToolResultOutcome.SUCCESS.value                 and _o.get("semantic_status") == "artifact":
+            artifact_backed_families |= set(
+                (_o.get("summary") or {}).get("source_streams") or [])
+
     contract = state.goal_contract
     # per-turn response language: None/unknown keeps the existing default
     # face (zh) byte-for-byte; "en" renders the English variants.
@@ -4998,6 +7157,28 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
             # output in contract order (the existence check).
             _summary_holder[_i] = _served[0]
     _referenced: set = set()
+    # Run-level policy evidence (explanation delivery): the citations the
+    # policy retrieval actually produced + whether RP attached them to the
+    # finding (finding-level basis) + whether the contract renders a
+    # policy section. Used ONLY for the grounded fact↔policy
+    # correspondence line in explanation narratives — never invented.
+    _run_citations: list = []
+    _policy_finding_attached = False
+    for _o in state.observations or []:
+        _s = _o.get("summary") or {}
+        if not isinstance(_s, dict):
+            continue
+        if _s.get("associated_citations"):
+            _run_citations.extend(_s["associated_citations"])
+        if _s.get("finding_policy_status") == "associated":
+            _policy_finding_attached = True
+    _has_policy_section = any(
+        "policy_references" in {
+            (r.value if hasattr(r, "value") else str(r))
+            for r in (o.evidence_requirements or [])}
+        for o in contract.outputs)
+    _run_policy = (_run_citations, _policy_finding_attached,
+                   _has_policy_section) if _run_citations else None
     for out in contract.outputs:
         assoc = [o for o in state.observations
                  if out.output_id in (o.get("for_outputs") or [])]
@@ -5013,9 +7194,10 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
             for t in (o.get("actual_evidence_types") or [])})
         combined["_finding_title"] = state.focused_finding_title or ""
         sec_start = len(lines)
-        lines.extend(_gsp_render_output_section(out, combined,
-                                                goal_text=state.goal,
-                                                lang=lang))
+        lines.extend(_gsp_render_output_section(
+            out, combined, goal_text=state.goal, lang=lang,
+            artifact_backed_families=artifact_backed_families,
+            run_policy=_run_policy))
         _my = [i for i, o in enumerate(state.observations)
                if out.output_id in (o.get("for_outputs") or [])]
         _ref_targets = sorted({
@@ -5046,8 +7228,8 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
                         if "zh" == lang else ("above" if _ref_pos < _own_pos
                                               else "below")
                     _ref_header = " / ".join(
-                        ((_by_id[t].claim_description or "")
-                         .strip().rstrip("。") or t) for t in _ref_targets)
+                        (_output_header(_by_id[t], lang=lang) or t)
+                        for t in _ref_targets)
                     lines.append(
                         f"（完整候选明细见{_direction}「{_ref_header}」部分，"
                         "本项结论不受影响。）" if "zh" == lang else
@@ -5142,10 +7324,19 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
     steps = [s.get("type") for s in state.plan_steps
              if s.get("status") == PlanStepStatus.SUCCESS.value]
     if steps:
-        lines.append(f"Steps completed: {len(steps)} "
-                     f"({', '.join(steps)}).")
+        if lang == "en":
+            lines.append(f"Steps completed: {len(steps)} "
+                         f"({', '.join(steps)}).")
+        else:
+            lines.append(f"已完成步骤: {len(steps)} "
+                         f"({', '.join(steps)})。")
     if state.artifact_ids:
-        lines.append(f"Artifacts produced: {', '.join(state.artifact_ids)}.")
+        if lang == "en":
+            lines.append(f"Artifacts produced: "
+                         f"{', '.join(state.artifact_ids)}.")
+        else:
+            lines.append(f"已产出文件: "
+                         f"{', '.join(state.artifact_ids)}。")
     if state.agent_status in (AgentStatus.BLOCKED.value,
                               AgentStatus.FAILED.value) and state.response:
         lines.append(state.response)
@@ -5198,18 +7389,27 @@ def compose_loop_response(state: AgentLoopState) -> str:
     answer = _case_level_answer_lines(state) or _finding_answer_lines(state)
     lines: list[str] = []
     lines.extend(answer)
+    _en = _turn_lang(state) == "en"
     status_phrase = _STATUS_PHRASES.get(state.agent_status,
                                         "The investigation ended.")
     if state.agent_status == AgentStatus.COMPLETED.value \
             and state.stop_reason == StopReason.BOUNDED_DATA:
         status_phrase = (
             "调查已在当前可用数据范围内完成:请求中的一部分范围真实不可用"
-            "(见上方数据边界说明),其余结论均来自 Risk Platform 权威证据。")
+            "(见上方数据边界说明),其余结论均来自 Risk Platform 权威证据。"
+            if not _en else
+            "The investigation completed within the currently available "
+            "data: part of the requested scope is genuinely unavailable "
+            "(see the data-boundary notes above); the remaining "
+            "conclusions rest on authoritative Risk Platform evidence.")
     elif state.agent_status == AgentStatus.COMPLETED.value \
             and state.stop_reason == StopReason.CONCLUSIVE_EMPTY_RESULT:
         status_phrase = (
             "调查完成:所查询的范围在 Risk Platform 中确认为零条匹配记录"
-            "(该查询受支持且检索范围完整)。")
+            "(该查询受支持且检索范围完整)。" if not _en else
+            "The investigation completed: the queried scope is confirmed "
+            "as zero matching records in the Risk Platform (a supported "
+            "query with complete retrieval).")
     if answer:
         lines.append(status_phrase)
     else:
@@ -5230,7 +7430,13 @@ def compose_loop_response(state: AgentLoopState) -> str:
         lines.append(
             "注意：本次调查未能建立完整的目标分解——以上结果可能未覆盖您"
             "请求的全部内容；系统未建立目标语义契约，不对“您的请求已得到"
-            "完整回答”作出判定。如需其余部分，请补充说明或分别提出。")
+            "完整回答”作出判定。如需其余部分，请补充说明或分别提出。"
+            if not _en else
+            "Note: this investigation could not establish a complete goal "
+            "decomposition — the results above may not cover your whole "
+            "request; no goal semantic contract was established, so no "
+            "judgment is made on whether your request has been fully "
+            "answered. Ask for the remaining parts or split the request.")
     # WP-GS-C: comparison intent detected but not covered by the accepted
     # contract → the outcome line is basis-scoped and the uncovered
     # intent is disclosed. Never silently absorbed into a
@@ -5240,7 +7446,10 @@ def compose_loop_response(state: AgentLoopState) -> str:
             and state.agent_status == AgentStatus.COMPLETED.value:
         lines.append(
             "注意：系统未能将您的比较需求建立为结构化交付目标——以下结果"
-            "不构成“同一/不同”的结论。")
+            "不构成“同一/不同”的结论。" if not _en else
+            "Note: the system could not structure your comparison request "
+            "as a structured deliverable — the results below do NOT "
+            "constitute a same/different conclusion.")
     if state.response and state.response not in lines[0] \
             and state.agent_status in (AgentStatus.BLOCKED.value,
                                        AgentStatus.FAILED.value):
@@ -5248,12 +7457,21 @@ def compose_loop_response(state: AgentLoopState) -> str:
     steps = [s.get("type") for s in state.plan_steps
              if s.get("status") == PlanStepStatus.SUCCESS.value]
     if steps:
-        lines.append(f"Steps completed: {len(steps)} "
-                     f"({', '.join(steps)}).")
+        if _en:
+            lines.append(f"Steps completed: {len(steps)} "
+                         f"({', '.join(steps)}).")
+        else:
+            lines.append(f"已完成步骤: {len(steps)} "
+                         f"({', '.join(steps)})。")
     for obs in state.observations[-3:]:
         lines.append(f"- {_observation_line(obs)}")
     if state.artifact_ids:
-        lines.append(f"Artifacts produced: {', '.join(state.artifact_ids)}.")
+        if _en:
+            lines.append(f"Artifacts produced: "
+                         f"{', '.join(state.artifact_ids)}.")
+        else:
+            lines.append(f"已产出文件: "
+                         f"{', '.join(state.artifact_ids)}。")
     if state.agent_status == AgentStatus.STOPPED_BY_LIMIT.value:
         lines.append(f"Stop reason: {state.stop_reason} after "
                      f"{state.iteration} iterations.")
@@ -5356,6 +7574,20 @@ def _actual_evidence_types(step_type: str, tool_name: str,
     if tool_name == "risk_case_fetch" and summary.get("finding_count"):
         return [EvidenceType.CASE_SUMMARY]
     if tool_name == "artifact_bundle" and outcome == "success":
+        # U00047 file-delivery closure: a generated bundle carries the
+        # record streams it was rendered from — those are the ACTUAL
+        # evidence it delivers, and they are what file_export outputs
+        # require (this is what lets the postcondition see the artifact
+        # evidence for its output at all). Unresolvable source streams
+        # keep the legacy CASE_SUMMARY typing.
+        streams = summary.get("source_streams") or []
+        types = []
+        for s in streams:
+            et = EvidenceType(s) if s in [e.value for e in EvidenceType]                 else None
+            if et is not None and et not in types:
+                types.append(et)
+        if types:
+            return types
         return [EvidenceType.CASE_SUMMARY]
     if summary.get("matches") is not None or tool_name == "policy_lookup" \
             and outcome == "success":

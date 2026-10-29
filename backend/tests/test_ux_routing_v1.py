@@ -94,9 +94,11 @@ class TestCapabilityGuidance:
         r = svc.run_turn("这个平台都有什么功能",
                          InvestigationContext(case_id="U00033"), [])
         assert r.task.status == TaskStatusV2.COMPLETED
-        assert "timeline" in r.response
-        assert "policy" in r.response
-        assert "bundle" in r.response
+        # per-turn response language: zh request → zh guidance face
+        # (same semantics: timeline / policy / bundle capabilities listed)
+        assert "时间线" in r.response
+        assert "政策" in r.response
+        assert "证据包" in r.response
         assert r.execution is None or not r.execution.tool_calls
         assert r.follow_ups == []
 

@@ -4,13 +4,51 @@ Case: the three requests from the manual acceptance, replayed as fresh
 investigations (never touching the user's original history).
 """
 import json
+import os
 import sys
 import time
 
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from e3_gate import (require_feature_evidence, runtime_gate_backend,
+                     verify_feature_evidence)
+
 BASE = "http://127.0.0.1:8001/api/v2"
-results = {}
+results = {"e3_gate": {"scenarios": {}}}
+_STAMP = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+_REC = "/Users/vv/investigation-agent-client/docs/evaluations"
+
+
+def _save():
+    with open("/tmp/u00033_fixes_api.json", "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+
+
+def _gate_fail(stage, code, record, inv_id=None):
+    """Fail-closed E3 gate exit (P1-2): BLOCKED(2) / evidence FAIL(3)
+    propagate verbatim — SystemExit bypasses this harness's `except
+    Exception`, so later scenarios never run and the run can never be
+    reported as success."""
+    results["e3_gate"]["stage"] = stage
+    results["e3_gate"]["exit"] = code
+    results["e3_gate"]["record"] = record
+    if inv_id:
+        results["e3_gate"]["scenarios"].setdefault(inv_id, {})[
+            "verdict"] = ("BLOCKED" if code == 2 else "FAIL")
+    _save()
+    print(f"GATE {'BLOCKED' if code == 2 else 'FAIL'} ({stage}, exit "
+          f"{code}) — record: {record}", flush=True)
+    sys.exit(code)
+
+
+# --- E3 step 0: runtime gate BEFORE any target request ----------------
+_code, _rec = runtime_gate_backend(
+    f"{_REC}/gate-{_STAMP}-u00033fx-e3-step0.json")
+if _code != 0:
+    _gate_fail("step0", _code, _rec)
+results["e3_gate"]["step0"] = {"exit": _code, "record": _rec}
 
 
 def _call(method, path, payload=None, timeout=30):
@@ -27,6 +65,14 @@ def _call(method, path, payload=None, timeout=30):
 def run_goal(case_id, question):
     inv = _call("POST", "/investigations", {"case_id": case_id})
     inv_id = inv["investigation"]["investigation_id"]
+    # E3 stage A: declare THIS scenario's evidence requirement (bound to
+    # the record's generated_at) before any goal turn of the scenario
+    sa_code, sa_record = require_feature_evidence(
+        inv_id, f"{_REC}/gate-{_STAMP}-u00033fx-e3-stageA-{inv_id[-8:]}.json")
+    if sa_code != 0:
+        _gate_fail("stageA", sa_code, sa_record, inv_id=inv_id)
+    results["e3_gate"]["scenarios"].setdefault(inv_id, {})[
+        "stage_a"] = {"exit": sa_code, "record": sa_record}
     _call("POST", f"/investigations/{inv_id}/turn",
           {"message": f"Investigate {case_id}"}, timeout=180)
     run = _call("POST", f"/investigations/{inv_id}/goal",
@@ -39,6 +85,18 @@ def run_goal(case_id, question):
             break
         time.sleep(5)
     time.sleep(4)          # the final compose/read-model write races is_terminal
+    # E3 stage B: report-time verification against THIS scenario's
+    # stage-A declaration — task/investigation binding + strict time
+    # constraint + outcome validity. FAIL(3)/BLOCKED(2) exit fail-closed.
+    sb_code, sb_record = verify_feature_evidence(
+        sa_record, f"{_REC}/gate-{_STAMP}-u00033fx-e3-stageB-{inv_id[-8:]}.json")
+    results["e3_gate"]["scenarios"].setdefault(inv_id, {})[
+        "stage_b"] = {"exit": sb_code, "record": sb_record,
+                      "verdict": ("PASS" if sb_code == 0 else
+                                  "BLOCKED" if sb_code == 2 else "FAIL"),
+                      "task_id": task_id}
+    if sb_code != 0:
+        _gate_fail("stageB", sb_code, sb_record, inv_id=inv_id)
     detail = _call("GET", f"/tasks/{task_id}")
     arts = _call("GET", f"/tasks/{task_id}/artifacts")
     arts = arts.get("artifacts") if isinstance(arts, dict) else arts
@@ -190,16 +248,18 @@ try:
     results["PASS"] = all(
         all(v for v in blk.values() if isinstance(v, bool))
         for blk in (a2, a3, a4))
-    with open("/tmp/u00033_fixes_api.json", "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+    # P1-2 exit-code semantics: business-assertion failure must NOT exit 0
+    # (gate BLOCKED/FAIL already exited 2/3 above; the exception path keeps
+    # its pre-existing exit 1)
+    _save()
     print(json.dumps({k: v for k, v in results.items()
                       if isinstance(v, dict)}, ensure_ascii=False,
                      indent=1))
+    sys.exit(0 if results["PASS"] else 1)
 except Exception as e:
     import traceback
     results["error"] = f"{type(e).__name__}: {e}"[:400]
     results["traceback"] = traceback.format_exc()[:1500]
-    with open("/tmp/u00033_fixes_api.json", "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+    _save()
     print("FAILED:", results["error"])
     sys.exit(1)

@@ -21,7 +21,13 @@ EN = "en"
 # --- explicit answer-language requests (checked FIRST) ----------------------
 _EXPLICIT_ZH = re.compile(
     r"用中文(回答|回复|说明|解释)|以中文(回答|回复)|中文回答|回答用中文|"
-    r"请?(?:用|以)中文")
+    r"请?(?:用|以)中文|"
+    # U00010: 「调查<case>」 is THE canonical zh case-reference command —
+    # the verb alone deterministically marks the creation language for
+    # short case-reference texts where the case id dominates the CJK
+    # ratio (live: 调查U00010 → ratio 0.25 → None → the session lost its
+    # zh language and every follow-up chip answered EN).
+    r"调查|查詢")
 _EXPLICIT_EN = re.compile(
     r"answer\s+in\s+english|respond\s+in\s+english|in\s+english,?\s+please|"
     r"用英文(回答|回复|说明|解释)|以英文(回答|回复)|英文回答|回答用英文|"

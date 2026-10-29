@@ -365,7 +365,8 @@ class TestCaseSwitchPolicy:
         findings = [_finding("F1", "Alpha Finding", UA)]
         out = resolver.resolve(f"调查 {UB} 的情况", ctx, findings=findings)
         assert out.status == ResolutionStatus.UNRESOLVED
-        assert "new investigation" in (out.clarification_message or "")
+        # per-turn response language: zh request → zh guidance face
+        assert "新建一个调查" in (out.clarification_message or "")
         assert out.updated_context.case_id == UA
         assert out.updated_context.focused_finding_id is None
         assert out.context_changed is False

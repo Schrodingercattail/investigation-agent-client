@@ -106,6 +106,20 @@ simplified 跨账户 only; traditional 跨賬戶 phrasing is not matched
 in the baseline; CJK variants (simplified/traditional) are test cases of
 the routing suite.
 
+**Evidence addendum (2026-10-20, U00029 manual acceptance)**: the same
+class recurs across LANGUAGES — the set-internal hedging ask
+"list all the linked accounts and check if there is any hedge
+transaction within linked accounts…" matched no deterministic element
+(no EN "linked account"/"hedge" vocabulary), so no goal contract was
+built and the run degraded to a plain transaction-details plan marked
+completed. Fixed by extending the governed vocabulary
+(`investigation_concepts`) with the EN population/existence phrasings +
+a population-named existence-check frame; regression:
+`backend/tests/test_u00029_hedge_artifact_scope_v1.py` (tests 1–2).
+The vocabulary MUST be exercised through the real submit path, not
+only the predicate unit test (this failure passed the original
+predicate-level intent tests).
+
 ## B7 — "Module tests green" ≠ "journey works"
 
 **Failure class**: the shipped feature had 40 passing loop/API tests and
@@ -286,3 +300,44 @@ confirms B11–B13 as a single connected failure chain: selection
 without goal understanding (B13) → related-but-unsuitable capability
 (B11) → false completion (B12). Contracted fix: M2 Stage 2
 (`2026-09-20-open-ended-investigation-conversation-ux-v1.md` §35b).
+
+## B14 — Plan-authored artifact source bindings are not updated when a re-plan inserts the real source steps
+
+**Failure class**: a `generate_artifact` step declares its data sources
+via `source_step_ids` at PLAN-AUTHORING time (e.g. the R2a stream plan
+binds the artifact to the single record-retrieval step). A later
+re-plan — e.g. contract-coverage insertion of analysis steps
+(related-accounts, set-internal trade analysis) — executes the new
+steps successfully but does NOT revise the artifact step's declared
+binding, so `artifact_bundle` composes ONLY from the stale declared
+source. The conversation answer is correct (it composes from live
+observations) while the persisted artifact contains the wrong data
+scope. Artifact existence, artifact_id, and task completion all look
+right; only the persisted CONTENT is wrong.
+
+**Evidence (manual acceptance, 2026-10-20, case U00029)**: request
+「列出所有关联账号，查询账号中是否有对冲交易，如果有，列出交易明细并
+生成一份文件」— conversation correct (17 linked accounts, 7 set-internal
+hedge candidates with pairs/transaction ids), but ART-54dd4a7cc7's
+persisted content was U00029's plain 71-record transaction table;
+`source_tool_calls=['TC-S1-…(finding_drilldown)']` only; plan was
+`S1 inspect_transactions, S3 analyze_related_accounts,
+S4 analyze_related_account_set_trades, S2 generate_artifact
+(source_step_ids=["S1"])`. The set-internal plan branch (B/C1) — which
+binds the artifact to the analysis results — never fired because the
+deterministic vocabulary did not recognize the phrasing (see B6
+addendum), so the stream plan authored the stale binding first.
+
+**Contract rule**: (1) an artifact whose user goal requires analysis
+deliverables (contract outputs requiring analysis evidence, e.g.
+`opposite_trade_relations`) must be planned bound to the analysis steps
+— the deterministic set-internal branch takes precedence over the
+plain stream plan whenever its predicate fires; (2) any re-plan that
+inserts steps producing evidence required by an artifact's goal must
+revise that artifact step's `source_step_ids` accordingly; (3)
+artifact acceptance MUST read the persisted artifact content and verify
+scope/provenance against the run's analysis results — artifact
+existence, artifact_id, or successful tool execution are never
+sufficient. Regression: `backend/tests/test_u00029_hedge_artifact_scope_v1.py`
+(tests 1–5, including the plain-transactions compat case and the
+no-candidates bounded cases).

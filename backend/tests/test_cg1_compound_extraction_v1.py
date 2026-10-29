@@ -327,5 +327,6 @@ class TestCheckpointIntegration:
         assert s.goal_contract.goal_type is None        # AD-1
         assert [o.claim for o in s.goal_contract.outputs] == [
             "hedge_presence_assessment", "related_accounts_list"]
-        assert s.goal_contract_decision == {
-            "outcome": "contract_accepted", "reason": None}
+        assert s.goal_contract_decision["outcome"] == "contract_accepted"
+        assert (s.goal_contract_decision["understanding"]["contract"]
+                ["decision"] == "accepted")

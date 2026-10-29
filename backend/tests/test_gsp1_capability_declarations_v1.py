@@ -36,12 +36,17 @@ from unittest.mock import patch
 # --- 1. vocabulary -------------------------------------------------------------
 
 def test_evidence_vocabulary_is_closed_and_exact():
+    # timeline_events added 2026-10-21 (R6, U00010 F7): the finding-scoped
+    # timeline retrieval EXISTS end-to-end (finding_drilldown view=timeline
+    # + evaluator + composer), so declaring it no longer implies an
+    # unhonored capability.
     assert EVIDENCE_TYPES == {
         "case_summary", "network_relations", "shared_device_evidence",
         "shared_ip_evidence", "opposite_trade_relations",
         "withdrawal_records", "transaction_records",
         "ml_signal_explanation", "rule_explanation",
         "graph_cluster_facts", "policy_references",
+        "timeline_events",
     }
 
 

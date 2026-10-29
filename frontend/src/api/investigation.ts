@@ -16,12 +16,14 @@ import type {
   GoalRunResponse,
   InvestigationListResponse,
   InvestigationResponse,
+  SubmitResponse,
   TaskActivityResponse,
   TaskDetailResponse,
   TaskResultsResponse,
   TurnRequest,
   TurnResponse,
 } from './types'
+import type { ResponseLanguage } from '@/lib/responseLanguage'
 
 const API_BASE = '/api/v2'
 
@@ -118,10 +120,18 @@ export const investigationApi = {
   /** Preview the backend's Suggested Follow-ups for the current context,
    * optionally as it would stand after the given selection's context_action
    * (the same action the next turn will carry). Read-only; no turn is run. */
-  listFollowups(investigationId: string, contextAction?: FocusAction) {
-    const query = contextAction
-      ? `?context_action=${encodeURIComponent(JSON.stringify(contextAction))}`
-      : ''
+  listFollowups(
+    investigationId: string,
+    contextAction?: FocusAction,
+    lang?: ResponseLanguage,
+  ) {
+    const params: string[] = []
+    if (contextAction) {
+      params.push(
+        `context_action=${encodeURIComponent(JSON.stringify(contextAction))}`)
+    }
+    if (lang) params.push(`lang=${lang}`)
+    const query = params.length ? `?${params.join('&')}` : ''
     return request<FollowUpsResponse>(
       `/investigations/${encodeURIComponent(investigationId)}/followups${query}`,
     )
@@ -150,6 +160,34 @@ export const investigationApi = {
         body: JSON.stringify({
           goal,
           ...(contextAction ? { context_action: contextAction } : {}),
+        }),
+      },
+    )
+  },
+
+  /** Unified submission entry (ONE send action): the SERVER routes the
+   * request to the single-turn runtime or the bounded Agent Loop via the
+   * goal-understanding representation. The client never chooses an
+   * execution mode. */
+  submitRequest(
+    investigationId: string,
+    message: string,
+    contextAction?: FocusAction,
+    followUpId?: string,
+    lang?: ResponseLanguage,
+  ) {
+    return request<SubmitResponse>(
+      `/investigations/${encodeURIComponent(investigationId)}/submit`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          message,
+          ...(contextAction ? { context_action: contextAction } : {}),
+          ...(followUpId ? { follow_up_id: followUpId } : {}),
+          // follow-up clicks only: the chip's face language so the server
+          // resolves the canonical intent in the SAME language the user
+          // clicked (free-form messages detect server-side instead)
+          ...(followUpId && lang ? { lang } : {}),
         }),
       },
     )

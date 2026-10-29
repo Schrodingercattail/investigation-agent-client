@@ -20,13 +20,43 @@ Scenarios:
                           unbounded by the previous turn's contract
 """
 import json
+import os
 import sys
 import time
 
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from e3_gate import (require_feature_evidence, runtime_gate_backend,
+                     verify_feature_evidence)
+
 BASE = "http://127.0.0.1:8001/api/v2"
-results = {"scenarios": {}}
+results = {"scenarios": {}, "e3_gate": {"scenarios": {}}}
+_STAMP = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+_REC = ("/Users/vv/investigation-agent-client/docs/evaluations")
+
+
+def _gate_fail(stage, code, record, scenario=None):
+    """Fail-closed E3 gate exit (P1-2): BLOCKED(2) / evidence FAIL(3)
+    propagate verbatim — SystemExit bypasses this harness's `except
+    Exception`, so later scenarios never run and the run can never be
+    reported as success."""
+    results["e3_gate"]["stage"] = stage
+    results["e3_gate"]["exit"] = code
+    results["e3_gate"]["record"] = record
+    if scenario:
+        results["e3_gate"]["scenarios"].setdefault(scenario, {})["verdict"]             = ("BLOCKED" if code == 2 else "FAIL")
+    print(f"GATE {'BLOCKED' if code == 2 else 'FAIL'} ({stage}, exit "
+          f"{code}) — record: {record}", flush=True)
+    sys.exit(code)
+
+
+_code, _rec = runtime_gate_backend(
+    f"{_REC}/gate-{_STAMP}-p0b-e3-step0.json")
+if _code != 0:
+    _gate_fail("step0", _code, _rec)
+results["e3_gate"]["step0"] = {"exit": _code, "record": _rec}
 
 
 def _call(method, path, payload=None, timeout=60):
@@ -47,6 +77,14 @@ def _run_goal(case_id, question, focus=None, setup_intake=True,
     if inv_id is None:
         inv = _call("POST", "/investigations", {"case_id": case_id})
         inv_id = inv["investigation"]["investigation_id"]
+    # E3 stage A: declare THIS scenario's evidence requirement (bound to
+    # the record's generated_at) before any goal turn of the scenario
+    sa_code, sa_record = require_feature_evidence(
+        inv_id, f"{_REC}/gate-{_STAMP}-p0b-e3-stageA-{inv_id[-8:]}.json")
+    if sa_code != 0:
+        _gate_fail("stageA", sa_code, sa_record, scenario=inv_id)
+    results["e3_gate"]["scenarios"].setdefault(inv_id, {})[
+        "stage_a"] = {"exit": sa_code, "record": sa_record}
     if setup_intake:
         _call("POST", f"/investigations/{inv_id}/turn",
               {"message": f"Investigate {case_id}"}, timeout=300)
@@ -65,6 +103,18 @@ def _run_goal(case_id, question, focus=None, setup_intake=True,
         time.sleep(5)
     assert activity and activity["is_terminal"], "loop did not terminate"
     detail = _call("GET", f"/tasks/{task_id}")
+    # E3 stage B: report-time verification against THIS scenario's
+    # stage-A declaration — task/investigation binding + strict time
+    # constraint + outcome validity. FAIL(3)/BLOCKED(2) exit fail-closed.
+    sb_code, sb_record = verify_feature_evidence(
+        sa_record, f"{_REC}/gate-{_STAMP}-p0b-e3-stageB-{inv_id[-8:]}.json")
+    results["e3_gate"]["scenarios"].setdefault(inv_id, {})[
+        "stage_b"] = {"exit": sb_code, "record": sb_record,
+                      "verdict": ("PASS" if sb_code == 0 else
+                                  "BLOCKED" if sb_code == 2 else "FAIL"),
+                      "task_id": task_id}
+    if sb_code != 0:
+        _gate_fail("stageB", sb_code, sb_record, scenario=inv_id)
     return activity, detail, inv_id, task_id
 
 

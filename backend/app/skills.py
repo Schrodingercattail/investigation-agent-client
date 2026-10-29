@@ -60,6 +60,11 @@ class EvidenceType(str, Enum):
     # honor end-to-end (no nearest-capability fallback, ever).
     SHARED_IP_EVIDENCE = "shared_ip_evidence"
     OPPOSITE_TRADE_RELATIONS = "opposite_trade_relations"
+    # R6 (U00010 F7): the finding-scoped timeline retrieval EXISTS
+    # (finding_drilldown view=timeline, registry-declared) — declaring the
+    # evidence type lets a timeline ask contract correctly instead of
+    # degrading to a case summary.
+    TIMELINE_EVENTS = "timeline_events"
     WITHDRAWAL_RECORDS = "withdrawal_records"
     TRANSACTION_RECORDS = "transaction_records"
     ML_SIGNAL_EXPLANATION = "ml_signal_explanation"
@@ -106,7 +111,15 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
     ),
     "generate_artifact": StepToolBinding(
         tool_name="artifact_bundle",
-        supported_evidence_types=[EvidenceType.CASE_SUMMARY],
+        # U00047 file-delivery closure: the bundle IS the delivery channel
+        # for record streams — a generated bundle's actual evidence is the
+        # streams it was rendered from (see
+        # _actual_evidence_types artifact_bundle branch), so the
+        # declaration must admit them or every artifact observation is
+        # excluded from association as "undeclared".
+        supported_evidence_types=[EvidenceType.CASE_SUMMARY,
+                                  EvidenceType.WITHDRAWAL_RECORDS,
+                                  EvidenceType.TRANSACTION_RECORDS],
     ),
     # Event-level evidence type intentionally deferred (no declared type in
     # this vocabulary slice; timeline records are not a declared kind yet).
@@ -121,6 +134,11 @@ STEP_TOOL_MAP: dict[str, StepToolBinding] = {
         parameter_locks={"view": "evidence"},
         supported_evidence_types=[EvidenceType.WITHDRAWAL_RECORDS,
                                   EvidenceType.TRANSACTION_RECORDS],
+    ),
+    "inspect_timeline": StepToolBinding(
+        tool_name="finding_drilldown",
+        parameter_locks={"view": "timeline"},
+        supported_evidence_types=[EvidenceType.TIMELINE_EVENTS],
     ),
     "inspect_withdrawals": StepToolBinding(
         tool_name="finding_drilldown",

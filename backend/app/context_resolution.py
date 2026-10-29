@@ -61,6 +61,18 @@ SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE = (
     "我暂时无法可靠判断你指的是哪个风险发现，因为语义解析服务当前不可用。"
     "请直接在 Findings 面板指定风险项/发现，或稍后重试。"
 )
+SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE_EN = (
+    "The semantic resolution service is currently unavailable, so the "
+    "risk finding you mean cannot be reliably determined. Please select "
+    "the finding directly in the Findings panel, or retry later."
+)
+
+
+def _clar_lang(text: str | None) -> str | None:
+    """Response language for clarification texts (None = undeterminable,
+    the template keeps its historical default face)."""
+    from app.response_language import detect_response_language
+    return detect_response_language(text)
 
 
 class Candidate(BaseModel):
@@ -256,11 +268,13 @@ _CAPABILITY_QUESTION_RE = __import__("re").compile(
 _ARTIFACT_REQUEST_RE = __import__("re").compile(
     r"(生成|导出|创建|给我|produce|generate|create|export|make|build)[^\n]{0,64}?"
     r"(artifact|artifacts|bundle|report|报告|包)"
-    # P1: explicit RECORDS-file asks ("提现明细和交易明细文件") — the
-    # 文件 noun is only recognized when qualified by a record-stream
+    # P1: explicit RECORDS-file asks ("提现明细和交易明细文件" /
+    # "generate a detail file" / "withdrawal detail file") — the 文件/
+    # file noun is only recognized when qualified by a record-stream
     # noun, so bare "创建文件"/"这个文件" questions never classify as
     # artifact requests.
-    r"|(?:提现|交易|明细|记录)[^\n]{0,16}?文件",
+    r"|(?:提现|交易|明细|记录)[^\n]{0,16}?文件"
+    r"|(?:withdrawal|transaction|detail|record)[^\n]{0,16}?\bfile\b",
     __import__("re").IGNORECASE | __import__("re").DOTALL,
 )
 _FINDING_SCOPED_RE = __import__("re").compile(
@@ -345,6 +359,11 @@ class ContextResolver:
         events = list(events or [])
         ctx = current_context.model_copy(deep=True)
         request_lower = user_request.strip().lower()
+        # Per-turn response language for the USER-FACING clarification
+        # texts produced along the resolution chain (same single source of
+        # truth as the entry/composer: detect from THIS request only).
+        # None/unknown keeps each template's historical default face.
+        _lang = _clar_lang(user_request)
 
         # --- Cross-case boundary (P12: ONE investigation = ONE case) ---------
         # THE earliest shared semantic boundary where both current_case_id
@@ -369,9 +388,14 @@ class ContextResolver:
                     updated_context=ctx,          # unchanged — no re-targeting
                     context_changed=False,
                     clarification_message=(
-                        f"This conversation is investigating case "
-                        f"{ctx.case_id}. To investigate case {other_cases[0]}"
-                        ", start a new investigation and select that case."
+                        (
+                            f"This conversation is investigating case "
+                            f"{ctx.case_id}. To investigate case "
+                            f"{other_cases[0]}, start a new investigation "
+                            "and select that case."
+                        ) if _lang != "zh" else
+                        f"当前会话正在调查案例 {ctx.case_id}。如需调查案例 "
+                        f"{other_cases[0]}，请新建一个调查并选择该案例。"
                     ),
                 )
 
@@ -398,6 +422,16 @@ class ContextResolver:
                     "- generate a Markdown investigation bundle\n\n"
                     "Not yet available: network/relationship drilldown and "
                     "the same-account (self) opposite-trades drilldown."
+                    if _lang != "zh" else
+                    "我可以协助调查 Risk Platform 案例。您可以：\n"
+                    "· 发起案例调查（Case Intake）\n"
+                    "· 选择一个发现并询问它为何被标记\n"
+                    "· 查看发现的时间线\n"
+                    "· 列出发现背后的全部具体证据\n"
+                    "· 查看发现适用哪些政策要求\n"
+                    "· 检查候选的跨账户对冲交易（交易调查）\n"
+                    "· 生成 Markdown 调查证据包\n\n"
+                    "暂不支持：网络/关系下钻与同账户对向交易下钻。"
                 ),
             )
         if intent in (RequestIntent.ARTIFACT_CASE, RequestIntent.ARTIFACT_FINDING):
@@ -412,6 +446,9 @@ class ContextResolver:
                         "A finding-scoped bundle needs a focused finding. "
                         "Select a finding from the Findings panel on the "
                         "left, or ask for a case-level bundle."
+                        if _lang != "zh" else
+                        "按发现生成的证据包需要先聚焦一个发现。请在左侧"
+                        "发现面板中选择一个发现，或改为请求案例级证据包。"
                     ),
                 )
             # Target-independent supported request: case scope (or the
@@ -473,7 +510,8 @@ class ContextResolver:
                 # No explicit focus; if multiple events could match the vague
                 # reference it is ambiguous — never a guess.
                 if len(events) > 1:
-                    return self._ambiguous_events(ctx, events)
+                    return self._ambiguous_events(ctx, events,
+                                                  lang=_lang)
                 target_event = events[0]
                 new_ctx = ctx.model_copy(update={
                     "focused_finding_id": target_event.finding_id,
@@ -535,11 +573,48 @@ class ContextResolver:
                     evidence_kind="title_match",
                 )
             if len(hits) > 1:
-                return self._ambiguous_candidates(ctx, [
-                    Candidate(kind="finding", id=f.finding_id, title=f.title,
-                              hint=f.summary[:80])
-                    for f in hits
-                ])
+                # U00010 B1 (EN): the request NAMES several authoritative
+                # titles — each hit matched by its OWN title-token
+                # majority — so this is a COMPOUND multi-target ask, not a
+                # which-one ambiguity (the same tolerance the planner's
+                # multi-title rule applies at planning time). Resolve
+                # case-level without focus: the per-output planner
+                # machinery serves each named finding. SUBSTANTIVE-
+                # DIFFERENT guard: variant/same-name hits (pinned
+                # ambiguity class — "…Pattern" vs "…Pattern - Leg 2",
+                # "…Frequency" vs "…Frequency - Night") stay ambiguous;
+                # compound enumeration requires pairwise title-token
+                # Jaccard < 0.5. (Token-majority matching cannot produce
+                # the multi-hit shape from a single vague reference.)
+                def _sig_tokens(title):
+                    stop = {"and", "the", "with", "for", "of"}
+                    return ({t for t in _name_tokens(title)
+                             if t not in stop}
+                            or {(_norm(title),)})
+                from itertools import combinations as _comb
+                _variant = any(
+                    (len(a & b) / len(a | b)) >= 0.5
+                    for a, b in _comb(
+                        [_sig_tokens(f.title) for f in hits], 2))
+                if _variant:
+                    return self._ambiguous_candidates(ctx, [
+                        Candidate(kind="finding", id=f.finding_id,
+                                  title=f.title, hint=f.summary[:80])
+                        for f in hits
+                    ], lang=_lang)
+                return ResolutionOutcome(
+                    status=ResolutionStatus.UNCHANGED_CASE_LEVEL,
+                    updated_context=self._cleared_focus_if_no_source(ctx),
+                    context_changed=False,
+                    used_llm=False,
+                    resolution_kind="title_match",
+                    resolution_reason=(
+                        "request names multiple findings by title ("
+                        + ", ".join(f.finding_id for f in hits)
+                        + ") — compound multi-target ask; case-level "
+                          "resolution"),
+                    evidence_kind="title_match",
+                )
 
         if _mentions_accounts(request_lower):
             # Week 1: account-level investigation has no drilldown target;
@@ -603,6 +678,9 @@ class ContextResolver:
                 clarification_message=(
                     "I couldn't determine which finding you're referring to. "
                     "Select a finding in the Focus panel or name it explicitly."
+                    if _lang != "zh" else
+                    "无法确定您指的是哪个发现。请在发现面板中选择它，或"
+                    "明确写出其编号。"
                 ),
             )
 
@@ -615,6 +693,8 @@ class ContextResolver:
             context_changed=False,
             clarification_message=(
                 "No specific target could be resolved from this request."
+                if _lang != "zh" else
+                "无法从该请求解析出具体的目标。"
             ),
         )
 
@@ -769,7 +849,9 @@ class ContextResolver:
                     **evidence, "status": "UNKNOWN",
                     "reason_class": "llm_unavailable"},
                 clarification_message=(
-                    SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE),
+                    SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE
+                    if _clar_lang(user_request) != "en" else
+                    SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE_EN),
             )
         evidence.update({
             "status": normalized.status,
@@ -788,7 +870,9 @@ class ContextResolver:
                     context_changed=False,
                     semantic_evidence=evidence,
                     clarification_message=(
-                        SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE),
+                        SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE
+                        if _clar_lang(user_request) != "en" else
+                        SEMANTIC_RESOLUTION_UNAVAILABLE_MESSAGE_EN),
                 )
             # AL-2.10 taxonomy: a provider that ANSWERED but produced an
             # unusable proposal (no text block / malformed JSON), or an
@@ -850,7 +934,7 @@ class ContextResolver:
                 Candidate(kind="finding", id=f.finding_id, title=f.title,
                           hint=f.summary[:80])
                 for f, _ in grounded
-            ])
+            ], lang=_clar_lang(user_request))
             outcome.semantic_evidence = evidence
             return outcome
         # Concept OK but no current-case candidate carries it in its core:
@@ -892,14 +976,16 @@ class ContextResolver:
         exists)."""
         return ctx
 
-    def _ambiguous_events(self, ctx, events: list[TimelineEvent]) -> ResolutionOutcome:
+    def _ambiguous_events(self, ctx, events: list[TimelineEvent],
+                          lang: str | None = None) -> ResolutionOutcome:
         return self._ambiguous_candidates(ctx, [
             Candidate(kind="event", id=e.event_id, title=e.summary[:60],
                       hint=f"{e.event_type} @ {e.timestamp}")
             for e in events
-        ])
+        ], lang=lang)
 
-    def _ambiguous_candidates(self, ctx, candidates: list[Candidate]) -> ResolutionOutcome:
+    def _ambiguous_candidates(self, ctx, candidates: list[Candidate],
+                              lang: str | None = None) -> ResolutionOutcome:
         listing = "\n".join(f"- [{c.kind}] {c.id}: {c.title}" for c in candidates)
         return ResolutionOutcome(
             status=ResolutionStatus.AMBIGUOUS,
@@ -910,6 +996,10 @@ class ContextResolver:
                 "Your request matches multiple possibilities:\n"
                 f"{listing}\n"
                 "Please specify which one you mean."
+                if lang != "zh" else
+                "您的请求匹配到多个可能的目标：\n"
+                f"{listing}\n"
+                "请说明您指的是哪一个。"
             ),
         )
 
@@ -1013,7 +1103,8 @@ class ContextResolver:
                                      .removesuffix("```").strip()))
         except Exception as e:
             logger.warning("LLM target resolution failed: %s", e)
-            return self._unresolved_after_llm(ctx)
+            return self._unresolved_after_llm(
+                ctx, lang=_clar_lang(user_request))
 
         resolution = payload.get("resolution")
         selected = payload.get("finding_id")
@@ -1062,8 +1153,9 @@ class ContextResolver:
                                       hint=reason
                                       or "multiple supported candidates")
                             for fid in supported
-                        ])
-                    return self._unresolved_after_llm(ctx)
+                        ], lang=_clar_lang(user_request))
+                    return self._unresolved_after_llm(
+                        ctx, lang=_clar_lang(user_request))
             if confidence != "high":
                 # weak semantic similarity must not become a definitive
                 # target (open-ended baseline §10)
@@ -1071,7 +1163,8 @@ class ContextResolver:
                 return self._ambiguous_candidates(ctx, [
                     Candidate(kind="finding", id=target.finding_id,
                               title=target.title,
-                              hint=reason or "possible target")])
+                              hint=reason or "possible target")],
+                    lang=_clar_lang(user_request))
             target, new_ctx = _ctx_for(selected)
             return ResolutionOutcome(
                 status=ResolutionStatus.RESOLVED,
@@ -1097,12 +1190,13 @@ class ContextResolver:
                                      if f.finding_id == fid),
                           hint=reason or "multiple plausible targets")
                 for fid in plausible
-            ])
+            ], lang=_clar_lang(user_request))
 
         # RESOLVED without high confidence and without a usable id, explicit
         # UNRESOLVED, or unusable payloads: bounded unresolved — never a
         # fabricated target.
-        return self._unresolved_after_llm(ctx)
+        return self._unresolved_after_llm(
+            ctx, lang=_clar_lang(user_request))
 
     def _validate_assist_evidence(
         self, user_request: str, selected_id: str, payload: dict,
@@ -1189,13 +1283,16 @@ class ContextResolver:
         }
         return True, supported, record
 
-    def _unresolved_after_llm(self, ctx) -> ResolutionOutcome:
+    def _unresolved_after_llm(self, ctx,
+                              lang: str | None = None) -> ResolutionOutcome:
         return ResolutionOutcome(
             status=ResolutionStatus.UNRESOLVED,
             updated_context=ctx,
             context_changed=False,
             clarification_message=(
                 "I couldn't safely determine the target of your question."
+                if lang != "zh" else
+                "无法安全地确定您问题的调查目标。"
             ),
             used_llm=True,
         )

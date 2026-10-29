@@ -11,17 +11,51 @@ the EXACT historical question. Verifies:
   5. the final response answers the metric definition from the account's
      OWN metric semantics — "no cross-account match" is never presented
      as the definition of the 34.12% figure
+
+E3 Runtime Verification Gate (P1-2, fail-closed):
+  step 0    backend source/process/effective-flag gate — BLOCKED exit 2
+  stage A   --require-feature-evidence <this investigation> (declaration,
+            bound to the record's generated_at) — BLOCKED exit 2
+  stage B   --verify-feature-evidence <stage-A record> AFTER the goal run
+            — evidence FAIL exit 3; verification-unverifiable BLOCKED exit 2
+  Exit codes: 0 success; 1 business failure; 2 gate BLOCKED; 3 evidence
+  FAIL — propagated verbatim, never masked or downgraded.
 """
 import json
+import os
 import sys
 import time
 
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from e3_gate import (require_feature_evidence, runtime_gate_backend,
+                     verify_feature_evidence)
+
 BASE = "http://127.0.0.1:8001/api/v2"
 QUESTION = ("34.12%的反向交易率是账户间的对冲交易还是账户自己的对冲交易？"
             "为什么反向交易是风险项？")
 results = {"question": QUESTION}
+_STAMP = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+
+def _final_exit(gate_code, business_pass):
+    """Final harness exit (P1-2 exit-code semantics fix):
+    - a non-zero GATE code (2=BLOCKED / 3=evidence FAIL) propagates
+      VERBATIM and takes precedence — never remapped by business results;
+    - with the gate PASS, a business-assertion failure exits 1 (non-zero
+      — automation must not mistake a failed journey for success);
+    - 0 only when the gate passed AND every business assertion held.
+    The exception path keeps its pre-existing exit 1 (unchanged)."""
+    if gate_code != 0:
+        return gate_code
+    return 0 if business_pass else 1
+
+
+def _save():
+    with open("/tmp/bchain_u00005_api_e2e.json", "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
 
 
 def _call(method, path, payload=None, timeout=30):
@@ -35,11 +69,39 @@ def _call(method, path, payload=None, timeout=30):
         return json.loads(r.read().decode("utf-8"))
 
 
+# --- E3 step 0: runtime gate BEFORE any target request ---------------
+_code, _rec = runtime_gate_backend(
+    f"/Users/vv/investigation-agent-client/docs/evaluations/"
+    f"gate-{_STAMP}-e3-step0.json")
+if _code != 0:
+    results["e3_gate"] = {"stage": "step0", "exit": _code,
+                          "record": _rec, "verdict": "BLOCKED"}
+    _save()
+    print(json.dumps(results, ensure_ascii=False, indent=2))
+    sys.exit(2)
+results["e3_gate"] = {"stage": "step0", "exit": _code, "record": _rec}
+
 try:
     # 1) fresh investigation for the case
     inv = _call("POST", "/investigations", {"case_id": "U00005"})
     inv_id = inv["investigation"]["investigation_id"]
     results["investigation_id"] = inv_id
+
+    # --- E3 stage A: declare the evidence requirement for THIS
+    # investigation (bound to the record's generated_at) BEFORE the goal
+    # run — declaration only, never alters the gate dimensions.
+    _code, stage_a_record = require_feature_evidence(
+        inv_id,
+        f"/Users/vv/investigation-agent-client/docs/evaluations/"
+        f"gate-{_STAMP}-e3-stageA.json")
+    results["e3_gate"]["stage_a"] = {"exit": _code,
+                                     "record": stage_a_record}
+    if _code != 0:
+        results["e3_gate"]["stage"] = "stageA"
+        results["e3_gate"]["verdict"] = "BLOCKED"
+        _save()
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+        sys.exit(2)
 
     # 2) intake turn (the browser journey's entry operation) — the real
     #    RP fetch + bundle composition can take ~30-60s
@@ -165,15 +227,43 @@ try:
             all(v == "covered" for v in cov.values())
         results["PASS"] = all(a.values())
 
+    # --- E3 stage B: report-time verification against the stage-A
+    # declaration — task/investigation binding + strict time constraint
+    # + outcome validity. FAIL(3)/BLOCKED(2) propagate verbatim and force
+    # the harness result non-success; never masked or skipped.
+    _code, stage_b_record = verify_feature_evidence(
+        stage_a_record,
+        f"/Users/vv/investigation-agent-client/docs/evaluations/"
+        f"gate-{_STAMP}-e3-stageB.json")
+    results["e3_gate"]["stage_b"] = {"exit": _code,
+                                     "record": stage_b_record}
+    if _code == 0:
+        results["e3_gate"]["verdict"] = "PASS"
+    elif _code == 2:
+        results["e3_gate"]["verdict"] = "BLOCKED"
+    else:
+        results["e3_gate"]["verdict"] = "FAIL"
+    results["PASS"] = bool(results.get("PASS")) and _code == 0
+    _save()
+    if _code != 0:
+        results["final_exit"] = _final_exit(_code, results["PASS"])
+        print(json.dumps({k: v for k, v in results.items()
+                          if k != "response_text"},
+                         ensure_ascii=False, indent=2))
+        sys.exit(_code)
+
+    # gate PASSED: the business assertions decide the final exit — a
+    # failed journey must NOT exit 0 (P1-2 exit-code semantics fix)
+    results["final_exit"] = _final_exit(_code, results["PASS"])
     with open("/tmp/bchain_u00005_api_e2e.json", "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(json.dumps({k: v for k, v in results.items()
                       if k != "response_text"}, ensure_ascii=False, indent=2))
     print("--- RESPONSE ---")
     print(response_text)
+    sys.exit(results["final_exit"])
 except Exception as e:
     results["error"] = f"{type(e).__name__}: {e}"[:400]
-    with open("/tmp/bchain_u00005_api_e2e.json", "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+    _save()
     print(json.dumps(results, ensure_ascii=False, indent=2))
     sys.exit(1)

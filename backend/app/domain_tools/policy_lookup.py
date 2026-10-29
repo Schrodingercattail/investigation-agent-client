@@ -197,6 +197,18 @@ def policy_lookup(
                         key=lambda p: (str(p.citation_id)))
     newly = [p for p in newly]
 
+    # L1/P0: mark applicability per citation — finding-associated citations
+    # are authoritative for THIS finding; case-level citations are background
+    # reference only (the finding has no RP-attached policy basis).
+    associated_ids = {p.citation_id for p in associated}
+    for m in matches:
+        m["applicability"] = (
+            "finding_level" if m.get("citation_id") in associated_ids
+            else "case_level")
+    # Report the finding-level basis status so the composer and the
+    # postcondition evaluator can distinguish finding-level from case-level.
+    payload_status = finding_policy_status
+
     # Evidence-missing: the finding cites NO policies at all, so policy
     # requirements specific to it cannot be assessed (case-level citations
     # may still exist).
@@ -210,6 +222,10 @@ def policy_lookup(
         "finding_id": finding_id,
         "finding_policy_status": finding_policy_status,
         "topic": topic,
+        "applicability_note": (
+            "All citations below are case-level references; no finding-level "
+            "policy basis was found for this finding."
+            if finding_policy_status == "no_finding_level_basis" else None),
         "matches": matches,
         "associated_policy_refs": [p.model_dump() for p in associated],
         "newly_retrieved_refs": [p.model_dump() for p in newly],

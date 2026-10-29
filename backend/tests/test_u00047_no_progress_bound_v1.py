@@ -181,7 +181,7 @@ def _contract():
                 output_id="O3",
                 claim="生成并交付一份包含上述对冲交易明细的交易明细文件",
                 claim_kind="retrieval", subject_ref=CASE,
-                scope="case_level",
+                scope="case_level", delivery="file_export",
                 evidence_requirements=["transaction_records",
                                        "opposite_trade_relations"]),
         ])
@@ -582,6 +582,7 @@ def _goal_resolver():
             {"claim": "生成并交付一份包含上述对冲交易明细的交易明细文件",
              "claim_kind": "retrieval", "subject_ref": CASE,
              "scope": "case_level",
+             "delivery": "file_export",
              "evidence_requirements": ["transaction_records",
                                        "opposite_trade_relations"]},
         ]})

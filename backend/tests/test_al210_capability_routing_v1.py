@@ -252,7 +252,10 @@ def test_differential_b_hedge_request_is_a_case_level_capability():
     assert tools[0]["outcome"] == "success"
     # the answer is the honest analytical output (candidates or a bounded
     # no-match), never a resolution failure
-    assert ("candidate cross-account" in r2["response"]
+    # in the REQUEST's language (per-turn response language: zh → zh face)
+    assert ("候选跨账户对冲交易关系" in r2["response"]
+            or "没有匹配的候选跨账户" in r2["response"]
+            or "candidate cross-account" in r2["response"]
             or "No candidate cross-account" in r2["response"])
 
 

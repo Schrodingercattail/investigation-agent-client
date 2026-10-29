@@ -30,10 +30,13 @@ export function ArtifactsPanel({ artifacts, expandedId, onCollapse }: ArtifactsP
   // unique per position, stable for the list being rendered — while the
   // artifact identity stays in the key. A stale selection that no longer
   // matches any slot falls back to the first artifact.
-  const tabValue = (i: number) => `idx:${i}:${artifacts[i].artifact_id}`
+  const tabValue = (i: number) =>
+    artifacts[i] ? `idx:${i}:${artifacts[i].artifact_id}` : `idx:${i}:<none>`
   const selectedValue = artifacts.some((_, i) => tabValue(i) === activeTab)
     ? activeTab
-    : tabValue(0)
+    : artifacts.length > 0
+      ? tabValue(0)
+      : undefined
 
   if (artifacts.length === 0) {
     return (

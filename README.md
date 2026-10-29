@@ -364,3 +364,19 @@ evaluation"*.
   no-op/in-memory sinks are the Week 1 scope.
 - The Risk Platform is required and external; the Agent cannot produce
   investigation results without it.
+- **Known failing tests (documented, not yet fixed):** the bilingual
+  coverage suites carry pre-existing failures — a None-format rendering
+  family in the zh hedge-candidates/evidence renderer
+  (`tests/test_display_cap_disclosure_v1.py`: the five
+  `TestGspCandidateCapDisclosure` overflow shapes plus
+  `TestFoundEmittedPartialSemantics::test_gsp_header_discloses_undelivered`;
+  `tests/test_generality_invariants_v1.py::test_renderer_never_leaks_none_for_time_gap`),
+  and one completion-semantics failure
+  (`tests/test_three_constraints_closure_v1.py::test_contract_path_renders_per_output_not_generic_guard`).
+  Additionally, one outdated assertion
+  (`tests/test_display_cap_disclosure_v1.py::TestRecordTableMarker::test_record_table_overflow_has_marker`)
+  was left behind by the records-listing disclosure-semantics fix: the
+  old behavior showed a false truncation marker on a complete
+  ≤10-record set, and the assertion still locks that old behavior. All
+  of these are attribution-verified against a pre-batch isolation copy
+  and remain open follow-up items — not silently treated as resolved.

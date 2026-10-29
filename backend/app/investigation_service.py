@@ -68,7 +68,9 @@ from app.composition import (
     gap_statement,
 )
 
-_CITATION_MARKER_RE = __import__("re").compile(r"\s*\[\d+\]")
+import re as _re
+
+_CITATION_MARKER_RE = _re.compile(r"\s*\[\d+\]")
 
 # Human-readable names for RP ML risk-feature fields (semantics verified in
 # RP source: app/ml/features.py). Values echo verbatim; unknown keys fall
@@ -111,6 +113,121 @@ _CAPABILITY_PHRASES = {
     "signal_explain": "Signal explanation",
     "self_opposite_trades": "The self-opposite-trade investigation",
 }
+_CAPABILITY_PHRASES_ZH = {
+    "timeline": "时间线调查",
+    "signal_explain": "信号解释",
+    "self_opposite_trades": "同账户对向交易调查",
+}
+
+# --- system-authored tool guidance: per-turn response-language face ---------
+# `warnings` and `next_data_needed` are authored by OUR domain tools (a
+# closed, greppable vocabulary — never Risk Platform passthrough). The
+# tools stay language-neutral data producers; the TURN COMPOSER renders
+# their operational guidance in the turn's language via this mapping.
+# Interpolated variants are matched by anchored patterns; UNKNOWN items
+# are kept verbatim (honest data, never machine-translated guesses).
+
+_TOOL_TEXT_ZH_EXACT = {
+    "Case has no data; finding cannot exist.":
+        "案例无数据；该发现不可能存在。",
+    "Risk Platform has no risk event / evidence for this case.":
+        "Risk Platform 没有该案例的风险事件/证据。",
+    "The Risk Platform holds no opposite-side trading activity data for "
+        "this account.":
+        "Risk Platform 没有该账户的反向交易活动数据。",
+    "The Risk Platform holds no concrete withdrawal/"
+        "transaction records for this finding's evidence streams; only "
+        "aggregate feature values exist.":
+        "Risk Platform 没有该发现证据流的提现/交易具体记录；仅存在"
+        "聚合特征值。",
+    "No timestamped evidence is available for this finding in the Risk "
+        "Platform.":
+        "Risk Platform 中该发现没有带时间戳的证据。",
+    "The Risk Platform returned no policy citations for this case; no "
+        "policy basis can apply to this finding.":
+        "Risk Platform 未返回该案例的政策引用；不存在可适用于该发现的"
+        "政策依据。",
+    "Retrieval was bounded (partial set coverage); candidates are valid "
+        "but absence of further set-internal matches is not established.":
+        "检索受限（集合覆盖不完整）；候选有效，但不能据此认定集合内部"
+        "不存在更多匹配。",
+    "Retrieval was bounded (partial evidence); candidates are valid but "
+        "absence of further matches is not established.":
+        "检索受限（证据不完整）；候选有效，但不能据此认定不存在更多"
+        "匹配。",
+    "No executed tool results are available to compose an artifact from. "
+        "Run an investigation step first — no artifact was fabricated.":
+        "没有可用的已执行工具结果来生成证据包。请先执行一个调查步骤——"
+        "未虚构任何证据包。",
+    "finding-level policy association (citations attached to this "
+        "finding by the Risk Platform)":
+        "finding-level 政策关联（由 Risk Platform 附加到该发现的引用）",
+    "triggered-rule evidence associated with this finding":
+        "与该发现关联的已触发规则证据",
+    "network/cluster evidence for this case":
+        "该案例的网络/集群证据",
+    "related-account attribution for this case":
+        "该案例的关联账号归因",
+    "complete (non-truncated) transaction evidence for the related-account "
+        "set":
+        "关联账户集合的完整（未截断）交易证据",
+    "No finding-level policy association is attached to this finding.":
+        "该发现未附加 finding-level 政策关联。",
+}
+
+_TOOL_TEXT_ZH_PATTERNS = [
+    (_re.compile(r"^Timeline is a bounded subset: showing top_n=(\d+) of "
+                r"(\d+) events at the user's explicit request "
+                r"\(chronological order preserved\)\.$"),
+     "时间线为有界子集：按用户明确要求显示前 {0} 条（共 {1} 个事件，"
+     "保持时间顺序）。"),
+    (_re.compile(r"^(\d+) candidate relationships were found; the top "
+                r"(\d+) are reported \(TRADE_ANALYSIS_MAX_CANDIDATES="
+                r"(\d+)\)\.$"),
+     "共发现 {0} 组候选关系；报告前 {1} 组"
+     "（TRADE_ANALYSIS_MAX_CANDIDATES={2}）。"),
+    (_re.compile(r"^The authoritative opposite_trade_ratio metric for "
+                r"account (\S+) could not be retrieved: "
+                r"(\w+)\.$"),
+     "未能取得账户 {0} 的权威 opposite_trade_ratio 指标：{1}。"),
+    (_re.compile(r"^evidence stream: (\S+)$"),
+     "证据流: {0}"),
+    (_re.compile(r"^account-attributed transaction evidence for the "
+                r"related-account set of (\S+)$"),
+     "关联账户集合（{0}）的账户归属交易证据"),
+    (_re.compile(r"^account-attributed transaction evidence for the target "
+                r"account (\S+) and its connected accounts$"),
+     "目标账户 {0} 及其关联账户的账户归属交易证据"),
+]
+
+
+def _zh_warning_face(warning: str) -> str:
+    """One warning's zh presentation line. A KNOWN system guidance string
+    renders its mapped zh text; an UNKNOWN warning is never passed through
+    as English body text — the line says (in Chinese) that an untranslated
+    system notice exists and carries the original string in an explicitly
+    labeled diagnostic slot (not disguised as a translation, never
+    dropped)."""
+    mapped = _zh_tool_text(warning)
+    if mapped != warning:
+        return f"注：{mapped}"
+    return f"注：存在一条尚未配置中文映射的系统提示〔原文: {warning}〕。"
+
+
+def _zh_tool_text(text: str) -> str:
+    """The zh face of one system-authored tool guidance string; unknown
+    items are returned verbatim (tool data — never a guessed translation).
+    (For warnings use _zh_warning_face, which keeps unknown EN strings out
+    of the zh answer body.)"""
+    t = " ".join(str(text).split())          # match over normalized spacing
+    exact = _TOOL_TEXT_ZH_EXACT.get(t)
+    if exact:
+        return exact
+    for pat, tmpl in _TOOL_TEXT_ZH_PATTERNS:
+        m = pat.match(t)
+        if m:
+            return tmpl.format(*m.groups())
+    return str(text)
 
 
 def _unsupported_capability_message(
@@ -141,6 +258,34 @@ def _unsupported_capability_message(
     )
 
 
+def _unsupported_capability_message_lang(
+    fatal: Any, tool_calls: list[ToolCallV2], lang: str | None,
+) -> str | None:
+    """Per-turn response-language face of the finding-scoped unsupported
+    wording (same structured capability detail; zh face for zh turns)."""
+    detail = (fatal.detail or {}).get("tool_call_id")
+    if not detail:
+        return None
+    failed_tc = next(
+        (tc for tc in tool_calls if tc.tool_call_id == detail), None)
+    if failed_tc is None or failed_tc.result is None \
+            or failed_tc.result.error is None:
+        return None
+    cap = (failed_tc.result.error.detail or {}).get("capability")
+    phrase = (_CAPABILITY_PHRASES_ZH.get(cap) if cap else None) \
+        if lang == "zh" else (_CAPABILITY_PHRASES.get(cap) if cap else None)
+    if not phrase:
+        return None
+    if lang == "zh":
+        return (f"该发现类型不支持{phrase}。其他调查操作可能仍适用于"
+                "该发现；系统未虚构任何结果。")
+    return (
+        f"{phrase} is not available for this type of finding. Other "
+        "investigation actions may still apply to this finding; nothing "
+        "was fabricated."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Response composition (deterministic; grounded in ToolResults only)
 # ---------------------------------------------------------------------------
@@ -156,7 +301,8 @@ def _mentions_reverse_trade_rate(user_request: str | None) -> bool:
 
 
 def _evidence_comparison_lines(data: dict,
-                               user_request: str | None) -> list[str]:
+                               user_request: str | None,
+                               lang: str | None = None) -> list[str]:
     """English conclusions over the evidence view's comparison fact
     blocks — the destination-identity answer, the per-record new-address
     answer, and the metric-scope reconciliation. Verdict SHAPES reuse the
@@ -164,6 +310,7 @@ def _evidence_comparison_lines(data: dict,
     surfaces); the wording is this composer's own (English turn surface).
     Every line states its scope; a population shortfall never presents
     the retrieved subset as the asserted full population."""
+    zh = lang == "zh"
     lines: list[str] = []
     from app.goal_postconditions import (
         _destination_block_consistent, _destination_facts_verdict,
@@ -178,6 +325,10 @@ def _evidence_comparison_lines(data: dict,
         shortfall = asserted is not None and asserted > total
         if shortfall:
             lines.append(
+                f"口径说明：您的请求提及 {asserted} 笔提现，但权威来源"
+                f"仅有 {total} 笔（已完整检索）。下方比较仅覆盖这 "
+                f"{total} 条已检索记录——不构成对全部请求范围的回答。"
+                if zh else
                 f"Population note: your request mentions {asserted} "
                 f"withdrawals, but the authoritative source holds only "
                 f"{total} (completely retrieved). The comparison below "
@@ -188,12 +339,17 @@ def _evidence_comparison_lines(data: dict,
             unique = di.get("unique_destinations")
             if missing:
                 lines.append(
+                    f"目的地标识：{total} 条记录中有 {missing} 条缺少"
+                    "目的地标识——同/异的比较仅覆盖可比较子集，而非"
+                    "全集合。" if zh else
                     f"Destination identity: {missing}/{total} records "
                     "lack a recorded destination identifier — the "
                     "same-or-different comparison covers the comparable "
                     "subset only, not the whole set.")
             elif unique == 1:
                 lines.append(
+                    f"目的地标识：全部 {total} 笔提现指向同一目的地"
+                    "（记录中的地址标识一致）。" if zh else
                     f"Destination identity: all {total} withdrawals "
                     "point to the SAME destination (identical recorded "
                     "address identifiers).")
@@ -203,11 +359,14 @@ def _evidence_comparison_lines(data: dict,
                 # mapping would silently drop records from a per-record
                 # deliverable (these populations are bounded by the
                 # drilldown's complete-record-set contract)
-                per_record = "; ".join(
+                per_record = "；".join(
                     f"{(g.get('record_ids') or ['?'])[0]}→"
                     f"{g.get('destination_ref')}"
                     for g in groups)
                 lines.append(
+                    f"目的地标识：{total} 笔提现指向 {unique} 个不同"
+                    f"目的地（记录中的地址标识；{per_record}）。"
+                    "并非同一个共享目的地。" if zh else
                     f"Destination identity: the {total} withdrawals go "
                     f"to {unique} DIFFERENT destinations (recorded "
                     f"address identifiers; {per_record}). Not a single "
@@ -226,15 +385,23 @@ def _evidence_comparison_lines(data: dict,
         false_shown = ", ".join(str(i) for i in false_ids)
         if missing_n:
             lines.append(
+                f"新地址状态：{total} 条记录中有 {missing_n} 条没有权威的 "
+                "is_new_address 标记——逐笔状态仅对其余记录成立。"
+                if zh else
                 f"New-address status: {missing_n}/{total} records have "
                 "no authoritative is_new_address marker — the per-record "
                 "status is established for the remainder only.")
         elif not false_ids:
             lines.append(
+                f"新地址状态：Risk Platform 将全部 {total} 笔提现标记为"
+                f"新地址（{shown}）。" if zh else
                 f"New-address status: ALL {total} withdrawals are marked "
                 f"as new addresses by the Risk Platform ({shown}).")
         else:
             lines.append(
+                f"新地址状态：{len(true_ids)}/{total} 笔提现被标记为"
+                f"新地址（{shown}）；{len(false_ids)} 笔不是"
+                f"（{false_shown}）。" if zh else
                 f"New-address status: {len(true_ids)}/{total} withdrawals "
                 f"are marked as new addresses ({shown}); "
                 f"{len(false_ids)} are not "
@@ -250,8 +417,15 @@ def _evidence_comparison_lines(data: dict,
             if m.get("type") == "window_count":
                 noun = ("withdrawal" if "withdrawal" in str(m.get("metric"))
                         else "transaction")
+                noun_zh = ("提现" if "withdrawal" in str(m.get("metric"))
+                           else "交易")
                 if m.get("verdict") == "population_mismatch":
                     lines.append(
+                        f"⚠ 口径不一致：摘要指标声称 {m.get('claimed')} 笔"
+                        f"{noun_zh}/24 小时，但参考时点（{ref}）前的 24 "
+                        f"小时窗口重算为 {m.get('observed_in_window')}——"
+                        f"记录清单为 {m.get('exposed_total')} 笔。差异已"
+                        "记录，不作解释性消除。" if zh else
                         f"⚠ Scope mismatch: the summary metric claims "
                         f"{m.get('claimed')} {noun}/24h, but the 24h "
                         f"window before the reference time ({ref}) "
@@ -260,6 +434,13 @@ def _evidence_comparison_lines(data: dict,
                         "The discrepancy is recorded, not explained away.")
                 else:
                     lines.append(
+                        f"指标口径：“{m.get('claimed')} 笔{noun_zh}/"
+                        "24 小时”的摘要按特征参考时点前的 24 小时窗口"
+                        f"计得（{ref}；窗口内 {m.get('observed_in_window')} "
+                        f"笔）；下方记录清单覆盖全部 {m.get('exposed_total')} "
+                        f"笔{noun_zh}（{m.get('outside_window')} 笔在评分"
+                        "窗口之前）。两个口径不同、均可核验——任一数字都"
+                        "不能替代另一者。" if zh else
                         f"Metric scope: the “{m.get('claimed')} "
                         f"{noun}/24h” summary counts the 24h window "
                         f"before the feature reference time ({ref}; "
@@ -272,6 +453,9 @@ def _evidence_comparison_lines(data: dict,
             elif m.get("type") == "ratio_recompute":
                 if m.get("verdict") == "claim_supported":
                     lines.append(
+                        f"指标口径：摘要比例 {m.get('claimed')} 经记录重算"
+                        f"证实（{m.get('observed')}，分母为全部 "
+                        f"{m.get('denominator')} 笔交易）。" if zh else
                         f"Metric scope: the summary ratio "
                         f"{m.get('claimed')} is confirmed by recomputing "
                         f"from the records ({m.get('observed')}, "
@@ -279,6 +463,10 @@ def _evidence_comparison_lines(data: dict,
                         "transactions).")
                 else:
                     lines.append(
+                        f"⚠ 口径不一致：摘要比例 {m.get('claimed')} 与"
+                        f"记录重算 {m.get('observed')} 不符（分母 "
+                        f"{m.get('denominator')} 笔）；已记录，不作"
+                        "解释性消除。" if zh else
                         f"⚠ Scope mismatch: the summary ratio "
                         f"{m.get('claimed')} does not match the record "
                         f"recomputation {m.get('observed')} (denominator "
@@ -306,7 +494,11 @@ def compose_response(
     integration failure distinct; no new domain reasoning.
     """
     if clarification_message:
+        # context-resolution guidance — already per-turn bilingual at its
+        # own generation site
         return clarification_message
+
+    zh = response_language == "zh"
 
     if planning_failure is not None:
         # Bounded honesty (P14): each planning failure keeps its semantic
@@ -317,46 +509,75 @@ def compose_response(
             # The request could not be mapped onto the supported
             # investigation workflow — most commonly because it lies
             # outside it. Say what the system CAN do instead.
-            return ("I can help investigate the current Risk Platform "
+            return ("我可以协助调查当前 Risk Platform 案例，但无法将该请求"
+                    "映射到受支持的调查操作。您可以询问案例、发现、时间线、"
+                    "证据或适用政策。"
+                    if zh else
+                    "I can help investigate the current Risk Platform "
                     "case, but I couldn't map that request to a supported "
                     "investigation action. You can ask about the case, a "
                     "finding, its timeline, its evidence, or the policies "
                     "that apply.")
         if code == "LLM_EMPTY_RESPONSE":
-            return ("The model returned empty responses twice, so this "
+            return ("模型多次返回空响应，无法为该请求建立计划。请稍后重试——"
+                    "若持续出现，模型服务可能暂时降级。"
+                    if zh else
+                    "The model returned empty responses twice, so this "
                     "request could not be planned. Please try again in a "
                     "moment — if it persists, the model endpoint may be "
                     "temporarily degraded.")
         if code == "LLM_TIMEOUT":
-            return ("The planning request timed out, so this request "
+            return ("规划请求超时，该请求未能开始。请稍后重试。"
+                    if zh else
+                    "The planning request timed out, so this request "
                     "could not be started. Please try again in a moment.")
         if code == "LLM_RATE_LIMITED":
-            return ("The planning service was rate limited, so this "
+            return ("规划服务被限流，该请求未能开始。请稍等片刻后重试。"
+                    if zh else
+                    "The planning service was rate limited, so this "
                     "request could not be started. Please try again "
                     "after a short delay.")
         if code == "LLM_CONFIGURATION_ERROR":
-            return ("The planning service is misconfigured (authentication "
+            return ("规划服务配置有误（认证或配置），该请求未能开始。"
+                    "需要运维处理。"
+                    if zh else
+                    "The planning service is misconfigured (authentication "
                     "or configuration), so this request could not be "
                     "started. This needs operator attention.")
         if code == "LLM_UNAVAILABLE":
-            return ("The planning service is temporarily unavailable, so "
+            return ("规划服务暂时不可用，该请求未能开始。请稍后重试——"
+                    "调查本身不受影响。"
+                    if zh else
+                    "The planning service is temporarily unavailable, so "
                     "this request could not be started. Please try again "
                     "in a moment — the investigation is unaffected.")
         if code == "PLANNING_UNEXPECTED_ERROR":
-            return ("An unexpected error occurred during planning, so "
+            return ("规划过程中发生意外错误，该请求未能开始。请重试——"
+                    "调查本身不受影响。"
+                    if zh else
+                    "An unexpected error occurred during planning, so "
                     "this request could not be started. Please try again "
                     "— the investigation is unaffected.")
         if code == "NO_ELIGIBLE_SKILL":
-            return ("This request doesn't match an investigation action "
+            return ("该请求不匹配当前上下文可用的调查操作。您可以询问案例、"
+                    "发现、时间线、证据或适用政策。"
+                    if zh else
+                    "This request doesn't match an investigation action "
                     "available for the current context. You can ask about "
                     "the case, a finding, its timeline, its evidence, or "
                     "the policies that apply.")
         if code == "UNSUPPORTED_REQUEST":
-            return ("This request needs a focused finding with the right "
+            return ("该请求需要先聚焦一个具备相应能力的发现。请先在发现面板"
+                    "中选择一个发现，然后重试。"
+                    if zh else
+                    "This request needs a focused finding with the right "
                     "capabilities. Select a finding from the Findings "
                     "panel first, then ask again.")
         # Unknown planning failure: bounded and readable, no internals.
-        return ("I couldn't plan this request as an investigation action. "
+        return ("无法将该请求规划为调查操作。您可以询问案例、发现、时间线、"
+                "证据或适用政策。"
+                if zh else
+                "I couldn't plan this request as an investigation action. "
                 "You can ask about the case, a finding, its timeline, its "
                 "evidence, or the policies that apply.")
 
@@ -373,42 +594,61 @@ def compose_response(
             # never rendered as a platform-level gap, and never as "no policy
             # found". Falls back to the generic wording when the failed call
             # carries no structured capability scope.
-            scoped = _unsupported_capability_message(fatal, tool_calls)
+            scoped = (_unsupported_capability_message_lang(
+                fatal, tool_calls, "zh" if zh else None)
+                if zh else _unsupported_capability_message(fatal, tool_calls))
             if scoped:
                 return scoped
-            return ("This investigation capability is not supported for "
+            return ("当前目标不支持该调查能力。未执行任何调查步骤；系统未"
+                    "虚构任何结果。" if zh else
+                    "This investigation capability is not supported for "
                     "the current target. No investigation step was executed; "
                     "nothing was fabricated.")
         if outcome == "validation_error":
-            return ("The request could not be completed as specified — it "
+            return ("该请求无法按所述完成——它不符合本调查可执行的范围。"
+                    "系统未虚构任何结果。" if zh else
+                    "The request could not be completed as specified — it "
                     "does not match what this investigation can execute. "
                     "Nothing was fabricated.")
         if outcome == "integration_error":
-            return ("The Risk Platform could not be reached, so this "
+            return ("无法连接 Risk Platform，该调查步骤未能完成。任务已按"
+                    "失败记录；系统未虚构任何结果。请稍后重试。"
+                    if zh else
+                    "The Risk Platform could not be reached, so this "
                     "investigation step could not be completed. The task is "
                     "recorded as failed; nothing was fabricated. Please try "
                     "again later.")
         if outcome == "empty":
             # A required step genuinely found nothing; the per-payload EMPTY
             # handling above does not apply because the step chain aborted.
-            return ("The Risk Platform returned no matching results for "
+            return ("Risk Platform 未返回与该请求匹配的结果。任务已按空结果"
+                    "完成记录；系统未虚构任何结果。"
+                    if zh else
+                    "The Risk Platform returned no matching results for "
                     "this request. The task is recorded as completed with "
                     "an empty result; nothing was fabricated.")
         if fatal.code == "TOOL_NOT_IMPLEMENTED":
-            return ("This investigation capability is not available in the "
+            return ("当前系统不具备该调查能力。未执行任何操作；系统未虚构"
+                    "任何结果。" if zh else
+                    "This investigation capability is not available in the "
                     "current system. Nothing was executed; nothing was "
                     "fabricated.")
         if fatal.code == "PLAN_CONTRACT_VIOLATION":
-            return ("The requested investigation could not be planned "
+            return ("该调查请求无法在受支持的调查范围内建立计划。未执行任何"
+                    "操作。" if zh else
+                    "The requested investigation could not be planned "
                     "within the supported investigation surface. Nothing "
                     "was executed.")
         # Unknown/unclassified executor failure: bounded, semantic, and
         # free of internal identifiers.
-        return ("This investigation step could not be completed. The task "
+        return ("该调查步骤未能完成。任务已按失败记录；系统未虚构任何结果。"
+                if zh else
+                "This investigation step could not be completed. The task "
                 "is recorded as failed; nothing was fabricated.")
 
     if not tool_calls:
-        return ("No investigation step could be executed for this request.")
+        return ("该请求未能执行任何调查步骤。" if zh else
+                "No investigation step could be executed for this request.")
 
     # Human-readable prose first (grounded strictly in ToolResult data),
     # structured supporting detail second.
@@ -453,6 +693,9 @@ def compose_response(
                 case_id = data.get("case_id") or ""
                 n = len(findings)
                 prose.append(
+                    f"案例 {case_id} 共识别 {n} 个风险发现。请在左侧发现"
+                    "面板中选择一个发现以继续调查。"
+                    if zh else
                     f"{n} finding{'s were' if n != 1 else ' was'} identified "
                     f"for case {case_id}. Select a finding from the Findings "
                     "panel on the left to continue the investigation."
@@ -486,7 +729,9 @@ def compose_response(
                 # same-or-different ask, a which-records ask, or a metric
                 # scope mismatch — each gets its own explicit conclusion
                 # (one dimension never stands in for another).
-                prose.extend(_evidence_comparison_lines(data, user_request))
+                prose.extend(_evidence_comparison_lines(
+                    data, user_request,
+                    lang="zh" if zh else None))
                 # §3/§20: a concrete-record answer carries records only —
                 # risk features belong to signal/feature-explanation scope.
             elif data.get("view") == "self_opposite_trades":
@@ -497,18 +742,28 @@ def compose_response(
                 ratio = data.get("opposite_trade_ratio")
                 if ratio is None:
                     prose.append(
+                        "Risk Platform 未报告该账户的反向交易比例，但其"
+                        "支持的交易记录如下所示。"
+                        if zh else
                         "The Risk Platform does not report an opposite-"
                         "trade ratio for this account, but its supporting "
                         "transaction records are shown below."
                     )
                 elif ratio == 0:
                     prose.append(
+                        "该账户未观察到反向交易活动：Risk Platform 的"
+                        "反向交易比例在其交易流上为 0%。"
+                        if zh else
                         "No opposite-side trading activity was observed "
                         "for this account: the Risk Platform's opposite-"
                         "trade ratio is 0% over its trade stream."
                     )
                 else:
                     prose.append(
+                        "Risk Platform 显示该账户自身的反向交易活动："
+                        f"其交易流上的反向交易比例为 {ratio:.2%}"
+                        "（Risk Platform 聚合计算）。"
+                        if zh else
                         "The Risk Platform shows opposite-side trading "
                         "activity by this SAME account: an opposite-trade "
                         f"ratio of {ratio:.2%} over the account's own "
@@ -518,19 +773,26 @@ def compose_response(
                 rule = data.get("rule")
                 if isinstance(rule, dict):
                     desc = (rule.get("description") or "").strip()
-                    parts = [f"Detection rule: {rule.get('name')}"]
+                    parts = ([f"检测规则:{rule.get('name')}"] if zh else
+                             [f"Detection rule: {rule.get('name')}"])
                     if desc:
                         parts.append(_strip_citation_markers(desc))
                     if rule.get("threshold"):
-                        parts.append(f"threshold: {rule['threshold']}")
-                    prose.append(" — ".join(parts) + ".")
+                        parts.append(("阈值:" if zh else "threshold: ")
+                                     + str(rule["threshold"]))
+                    prose.append(" — ".join(parts) + ("。" if zh else "."))
                 n = data.get("record_count", 0)
                 if n:
                     prose.append(
+                        f"全部 {n} 条支持的交易记录如下所示。"
+                        if zh else
                         f"All {n} supporting transaction record"
                         f"{'s are' if n != 1 else ' is'} shown below."
                     )
                 prose.append(
+                    "这仅是同一账户自身的活动；它不暗示任何跨账户关系，"
+                    "也不说明任何交易意图。"
+                    if zh else
                     "This is same-account activity only; it implies no "
                     "cross-account relationships and nothing about intent."
                 )
@@ -539,6 +801,10 @@ def compose_response(
                 total = data.get("total_events", len(events))
                 if data.get("truncated"):
                     prose.append(
+                        f"时间线预览：按时间顺序显示 {total} 个事件中的前 "
+                        f"{len(events)} 个。这是有界导航视图——如需查看"
+                        "全部事件，请要求完整时间线。"
+                        if zh else
                         f"Timeline preview: showing {len(events)} of "
                         f"{total} events (chronological). This is a "
                         "bounded navigation view — ask for the complete "
@@ -546,6 +812,9 @@ def compose_response(
                     )
                 else:
                     prose.append(
+                        f"该发现的时间线共 {total} 个事件，已按时间顺序"
+                        "列于下方。"
+                        if zh else
                         f"The timeline for this finding contains {total} "
                         "event"
                         + ("s" if total != 1 else "")
@@ -566,14 +835,21 @@ def compose_response(
                             f"detection type “{cluster['detection_type']}”")
                     if cluster.get("member_count") is not None:
                         parts.append(
+                            f"集群内 {cluster['member_count']} 个账号"
+                            if zh else
                             f"{cluster['member_count']} accounts in the "
                             "cluster")
                     if cluster.get("cluster_risk_score") is not None:
                         parts.append(
+                            f"集群风险分 {cluster['cluster_risk_score']}"
+                            if zh else
                             f"cluster risk score "
                             f"{cluster['cluster_risk_score']}")
                     if parts:
                         prose.append(
+                            "Risk Platform 网络归因："
+                            + "，".join(parts) + "。"
+                            if zh else
                             "Risk Platform network attribution: "
                             + ", ".join(parts) + ".")
                     accounts = data.get("related_accounts") or []
@@ -582,22 +858,33 @@ def compose_response(
                         listing = ", ".join(str(a) for a in accounts)
                         more = ""
                         if count is not None and count > len(accounts):
-                            more = (f" (showing {len(accounts)} of "
+                            more = (f"（显示其中 {len(accounts)} 个，共 "
+                                    f"{count} 个）" if zh else
+                                    f" (showing {len(accounts)} of "
                                     f"{count})")
                         prose.append(
-                            f"Related accounts: {listing}{more}.")
+                            f"关联账号：{listing}{more}。"
+                            if zh else f"Related accounts: {listing}{more}.")
                     devices = data.get("shared_devices") or []
                     if devices:
                         prose.append(
+                            "连接这些账号的共享设备："
+                            + "；".join(str(d) for d in devices) + "。"
+                            if zh else
                             "Shared devices linking these accounts: "
                             + "; ".join(str(d) for d in devices) + ".")
                 elif data.get("evidence_missing"):
                     prose.append(
+                        "Risk Platform 未提供该案例的网络归因，因此无法"
+                        "列出关联账号。"
+                        if zh else
                         "The Risk Platform provides no network attribution "
                         "for this case, so no related accounts can be "
                         "listed.")
                 else:
                     prose.append(
+                        "Risk Platform 未将该账号的网络归因到任何关联账号。"
+                        if zh else
                         "The Risk Platform attributes no related accounts "
                         "to this account's network.")
             elif data.get("analysis") == "cross_account_trade_analysis":
@@ -621,11 +908,16 @@ def compose_response(
                 # floor-admitted candidates (relative diff far above 5%)
                 # read as contradicting the matcher.
                 criteria = (
-                    f" (matching criteria: time within {delta:g}s, value "
-                    f"difference within {rel:.0%} relative to the larger "
-                    f"side, OR within the {floor:g} absolute floor "
-                    "(near-zero notionals; pairs admitted only by the "
-                    "floor are labeled below)"
+                    (f"（匹配判据：时间相差不超过 {delta:g} 秒，价值差为"
+                     f"较大一侧的 {rel:.0%} 以内，或不超过绝对下限 "
+                     "{floor:g}（近零名义；仅由下限放行的配对在下方单独"
+                     "标注））".format(floor=floor)
+                     if zh else
+                     f" (matching criteria: time within {delta:g}s, value "
+                     f"difference within {rel:.0%} relative to the larger "
+                     f"side, OR within the {floor:g} absolute floor "
+                     "(near-zero notionals; pairs admitted only by the "
+                     "floor are labeled below)")
                 ) if delta is not None and rel is not None and \
                     floor is not None else ""
                 target = data.get("target_account")
@@ -634,6 +926,14 @@ def compose_response(
                     if isinstance(metrics, dict) else None
                 if ratio is not None and target:
                     prose.append(
+                        f"关于反向交易率：{ratio:.2%}"
+                        "（opposite_trade_ratio）是账户 "
+                        f"{target} 自身的买卖平衡——按该账户自己的交易流"
+                        "计算，分子为 min(BUY 笔数, SELL 笔数)，分母为"
+                        "该账户交易总笔数。它衡量的是同一账户内的反向"
+                        "交易，不是跨账户匹配率，与下方的跨账户结果相互"
+                        "独立。"
+                        if zh else
                         f"About the reverse-trade rate: {ratio:.2%} "
                         "(opposite_trade_ratio) is account "
                         f"{target}'s OWN buy/sell balance — computed over "
@@ -646,6 +946,9 @@ def compose_response(
                 elif ratio is None and _mentions_reverse_trade_rate(
                         user_request):
                     prose.append(
+                        "本次运行未能取得该账户的权威反向交易率指标，"
+                        "因此此处不重述其含义。"
+                        if zh else
                         "The authoritative reverse-trade-rate metric for "
                         "this account could not be retrieved in this run, "
                         "so its meaning is not restated here."
@@ -656,6 +959,11 @@ def compose_response(
                 scope_bits: list[str] = []
                 if target and t_ret:
                     scope_bits.append(
+                        f"目标账户 {target}：检索到交易 "
+                        f"{t_ret.get('transactions_retrieved', 0)} 笔"
+                        + ("（不完整）" if t_ret.get("truncated")
+                           else "（完整）")
+                        if zh else
                         f"target account {target}: "
                         f"{t_ret.get('transactions_retrieved', 0)} "
                         "transactions retrieved"
@@ -663,6 +971,11 @@ def compose_response(
                            else " (complete)"))
                 if c_ret:
                     scope_bits.append(
+                        f"对手方窗口：在 {c_ret.get('accounts_queried', 0)} "
+                        f"个关联账户中检索到交易 "
+                        f"{c_ret.get('transactions_retrieved', 0)} 笔"
+                        + ("（不完整）" if c_ret.get("truncated") else "")
+                        if zh else
                         f"counterparty window: "
                         f"{c_ret.get('transactions_retrieved', 0)} "
                         "transactions retrieved across "
@@ -676,6 +989,9 @@ def compose_response(
                     n = len(candidates)
                     found = data.get("candidates_found")
                     reported = (
+                        f"分析在已检证据中发现 {n} 组候选跨账户对冲交易"
+                        f"关系{criteria}。"
+                        if zh else
                         f"The analysis found {n} candidate cross-account "
                         "opposite-trade relationship"
                         + ("s" if n != 1 else "")
@@ -686,6 +1002,9 @@ def compose_response(
                         # user must see that more candidates exist than
                         # are listed (never an silent cap)
                         reported += (
+                            f" 共发现 {found} 组候选，此处列出前 {n} 组"
+                            "（受系统候选上限）。"
+                            if zh else
                             f" {found} candidates were found in total; "
                             f"the top {n} are listed (system candidate "
                             "limit)."
@@ -699,12 +1018,23 @@ def compose_response(
                         cap_note = ""
                         if isinstance(found, int) and found > n:
                             cap_note = (
+                                f" 共发现 {found} 组候选；此处列出前 {n} 组"
+                                "（受系统候选上限）——其余 "
+                                f"{found - n} 组未在本回答中交付。"
+                                if zh else
                                 f" In total {found} candidate groups "
                                 f"were found; the top {n} are listed "
                                 f"here (system candidate limit) — the "
                                 f"remaining {found - n} are not "
                                 "delivered in this answer.")
                         prose.append(
+                            f"范围：关联账户集合（案件账户 {target} ∪ "
+                            f"关联账户）。列出的 {n} 组候选中 "
+                            f"{len(with_case)} 组涉及账户 {target}；其余 "
+                            f"{n - len(with_case)} 组仅发生在其他关联"
+                            "成员之间——每组候选都附有其自身的交易证据。"
+                            + cap_note
+                            if zh else
                             f"Scope: the related-account set (case "
                             f"account {target} ∪ related accounts). "
                             f"{len(with_case)} of the {n} listed "
@@ -717,6 +1047,10 @@ def compose_response(
                     else:
                         if target:
                             prose.append(
+                                f"列出的所有候选均涉及账户 {target}"
+                                "（案件账户）；不含 "
+                                f"{target} 交易的候选不属于本回答。"
+                                if zh else
                                 f"All listed candidates involve account "
                                 f"{target} (the case account); candidates "
                                 f"without a {target} transaction are not "
@@ -727,11 +1061,15 @@ def compose_response(
                             c.get("transaction_ids_a", [])
                             + c.get("transaction_ids_b", []))
                         if set_mode:
-                            tag = ("involves the case account"
-                                   if target in (c.get("account_a"),
-                                                 c.get("account_b"))
-                                   else "related-members only")
-                            tag_txt = f"({tag}) "
+                            tag = (("涉及案件账户"
+                                    if target in (c.get("account_a"),
+                                                  c.get("account_b"))
+                                    else "仅涉及关联成员") if zh else
+                                   ("involves the case account"
+                                    if target in (c.get("account_a"),
+                                                  c.get("account_b"))
+                                    else "related-members only"))
+                            tag_txt = (f"（{tag}） " if zh else f"({tag}) ")
                         else:
                             tag_txt = ""
 
@@ -758,26 +1096,49 @@ def compose_response(
                                 and floor is not None \
                                 and v_rel > rel and abs(v_diff) <= floor:
                             floor_note = (
+                                f" —— 由绝对下限放行（{floor:g}；近零名义）"
+                                if zh else
                                 " — admitted by the absolute floor "
                                 f"({floor:g}; near-zero notionals)")
 
-                        prose.append(
-                            f"- Candidate {c.get('candidate_id')} "
-                            f"{tag_txt}({c.get('match_type') or 'n/a'}): "
-                            f"{c.get('account_a') or '?'} "
-                            f"{c.get('side_a') or '?'} vs "
-                            f"{c.get('account_b') or '?'} "
-                            f"{c.get('side_b') or '?'} — "
-                            f"{c.get('symbol') or '?'}; max gap "
-                            f"{_num(c.get('max_time_gap_seconds'), 'g')}s; "
-                            f"value {_num(c.get('value_a'), ',.6g')} vs "
-                            f"{_num(c.get('value_b'), ',.6g')} (difference "
-                            f"{_num(c.get('value_difference'), ',.6g')}, "
-                            f"{_num(v_rel, '.1%')}); "
-                            f"transactions: {ids or 'n/a'}"
-                            f"{floor_note}"
-                        )
+                        if zh:
+                            prose.append(
+                                f"- 候选 {c.get('candidate_id')} "
+                                f"{tag_txt}({c.get('match_type') or 'n/a'})："
+                                f"{c.get('account_a') or '?'} "
+                                f"{c.get('side_a') or '?'} ↔ "
+                                f"{c.get('account_b') or '?'} "
+                                f"{c.get('side_b') or '?'} — "
+                                f"{c.get('symbol') or '?'}；最大时间差 "
+                                f"{_num(c.get('max_time_gap_seconds'), 'g')}s；"
+                                f"价值 {_num(c.get('value_a'), ',.6g')} ↔ "
+                                f"{_num(c.get('value_b'), ',.6g')}（价值差 "
+                                f"{_num(c.get('value_difference'), ',.6g')}，"
+                                f"{_num(v_rel, '.1%')}）；"
+                                f"交易:{ids or 'n/a'}"
+                                f"{floor_note}"
+                            )
+                        else:
+                            prose.append(
+                                f"- Candidate {c.get('candidate_id')} "
+                                f"{tag_txt}({c.get('match_type') or 'n/a'}): "
+                                f"{c.get('account_a') or '?'} "
+                                f"{c.get('side_a') or '?'} vs "
+                                f"{c.get('account_b') or '?'} "
+                                f"{c.get('side_b') or '?'} — "
+                                f"{c.get('symbol') or '?'}; max gap "
+                                f"{_num(c.get('max_time_gap_seconds'), 'g')}s; "
+                                f"value {_num(c.get('value_a'), ',.6g')} vs "
+                                f"{_num(c.get('value_b'), ',.6g')} (difference "
+                                f"{_num(c.get('value_difference'), ',.6g')}, "
+                                f"{_num(v_rel, '.1%')}); "
+                                f"transactions: {ids or 'n/a'}"
+                                f"{floor_note}"
+                            )
                     prose.append(
+                        "以上为候选关系：既定分析容差下的量化匹配——供"
+                        "分析员进一步判断的线索，不构成对交易意图的结论。"
+                        if zh else
                         "These are candidate relationships: quantitative "
                         "matches under the configured analytical "
                         "tolerances — leads for analyst judgment, not "
@@ -785,6 +1146,9 @@ def compose_response(
                     )
                     if retrieval.get("truncated"):
                         prose.append(
+                            "注意：本次检索受系统预算限制，已分析范围不"
+                            "完整；不能据此认定检索范围之外不存在更多"
+                            "关系。" if zh else
                             "Note: retrieval was bounded by system "
                             "budgets, so the analyzed scope is partial; "
                             "absence beyond it is not established."
@@ -792,6 +1156,11 @@ def compose_response(
                 elif status == "NO_MATCH":
                     if set_mode:
                         prose.append(
+                            "在既定容差下，关联账户集合内部（案件账户与"
+                            "全部关联账户均已检索并分析）没有任何候选"
+                            f"对冲交易关系匹配{criteria}。该结论仅适用于"
+                            "已分析的集合与数据窗口。"
+                            if zh else
                             "No candidate opposite-trade relationships "
                             "matched within the configured "
                             f"tolerances{criteria} anywhere inside the "
@@ -802,6 +1171,13 @@ def compose_response(
                         )
                     else:
                         prose.append(
+                            "在既定容差下，已检证据中没有匹配的候选跨账户"
+                            "对冲交易关系。该结论仅适用于已分析的账户与"
+                            "数据窗口。"
+                            + (f" 未发现涉及账户 {target} 的候选；其他"
+                               f"账户之间的关系不作为 {target} 的对冲"
+                               "证据。" if target else "")
+                            if zh else
                             "No candidate cross-account opposite-trade "
                             "relationships matched within the configured "
                             f"tolerances{criteria} in the analyzed "
@@ -814,6 +1190,9 @@ def compose_response(
                         )
                 else:   # INSUFFICIENT_DATA
                     prose.append(
+                        "跨账户交易分析无法得出可靠结论：可用交易证据不"
+                        "完整或不足（检索受限或为空）。这不是\"未发现\"。"
+                        if zh else
                         "The cross-account trade analysis could not reach "
                         "a reliable conclusion: the available transaction "
                         "evidence is incomplete or insufficient "
@@ -821,53 +1200,71 @@ def compose_response(
                         "no-match result."
                     )
                 if scope_bits:
-                    prose.append("Analyzed scope: "
-                                 + "; ".join(scope_bits) + ".")
+                    prose.append(("分析范围：" if zh else "Analyzed scope: ")
+                                 + "; ".join(scope_bits)
+                                 + ("。" if zh else "."))
             elif data.get("signal_type") == "Rule" and "rule" in data:
-                # 1) detection mechanism (deterministic, from the payload).
-                # When the confirmed-fact sentence below already names the
-                # rule, use the mechanism sentence WITHOUT the rule name —
-                # never a duplicated restatement (P7).
-                rule = data["rule"]
-                _fact_names_rule = bool(rule.get("name")) and bool(
-                    rule.get("description") or rule.get("trigger_values"))
-                mechanism = detection_mechanism_sentence(data)
-                if _fact_names_rule and mechanism and rule.get("name"):
-                    mechanism = mechanism.replace(
-                        f" (the {rule['name']} rule)", "")
-                prose.append(mechanism)
-                # 2) confirmed finding fact — RP's own structured rule data
-                name = rule.get("name") or "the rule"
-                trigger = rule.get("trigger_values") or {}
-                threshold = rule.get("threshold")
-                desc = (rule.get("description") or "").strip()
-                if trigger and threshold:
-                    observed = ", ".join(
-                        f"{_FEATURE_LABELS.get(k, k)} = {v}"
-                        for k, v in trigger.items()
-                    )
-                    thr = str(threshold)
-                    for raw, label in _FEATURE_LABELS.items():
-                        thr = thr.replace(raw, label)
-                    prose.append(
-                        f"The finding was flagged because {observed}, "
-                        f"exceeding the system's configured threshold "
-                        f"({thr}). The rule {name} triggered and "
-                        "contributed to this finding."
-                    )
-                elif desc:
-                    # RP's own description is the most informative grounded
-                    # fact available — use it as the answer (P7), not a bare
-                    # name restatement.
-                    prose.append(
-                        f"The finding was flagged by the rule {name}: "
-                        f"{_strip_citation_markers(desc)}"
-                    )
+                if zh:
+                    # zh turn face: the loop path's rule semantics from the
+                    # SAME payload (mechanism + observed-vs-threshold).
+                    # No `continue`: the structured supporting detail below
+                    # (additional-data line, policy, artifact confirmation)
+                    # still runs for this payload.
+                    from app.agent_loop import _signal_answer_lines
+                    rule_zh = data["rule"]
+                    prose.extend(_signal_answer_lines({
+                        "rule_name": rule_zh.get("name"),
+                        "rule_description": rule_zh.get("description"),
+                        "threshold": rule_zh.get("threshold"),
+                        "trigger_values": rule_zh.get("trigger_values") or {},
+                        "contribution": rule_zh.get("contribution"),
+                    }, lang="zh"))
                 else:
-                    # only the name is known — say only that
-                    prose.append(
-                        f"The finding was flagged by the rule {name}."
-                    )
+                    # 1) detection mechanism (deterministic, from the payload).
+                    # When the confirmed-fact sentence below already names the
+                    # rule, use the mechanism sentence WITHOUT the rule name —
+                    # never a duplicated restatement (P7).
+                    rule = data["rule"]
+                    _fact_names_rule = bool(rule.get("name")) and bool(
+                        rule.get("description") or rule.get("trigger_values"))
+                    mechanism = detection_mechanism_sentence(data)
+                    if _fact_names_rule and mechanism and rule.get("name"):
+                        mechanism = mechanism.replace(
+                            f" (the {rule['name']} rule)", "")
+                    prose.append(mechanism)
+                    # 2) confirmed finding fact — RP's own structured rule data
+                    name = rule.get("name") or "the rule"
+                    trigger = rule.get("trigger_values") or {}
+                    threshold = rule.get("threshold")
+                    desc = (rule.get("description") or "").strip()
+                    if trigger and threshold:
+                        observed = ", ".join(
+                            f"{_FEATURE_LABELS.get(k, k)} = {v}"
+                            for k, v in trigger.items()
+                        )
+                        thr = str(threshold)
+                        for raw, label in _FEATURE_LABELS.items():
+                            thr = thr.replace(raw, label)
+                        prose.append(
+                            f"The finding was flagged because {observed}, "
+                            f"exceeding the system's configured threshold "
+                            f"({thr}). The rule {name} triggered and "
+                            "contributed to this finding."
+                        )
+                    elif desc:
+                        # RP's own description is the most informative grounded
+                        # fact available — use it as the answer (P7), not a bare
+                        # name restatement.
+                        prose.append(
+                            f"The finding was flagged by the rule {name}: "
+                            f"{_strip_citation_markers(desc)}"
+                        )
+                    else:
+                        # only the name is known — say only that
+                        prose.append(
+                            f"The finding was flagged by the rule {name}."
+                        )
+
             elif data.get("signal_type") == "ML" and "explanation" in data:
                 if response_language == "zh":
                     # zh turn face: the SAME authoritative semantics as the
@@ -918,89 +1315,125 @@ def compose_response(
                             "— the facts above are what is determinable.")
             elif data.get("signal_type") == "Feature" \
                     and "explanation" in data:
-                # AL-2.9: a feature-detected finding (no rule/ML/graph
-                # backing). The mechanism sentence names the detection
-                # class; the RP risk-feature facts ARE the grounded "why".
-                prose.append(detection_mechanism_sentence(data))
-                feats = (data.get("explanation") or {}).get("features") or []
-                if feats:
-                    observed = ", ".join(
-                        f"{_FEATURE_LABELS.get(f.get('name'), f.get('name'))}"
-                        f" = {f.get('value')}"
-                        for f in feats if f.get("name") is not None)
-                    if observed:
-                        prose.append(
-                            "The finding is based on the following Risk "
-                            f"Platform risk features: {observed}.")
+                if zh:
+                    # zh turn face: the loop path's feature semantics
+                    from app.agent_loop import _signal_answer_lines
+                    feats_zh = [
+                        {"name": f.get("name"), "value": f.get("value")}
+                        for f in ((data.get("explanation") or {})
+                                  .get("features") or [])
+                        if isinstance(f, dict) and f.get("name") is not None]
+                    prose.extend(_signal_answer_lines(
+                        {"feature_facts": feats_zh}, lang="zh"))
+                else:
+                    # AL-2.9: a feature-detected finding (no rule/ML/graph
+                    # backing). The mechanism sentence names the detection
+                    # class; the RP risk-feature facts ARE the grounded
+                    # "why". (No `continue`: the structured detail below
+                    # still runs.)
+                    prose.append(detection_mechanism_sentence(data))
+                    feats = (data.get("explanation") or {}
+                             ).get("features") or []
+                    if feats:
+                        observed = ", ".join(
+                            f"{_FEATURE_LABELS.get(f.get('name'), f.get('name'))}"
+                            f" = {f.get('value')}"
+                            for f in feats if f.get("name") is not None)
+                        if observed:
+                            prose.append(
+                                "The finding is based on the following Risk "
+                                f"Platform risk features: {observed}.")
             elif data.get("signal_type") == "Graph" and "explanation" in data:
-                prose.append(detection_mechanism_sentence(data))
-                # AL-2.8: the graph facts ARE the "why" — state them from
-                # RP's own network evidence (cluster, shared devices,
-                # related accounts), bounded lists, nothing synthesized.
-                ex = data.get("explanation") or {}
-                cluster = ex.get("cluster") or {}
-                facts = []
-                if cluster.get("detection_type"):
-                    facts.append(f"detection type “{cluster['detection_type']}”")
-                if cluster.get("member_count") is not None:
-                    facts.append(
-                        f"{cluster['member_count']} accounts in the cluster")
-                if cluster.get("cluster_risk_score") is not None:
-                    facts.append(
-                        f"cluster risk score "
-                        f"{cluster['cluster_risk_score']}")
-                if facts:
-                    prose.append(
-                        "Risk Platform graph data shows: " + ", ".join(facts)
-                        + ".")
-                devices = ex.get("shared_devices") or []
-                if devices:
-                    shown = "; ".join(str(d) for d in devices[:3])
-                    more = (f" (and {len(devices) - 3} more)"
-                            if len(devices) > 3 else "")
-                    prose.append(
-                        f"Shared devices linking these accounts: "
-                        f"{shown}{more}.")
-                related = ex.get("related_accounts") or []
-                if related:
-                    # List-completeness semantics: RP's related_accounts
-                    # is a server-side preview — a partial list is always
-                    # labeled as a sample with the authoritative total
-                    # (cluster members incl. this account, minus one),
-                    # never as the complete membership.
-                    shown_ids = ", ".join(str(a) for a in related[:5])
-                    shown_n = min(len(related), 5)
-                    total = ex.get("related_accounts_total")
-                    is_preview = ex.get("related_accounts_preview") is True
-                    if is_preview and total and shown_n < total:
-                        member_count = (ex.get("cluster") or {}).get(
-                            "member_count")
-                        scope_note = (f" (the cluster has {member_count} "
-                                      "members including this account)"
-                                      if isinstance(member_count, int)
-                                      else "")
+                if zh:
+                    # zh turn face: the loop path's graph semantics from the
+                    # SAME payload (cluster/shared devices/related accounts)
+                    from app.agent_loop import _signal_answer_lines
+                    ex_zh = data.get("explanation") or {}
+                    cluster_zh = ex_zh.get("cluster") or {}
+                    related_zh = ex_zh.get("related_accounts") or []
+                    prose.extend(_signal_answer_lines({
+                        "cluster_name": cluster_zh.get("cluster_name"),
+                        "detection_type": cluster_zh.get("detection_type"),
+                        "member_count": cluster_zh.get("member_count"),
+                        "cluster_risk_score": cluster_zh.get(
+                            "cluster_risk_score"),
+                        "shared_devices": ex_zh.get("shared_devices") or [],
+                        "related_accounts": related_zh,
+                    }, lang="zh"))
+                else:
+                    # (No `continue`: the structured detail below still
+                    # runs for this payload.)
+                    prose.append(detection_mechanism_sentence(data))
+                    # AL-2.8: the graph facts ARE the "why" — state them from
+                    # RP's own network evidence (cluster, shared devices,
+                    # related accounts), bounded lists, nothing synthesized.
+                    ex = data.get("explanation") or {}
+                    cluster = ex.get("cluster") or {}
+                    facts = []
+                    if cluster.get("detection_type"):
+                        facts.append(f"detection type “{cluster['detection_type']}”")
+                    if cluster.get("member_count") is not None:
+                        facts.append(
+                            f"{cluster['member_count']} accounts in the cluster")
+                    if cluster.get("cluster_risk_score") is not None:
+                        facts.append(
+                            f"cluster risk score "
+                            f"{cluster['cluster_risk_score']}")
+                    if facts:
                         prose.append(
-                            f"Related accounts — SAMPLE, not the full "
-                            f"list: {shown_ids} ({shown_n} of {total} "
-                            f"related accounts shown as a Risk Platform "
-                            f"graph-evidence preview{scope_note}). The "
-                            "complete related-account list is available "
-                            "through the related-account network "
-                            "analysis.")
-                    else:
-                        more = (f" (and {len(related) - 5} more)"
-                                if len(related) > 5 else "")
+                            "Risk Platform graph data shows: " + ", ".join(facts)
+                            + ".")
+                    devices = ex.get("shared_devices") or []
+                    if devices:
+                        shown = "; ".join(str(d) for d in devices[:3])
+                        more = (f" (and {len(devices) - 3} more)"
+                                if len(devices) > 3 else "")
                         prose.append(
-                            f"Related accounts in the cluster: "
-                            f"{shown_ids}{more}.")
+                            f"Shared devices linking these accounts: "
+                            f"{shown}{more}.")
+                    related = ex.get("related_accounts") or []
+                    if related:
+                        # List-completeness semantics: RP's related_accounts
+                        # is a server-side preview — a partial list is always
+                        # labeled as a sample with the authoritative total
+                        # (cluster members incl. this account, minus one),
+                        # never as the complete membership.
+                        shown_ids = ", ".join(str(a) for a in related[:5])
+                        shown_n = min(len(related), 5)
+                        total = ex.get("related_accounts_total")
+                        is_preview = ex.get("related_accounts_preview") is True
+                        if is_preview and total and shown_n < total:
+                            member_count = (ex.get("cluster") or {}).get(
+                                "member_count")
+                            scope_note = (f" (the cluster has {member_count} "
+                                          "members including this account)"
+                                          if isinstance(member_count, int)
+                                          else "")
+                            prose.append(
+                                f"Related accounts — SAMPLE, not the full "
+                                f"list: {shown_ids} ({shown_n} of {total} "
+                                f"related accounts shown as a Risk Platform "
+                                f"graph-evidence preview{scope_note}). The "
+                                "complete related-account list is available "
+                                "through the related-account network "
+                                "analysis.")
+                        else:
+                            more = (f" (and {len(related) - 5} more)"
+                                    if len(related) > 5 else "")
+                            prose.append(
+                                f"Related accounts in the cluster: "
+                                f"{shown_ids}{more}.")
             elif data.get("signal_type") == "Rule" \
                     and "explanation" in data:
                 # rule requested but NO backing rule exists in RP data —
                 # still identify the detection mechanism deterministically
-                prose.append(detection_mechanism_sentence(data))
+                prose.append(
+                    "该发现由规则检测标记（Risk Platform 未提供该规则的"
+                    "归因明细）。" if zh else
+                    detection_mechanism_sentence(data))
             if data.get("evidence_missing") and not data.get("records") \
                     and data.get("signal_type") in ("ML", "Rule", "Graph") \
-                    and prose:
+                    and prose and not zh:
                 # 3) missing explanatory evidence for a signal explanation —
                 # appended AFTER the mechanism/confirmed-fact sentences as
                 # the grammatical continuation of the LAST signal sentence
@@ -1038,10 +1471,27 @@ def compose_response(
                     # transaction records are actually the missing item.
                     statement = gap_statement(data)
                     if statement:
-                        prose.append(
-                            "The Risk Platform confirms the finding, but "
-                            f"{statement[0].lower() + statement[1:]}"
-                        )
+                        if zh:
+                            # zh face: the SAME bounded semantics built from
+                            # the mapped items (system-authored guidance in
+                            # the turn language; unknown items stay verbatim)
+                            needed = [
+                                _zh_tool_text(str(nd))
+                                for nd in (data.get("next_data_needed") or [])
+                            ]
+                            zh_gap = (
+                                "缺少：" + "；".join(
+                                    f"“{n}”" for n in needed)
+                                + "（Risk Platform 当前不提供这些数据）。"
+                                if needed else
+                                "该结果的某些支持数据当前无法从 Risk "
+                                "Platform 获取。")
+                            prose.append(f"Risk Platform 确认该发现，但{zh_gap}")
+                        else:
+                            prose.append(
+                                "The Risk Platform confirms the finding, but "
+                                f"{statement[0].lower() + statement[1:]}"
+                            )
 
             # ---- structured supporting detail ---------------------------
             if data.get("evidence_missing") \
@@ -1051,10 +1501,13 @@ def compose_response(
                 # an unrelated subsystem gap must not be restated as extra
                 # data needed for the bundle creation answer.
                 if result.next_data_needed:
+                    items = ([_zh_tool_text(str(nd))
+                              for nd in result.next_data_needed]
+                             if zh else list(result.next_data_needed))
                     lines.append(
-                        "Additional data needed: " + "; ".join(result.next_data_needed)
-                        + "."
-                    )
+                        ("还需补充的数据：" if zh else
+                         "Additional data needed: ")
+                        + "; ".join(items) + ".")
             # timeline payload
             events = data.get("events") or []
             for ev in events:
@@ -1083,6 +1536,8 @@ def compose_response(
                 lines.append(f"{marker}{summary_txt} [{rid}]")
             if data.get("truncated"):
                 lines.append(
+                    f"（显示前 {data.get('top_n')} 条，共 "
+                    f"{data.get('total_events')} 个事件）" if zh else
                     f"(showing top {data.get('top_n')} of "
                     f"{data.get('total_events')} events)"
                 )
@@ -1116,9 +1571,10 @@ def compose_response(
                     parts.append(f"score contribution: {rule['contribution']}")
                 if parts:
                     lines.append(_strip_citation_markers(
-                        "Details: " + " — ".join(parts) + "."))
+                        ("详情：" if zh else "Details: ")
+                        + " — ".join(parts) + "."))
             if data.get("signal_type") == "ML" and "explanation" in data \
-                    and not any(
+                    and not zh and not any(
                         "The model score is" in p for p in prose):
                 # suppressed when the prose already carries the score
                 # (P7: no duplicated sentences)
@@ -1152,6 +1608,8 @@ def compose_response(
                     # references.
                     top = list(associated)
                     prose.append(
+                        f"该发现直接适用 {len(associated)} 条政策引用："
+                        if zh else
                         f"For this finding, {len(associated)} policy "
                         f"reference"
                         f"{'s apply' if len(associated) != 1 else ' applies'}"
@@ -1164,6 +1622,9 @@ def compose_response(
                     # "why is THIS finding a risk" and reads as padding).
                     top = []
                     prose.append(
+                        "Risk Platform 未为该发现附加 finding-level 政策"
+                        "依据；其持有的引用为调查级，而非针对该发现。"
+                        if zh else
                         "The Risk Platform has attached no finding-level "
                         "policy basis to this finding; the citations it "
                         "holds are investigation-wide, not specific to it."
@@ -1177,6 +1638,8 @@ def compose_response(
                     )
                 if not matches or (data.get("evidence_missing") and not top):
                     lines.append(
+                        "该发现没有可直接适用的政策引用。"
+                        if zh else
                         "No directly relevant policy references are "
                         "available for this finding."
                     )
@@ -1184,6 +1647,9 @@ def compose_response(
                     # (the no-basis case already states the gap in its lead
                     # sentence — no duplicate footnote needed)
                     lines.append(
+                        "Risk Platform 未为该发现附加任何 finding-level "
+                        "政策引用；上述引用为案例级。"
+                        if zh else
                         "The Risk Platform has not attached any finding-"
                         "level policy citation to this finding; the "
                         "references above are case-level."
@@ -1193,6 +1659,8 @@ def compose_response(
             if isinstance(data.get("artifact"), dict):
                 a = data["artifact"]
                 lines.append(
+                    f"调查证据包已生成，可在右侧 Artifacts 面板查看"
+                    f"（{a.get('artifact_id')}）。" if zh else
                     f"The investigation bundle has been created and is "
                     f"available in the Artifacts panel on the right "
                     f"({a.get('artifact_id')})."
@@ -1213,6 +1681,9 @@ def compose_response(
                 pass
             elif empty_data.get("view") == "evidence":
                 prose.append(
+                    "Risk Platform 确认该发现，但其证据流没有任何具体"
+                    "记录——仅存在聚合特征值，因此无法提供完整的具体"
+                    "证据。" if zh else
                     "The Risk Platform confirms this finding, but holds no "
                     "concrete records for its evidence streams — only "
                     "aggregate feature values exist. Complete concrete "
@@ -1220,6 +1691,8 @@ def compose_response(
                 )
             elif empty_data.get("view") == "self_opposite_trades":
                 prose.append(
+                    "Risk Platform 没有该账户的反向交易活动数据——既无"
+                    "聚合值也无支持的交易记录。" if zh else
                     "The Risk Platform holds no opposite-side trading "
                     "activity data for this account — no aggregate and no "
                     "supporting transaction records."
@@ -1230,12 +1703,17 @@ def compose_response(
                 # is "none" — explicitly NOT an unsupported capability and
                 # NOT a failure.
                 prose.append(
+                    "未找到直接适用于该发现的政策。"
+                    if zh else
                     "No directly applicable policy was found for this "
                     "finding."
                 )
             else:
                 if empty_data.get("scope") in ("case", "finding"):
                     lines.append(
+                        "当前尚无可打包的内容：本调查中没有任何调查结果。"
+                        "请先询问案例或发现，再生成证据包。"
+                        if zh else
                         "There is nothing to bundle yet: no investigation "
                         "results are available in this investigation. Ask "
                         "about the case or a finding first, then generate "
@@ -1243,6 +1721,8 @@ def compose_response(
                     )
                 else:
                     lines.append(
+                        "查询有效，但 Risk Platform 没有与之匹配的数据。"
+                        if zh else
                         "The query was valid, but the Risk Platform holds "
                         "no matching data for it."
                     )
@@ -1250,10 +1730,14 @@ def compose_response(
                 if warning.startswith("No content-contributing"):
                     continue        # implied by the empty result set
                 if warning not in lines:
-                    lines.append(f"Note: {warning}")
+                    lines.append(
+                        _zh_warning_face(warning) if zh else
+                        f"Note: {warning}")
         elif result.outcome == ToolResultOutcome.INTEGRATION_ERROR:
             msg = result.error.message if result.error else "upstream failure"
             lines.append(
+                f"无法连接 Risk Platform 或其调用失败（集成错误:{msg}）。"
+                "这不是空结果——应稍后重试可用性。" if zh else
                 f"The Risk Platform could not be reached or failed "
                 f"(integration error: {msg}). This is not an empty result — "
                 "availability should be retried later."
@@ -1261,12 +1745,14 @@ def compose_response(
         elif result.outcome == ToolResultOutcome.UNSUPPORTED:
             msg = result.error.message if result.error else "unsupported here"
             lines.append(
+                f"当前目标不支持该调查操作:{msg}" if zh else
                 f"This investigation action is not supported for the current "
                 f"target: {msg}"
             )
         elif result.outcome == ToolResultOutcome.VALIDATION_ERROR:
             msg = result.error.message if result.error else "invalid input"
-            lines.append(f"The request could not be executed: {msg}")
+            lines.append(f"该请求未能执行:{msg}" if zh else
+                         f"The request could not be executed: {msg}")
 
     if prose or lines:
         # §5: [n] markers may appear in a conversational response ONLY when
@@ -1286,7 +1772,8 @@ def compose_response(
             body = _strip_citation_markers(body)
         return body
 
-    return "The investigation completed without structured output."
+    return ("调查已完成，但没有结构化输出。" if zh else
+            "The investigation completed without structured output.")
 
 
 # ---------------------------------------------------------------------------
@@ -1445,9 +1932,12 @@ class InvestigationService:
                                 (c, next((f.summary for f in case_findings
                                           if f.finding_id == c.id), c.hint))
                                 for c in resolution.candidates)]
-                    goal = (self.goal_resolver(
-                        user_request, None, resolved_ctx.case_id)
-                        if self.goal_resolver else None)
+                    goal = None
+                    if self.goal_resolver:
+                        from app.agent_loop import _call_goal_resolver
+                        goal = _call_goal_resolver(
+                            self.goal_resolver, user_request, None,
+                            resolved_ctx.case_id, {})
                     refined = self.refinement_resolver(
                         user_request, cand,
                         goal.project() if goal is not None else None)
@@ -1733,9 +2223,15 @@ class InvestigationService:
         goal_representation = None
         if self.goal_resolver is not None:
             try:
-                goal = self.goal_resolver(
-                    user_request, resolved_ctx.focused_finding_id,
-                    resolved_ctx.case_id)
+                # B1: the resolver convention receives the diagnostics
+                # out-param (signature-aware); the legacy turn route has
+                # no loop decision record, so the provenance is plumbed
+                # without a sink here (documented residual).
+                from app.agent_loop import _call_goal_resolver
+                goal = _call_goal_resolver(
+                    self.goal_resolver, user_request,
+                    resolved_ctx.focused_finding_id, resolved_ctx.case_id,
+                    {})
                 if goal is not None:
                     goal_representation = goal
             except Exception:
@@ -1816,7 +2312,8 @@ class InvestigationService:
             user_request,
             [(tc.tool_name, tc.result.data if tc.result is not None
               else None) for tc in execution.tool_calls])
-        _coverage_lines = coverage_lines(coverage)
+        _coverage_lines = coverage_lines(coverage,
+                                         lang=response_language)
         if _coverage_lines:
             response = response.rstrip() + "\n\n" + "\n".join(
                 _coverage_lines)
@@ -1848,7 +2345,7 @@ class InvestigationService:
                 trigger=trigger,
                 context=resolved_ctx,
                 finding_capabilities=caps_ids,
-            ))
+            ), lang=response_language)
 
         # --- 7) Context Update ---------------------------------------------------
         # Explicit only: the context returned is the resolution's context.

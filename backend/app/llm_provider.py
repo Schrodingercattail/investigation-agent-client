@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime, timezone
 
 from anthropic import Anthropic
 from anthropic import APITimeoutError
@@ -28,6 +29,18 @@ class ClaudeProvider:
     DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
     DEFAULT_MAX_TOKENS = 4096
     DEFAULT_TIMEOUT = 60.0
+    # Slow-request diagnosis (GU empty attempts, 21 persisted samples):
+    # thinking-only responses grow to EXACTLY the output budget
+    # (usage_out=4096 era → 52-92s empties; usage_out=8192 era → 163-189s
+    # empties) — forced thinking is unbounded, so an empty response is
+    # budget exhaustion, and repeating the SAME budget just repeats the
+    # truncation. When the bounded retry fires on a max_tokens stop, the
+    # retry therefore runs with a DOUBLED budget (single variable, one
+    # escalation, never compounded): the same request gets the thinking
+    # room it truncated at, and a still-empty escalated retry fails the
+    # same way the old same-budget retry did. Success attempts observed
+    # at 2.4k-7.6k output tokens fit comfortably.
+    EMPTY_RETRY_BUDGET_FACTOR = 2
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None, model: str | None = None):
         """
@@ -106,6 +119,7 @@ class ClaudeProvider:
             LLMConfigurationError: If configuration is invalid
         """
         last_empty: LLMEmptyResponseError | None = None
+        attempt_max_tokens = max_tokens
         # A-fix observability: per-application-attempt diagnostics for THIS
         # call. Consumed by structured callers (goal understanding) and
         # persisted with their stage diagnostics. Safe fields only — no
@@ -117,7 +131,7 @@ class ClaudeProvider:
         for attempt in (1, 2):
             _t0 = __import__("time").monotonic()
             try:
-                text = self._generate_once(messages, max_tokens,
+                text = self._generate_once(messages, attempt_max_tokens,
                                            temperature, timeout,
                                            sdk_max_retries, stream)
                 attempts.append({
@@ -128,12 +142,14 @@ class ClaudeProvider:
                     "elapsed_ms": int((__import__("time").monotonic()
                                        - _t0) * 1000),
                     "model": self.model,
-                    "max_tokens": max_tokens,
+                    "max_tokens": attempt_max_tokens,
                     "timeout_seconds": timeout,
                     "sdk_max_retries": sdk_max_retries,
                     "retry_triggered": attempt > 1,
-                    "accepted": True,
+                    "budget_escalated": False,   # only an empty attempt
+                    "accepted": True,            # can trigger escalation
                     **getattr(self, "last_response_meta", {}),
+                    **getattr(self, "last_attempt_window", {}),
                 })
                 return text
             except LLMEmptyResponseError as e:
@@ -148,14 +164,24 @@ class ClaudeProvider:
                     "elapsed_ms": int((__import__("time").monotonic()
                                        - _t0) * 1000),
                     "model": self.model,
-                    "max_tokens": max_tokens,
+                    "max_tokens": attempt_max_tokens,
                     "timeout_seconds": timeout,
                     "sdk_max_retries": sdk_max_retries,
                     "retry_triggered": attempt == 1,
+                    # budget escalation: the ONE targeted response to the
+                    # verified budget-exhaustion signature — only for a
+                    # max_tokens stop, only once (attempt 2 is final).
+                    "budget_escalated": (
+                        attempt == 1 and _ctx.get("stop_reason") == "max_tokens"),
                     "accepted": False,
                     **getattr(self, "last_response_meta", {}),
+                    **getattr(self, "last_attempt_window", {}),
                 })
                 last_empty = e
+                if (attempt == 1
+                        and _ctx.get("stop_reason") == "max_tokens"):
+                    attempt_max_tokens = (
+                        max_tokens * type(self).EMPTY_RETRY_BUDGET_FACTOR)
                 logger.warning(
                     "LLM attempt %d/2 returned no text block "
                     "(stop_reason=%s)%s",
@@ -224,6 +250,7 @@ class ClaudeProvider:
             "sdk_max_retries": sdk_max_retries,
             "retry_triggered": False,
             "accepted": False,
+            **getattr(self, "last_attempt_window", {}),
         })
         raise exc
 
@@ -253,6 +280,32 @@ class ClaudeProvider:
     _calls_so_far: list[int] = [0]
 
     def _generate_once(
+        self,
+        messages: list[dict],
+        max_tokens: int,
+        temperature: float,
+        timeout: float | None = None,
+        sdk_max_retries: int | None = None,
+        stream: bool = False,
+    ) -> str:
+        """Wall-clock window stamping wrapper (slow-request diagnosis):
+        every application attempt records its UTC start/end alongside the
+        monotonic elapsed_ms — the elapsed value stays the in-process
+        latency source; the wall stamps exist for cross-stage audit. The
+        finally covers success AND every exception path without altering
+        propagation."""
+        _started_at = datetime.now(timezone.utc).isoformat()
+        try:
+            return self._generate_once_inner(
+                messages, max_tokens, temperature, timeout,
+                sdk_max_retries, stream)
+        finally:
+            self.last_attempt_window = {
+                "started_at": _started_at,
+                "ended_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+    def _generate_once_inner(
         self,
         messages: list[dict],
         max_tokens: int,
@@ -376,6 +429,14 @@ class ClaudeProvider:
                 "stop_reason": getattr(response, "stop_reason", None),
                 "content_kinds": [getattr(b, "type", "?")
                                   for b in response.content],
+                # U00008 planner diagnostics: per-block type + size only —
+                # never the block content (no prompt/reasoning leakage).
+                "content_blocks": [
+                    {"type": getattr(b, "type", "?"),
+                     "chars": len(getattr(b, "text", "")
+                                  or getattr(b, "thinking", "") or "")}
+                    for b in response.content],
+                "stream": bool(stream),
                 "text_chars": sum(
                     len(getattr(b, "text", "") or "")
                     for b in response.content

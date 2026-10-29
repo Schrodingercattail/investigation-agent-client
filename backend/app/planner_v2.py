@@ -16,6 +16,7 @@ structured Plan. Constrained by design:
 No planner-side execution of tools occurs; the Executor is out of scope.
 """
 
+import inspect
 import json
 import logging
 import re
@@ -270,6 +271,15 @@ class PlannerV2:
                 return plan
         if not streams or not case_findings:
             return None
+        # anchor_caps is defined ONLY by the anchor-backed fallback below;
+        # the PRIMARY known_eligible path skips that branch entirely, so it
+        # must start as None (real execution U00004 TASK-445a2cc1516c /
+        # TASK-b473c38db001: "生成提现明细和交易明细的文件给我" crashed with
+        # UnboundLocalError at check_plan before any step was planned). The
+        # capabilities expression at check_plan then resolves to
+        # finding_capabilities on this path — byte-identical to the
+        # fallback's own semantics for an empty anchor union.
+        anchor_caps = None
         stream_skill = next(
             (sid for sid in known_eligible
              if "generate_artifact" in SKILLS[sid].planning_steps
@@ -472,8 +482,20 @@ class PlannerV2:
 
         # Case-level convenience: if no finding focus exists, keep only skills
         # whose capability gates don't require one (they were pre-filtered by
-        # the caller, but enforce defensively).
-        if context.focused_finding_id is None:
+        # the caller, but enforce defensively) — UNLESS the REQUEST itself
+        # names exactly one authoritative finding title (U00005 B-回归: a
+        # compound criteria/destinations/records ask naming "High Withdrawal
+        # Frequency" carries its own target evidence; the blanket filter
+        # starved it into UNSUPPORTED_REQUEST before any anchoring could
+        # bind the steps — B10-class starvation at the planning gate).
+        _named_finding = (_title_named_finding(user_words, case_findings)
+                          if context.focused_finding_id is None else None)
+        if _named_finding is not None and not finding_capabilities:
+            # the title-named finding supplies the capability gate context
+            # its own anchored steps will be validated against (the same
+            # capabilities a resolved focus would have provided)
+            finding_capabilities = _named_finding.capabilities.root
+        if context.focused_finding_id is None and _named_finding is None:
             require_focus = {
                 sid for sid in known_eligible
                 if SKILLS[sid].required_capabilities
@@ -643,11 +665,23 @@ class PlannerV2:
                  if "analyze_related_account_set_trades"
                  in SKILLS[sid].planning_steps), None)
             if set_skill is not None:
+                # U00029 NOART authorization rule: generate_artifact is
+                # planned here ONLY on explicit user file/export intent
+                # (ARTIFACT_CASE / ARTIFACT_FINDING). An investigation ask
+                # ("列出交易明细" / "send me the transaction details")
+                # delivers results and evidence in the CONVERSATION; the
+                # branch selecting an artifact template is not, by itself,
+                # authorization. (Case Intake auto-bundle is a separate,
+                # separately-documented contract in the intake branch.)
+                artifact_authorized = request_intent in (
+                    RequestIntent.ARTIFACT_CASE,
+                    RequestIntent.ARTIFACT_FINDING)
                 set_step_types = [
                     st for st in (("analyze_related_accounts",
                                    "analyze_related_account_set_trades",
                                    "generate_artifact"))
-                    if st in SKILLS[set_skill].planning_steps]
+                    if st in SKILLS[set_skill].planning_steps
+                    and (st != "generate_artifact" or artifact_authorized)]
                 set_steps = []
                 for i, st in enumerate(set_step_types, 1):
                     binding = STEP_TOOL_MAP[st]
@@ -998,6 +1032,15 @@ class PlannerV2:
         # 1) Ask the LLM within the closed vocabulary.
         try:
             llm = self._llm()
+            # U00008 diagnostics: mark the LLM path BEFORE the call so the
+            # loop can distinguish "LLM not called (deterministic planning
+            # — attribute absent)" from "called" in every outcome. The
+            # provider refreshes attempts/response_meta per outcome; safe
+            # fields only (never prompt or reasoning content).
+            self.last_llm_diagnostics = {
+                "called": True, "attempts": [],
+                "response_meta": {},
+            }
             user_content = _user_prompt(user_request, context,
                                         known_eligible)
             if outputs_block:
@@ -1022,21 +1065,63 @@ class PlannerV2:
                 # reasoning surface and 2048 truncated both attempts
                 # (stop_reason=max_tokens — deterministic, retry cannot
                 # recover); same lesson, larger prompt.
-                max_tokens=4096,
+                # U00008 reliability fix: 4096 was exhausted again by the
+                # same signature (both attempts stop_reason=max_tokens, no
+                # text block — live TASK-0d9d7b98a2bb) while Goal
+                # Understanding, SAME model and endpoint, runs on the
+                # GU-proven 8192. Aligned via PLANNER_MAX_TOKENS.
+                # stream=True reuses the GU-verified streaming +
+                # get_final_message() path (llm_provider._generate_once),
+                # which also passes `system` as the protocol-level
+                # top-level parameter — the non-streaming branch inlines
+                # the system role into `messages`, an unverified shape on
+                # the Anthropic-compatible endpoint. The kwarg is probed
+                # against the provider signature (the established GU
+                # pattern) so scripted test doubles stay compatible.
+                max_tokens=_cfg.PLANNER_MAX_TOKENS,
                 temperature=0.1,
+                **({"stream": True} if "stream" in inspect.signature(
+                    llm.generate).parameters else {}),
             )
+            self.last_llm_diagnostics = {
+                "called": True,
+                "attempts": list(getattr(llm, "last_attempts", []) or []),
+                "response_meta": dict(
+                    getattr(llm, "last_response_meta", {}) or {}),
+            }
         except LLMEmptyResponseError as e:
             # the model ANSWERED (twice, after the provider's bounded
             # retry) but returned no usable text — distinct from an
             # unreachable provider
             logger.error("Planner LLM returned no text block: %s", e)
+            self.last_llm_diagnostics = {
+                "called": True,
+                "attempts": list(getattr(llm, "last_attempts", []) or []),
+                "response_meta": dict(
+                    getattr(llm, "last_response_meta", {}) or {}),
+            }
             return PlanningFailure(
                 code="LLM_EMPTY_RESPONSE",
                 message="The model returned empty responses, so the "
                         "investigation could not be planned.",
-                detail={"error_type": type(e).__name__},
+                detail={"error_type": type(e).__name__,
+                        # U00008 reliability fix: persist the provider's
+                        # per-attempt diagnostics (stop_reason, usage,
+                        # content block types/lengths — safe fields only,
+                        # never prompt or reasoning content) so budget/
+                        # transport failures are evidence-backed.
+                        "attempts": list(getattr(
+                            llm, "last_attempts", []) or []),
+                        "response_meta": dict(getattr(
+                            llm, "last_response_meta", {}) or {})},
             )
         except LLMTimeoutError as e:
+            self.last_llm_diagnostics = {
+                "called": True,
+                "attempts": list(getattr(llm, "last_attempts", []) or []),
+                "response_meta": dict(getattr(
+                    llm, "last_response_meta", {}) or {}),
+            }
             logger.error("Planner LLM call timed out: %s", e)
             return PlanningFailure(
                 code="LLM_TIMEOUT",
@@ -1044,6 +1129,12 @@ class PlannerV2:
                 detail={"error_type": type(e).__name__},
             )
         except LLMRateLimitError as e:
+            self.last_llm_diagnostics = {
+                "called": True,
+                "attempts": list(getattr(llm, "last_attempts", []) or []),
+                "response_meta": dict(getattr(
+                    llm, "last_response_meta", {}) or {}),
+            }
             logger.error("Planner LLM rate limited: %s", e)
             return PlanningFailure(
                 code="LLM_RATE_LIMITED",
@@ -1051,6 +1142,12 @@ class PlannerV2:
                 detail={"error_type": type(e).__name__},
             )
         except LLMConfigurationError as e:
+            self.last_llm_diagnostics = {
+                "called": True,
+                "attempts": list(getattr(llm, "last_attempts", []) or []),
+                "response_meta": dict(getattr(
+                    llm, "last_response_meta", {}) or {}),
+            }
             logger.error("Planner LLM configuration error: %s", e)
             return PlanningFailure(
                 code="LLM_CONFIGURATION_ERROR",
@@ -1058,6 +1155,12 @@ class PlannerV2:
                 detail={"error_type": type(e).__name__},
             )
         except LLMError as e:
+            self.last_llm_diagnostics = {
+                "called": True,
+                "attempts": list(getattr(llm, "last_attempts", []) or []),
+                "response_meta": dict(getattr(
+                    llm, "last_response_meta", {}) or {}),
+            }
             logger.error("Planner LLM error: %s", e)
             return PlanningFailure(
                 code="LLM_UNAVAILABLE",
@@ -1165,6 +1268,30 @@ class PlannerV2:
                 arguments=arguments,
             ))
 
+        # U00005 B-回归: a contract-driven plan whose finding-level steps
+        # carry NO anchor executes INVALID_ARGUMENT when no finding is
+        # focused (the executor has nothing to inject — observed: the
+        # compound criteria/destinations/records ask planned
+        # retrieve_policy/explain_signal/inspect_evidence with empty args
+        # and all three outputs stayed "No determinable result"). When the
+        # REQUEST itself names exactly ONE authoritative finding title,
+        # anchor every unanchored finding-level step to it — deterministic
+        # echo of the user's own words (the same title evidence the
+        # resolver's title tier uses); zero or multiple title matches stay
+        # unanchored rather than guessed.
+        _anchor_unanchored_finding_steps(steps, user_words, case_findings)
+        # U00010 F1 R1: PER-OUTPUT anchoring — a contract run whose
+        # outputs name DIFFERENT findings must not share one unanchored
+        # step. Each finding-level step is anchored to the finding its
+        # served outputs resolve to; a step serving outputs that resolve
+        # to DIFFERENT findings is split per finding (bounded by the
+        # served-output count). Unresolvable outputs keep the step
+        # unanchored rather than guessed (honest pending in the GSP
+        # composition).
+        if goal_contract is not None and case_findings:
+            steps = _anchor_outputs_per_finding(
+                steps, goal_contract, user_words, case_findings)
+
         plan = Plan(
             plan_id=f"PLAN-{uuid.uuid4().hex[:12]}",
             investigation_id=_investigation_ref(context),
@@ -1188,6 +1315,164 @@ class PlannerV2:
                 detail={"errors": [e.model_dump() for e in contract.errors]},
             )
         return plan
+
+
+# Finding-level step types that require a finding anchor (finding_id) —
+# without one they fail validation when no finding is focused.
+_FINDING_LEVEL_STEP_TYPES = frozenset({
+    "signal_explain", "explain_signal", "finding_drilldown",
+    "inspect_evidence", "inspect_withdrawals", "inspect_transactions",
+    "inspect_timeline", "policy_lookup", "retrieve_policy",
+    "inspect_self_opposite_trades",
+})
+
+
+def _output_target_finding(output, user_words, case_findings):
+    """Resolve ONE output's target finding deterministically:
+    1. an F-id subject_ref that exists in this case's findings;
+    2. the governed explain-domain vocabulary — a domain request element
+       (e.g. 高频提现 / 新账号高频活动 / EN equivalents) appearing in the
+       output's claim maps to the finding whose title carries the domain's
+       title element in THIS case;
+    3. an exactly-one authoritative-title match of the claim itself;
+    4. U00010 B1 (EN-plan-quality trace): the LLM-authored claim may be
+       GENERIC ("Rule determination criteria") and carry no finding
+       vocabulary — fall back to the USER'S OWN request words through the
+       same governed domain/title tiers (the request named the findings,
+       so anchoring from it is the user's own vocabulary, never a guess).
+    None when nothing resolves (the caller keeps the step unanchored —
+    no guessed finding ids)."""
+    by_id = {f.finding_id: f for f in case_findings}
+    subject = (output.subject_ref or "").strip()
+    if subject in by_id:
+        return by_id[subject]
+    from app.investigation_concepts import _EXPLAIN_DOMAINS, _normalized
+
+    def _title_text(title: str) -> str:
+        # U00047: RP finding titles carry trailing periods ("New account
+        # with high activity.") — the period must not break the
+        # exactly-one title match against claim/request text that quotes
+        # the title without it.
+        return " ".join((title or "").lower().rstrip(".。").split())
+
+    for _t in (" ".join((output.claim or "").lower().split()),
+               " ".join((user_words or "").lower().split())):
+        if not _t:
+            continue
+        for _domain, request_element, title_element in _EXPLAIN_DOMAINS:
+            if _normalized(request_element) in _t:
+                for f in case_findings:
+                    if _normalized(title_element) in _title_text(
+                            getattr(f, "title", "") or ""):
+                        return f
+        named = [f for f in case_findings
+                 if _title_text(getattr(f, "title", "") or "")
+                 and _title_text(f.title) in _t]
+        if len(named) == 1:
+            return named[0]
+    return None
+
+
+def _step_serves_output(step_type: str, output) -> bool:
+    """Whether the step's declared evidence types intersect the output's
+    requirements (the same binding-evidence rule the coverage admission
+    uses)."""
+    from app.skills import STEP_TOOL_MAP
+    binding = STEP_TOOL_MAP.get(step_type)
+    if binding is None:
+        return False
+    declared = {t.value if hasattr(t, "value") else str(t)
+                for t in (binding.supported_evidence_types or [])}
+    required = {e.value if hasattr(e, "value") else str(e)
+                for e in output.evidence_requirements}
+    return bool(declared & required)
+
+
+def _anchor_outputs_per_finding(steps, goal_contract, user_words,
+                                case_findings):
+    """R1: per-output finding anchoring for contract runs. Every
+    finding-level step is anchored to the finding its served outputs
+    resolve to; a step serving outputs that resolve to DIFFERENT
+    findings is split into one anchored copy per finding (step ids gain
+    a -<finding_id> suffix, keeping ids unique for TC provenance).
+    Outputs that resolve to nothing keep their step unanchored — the GSP
+    composition reports them honestly as pending."""
+    from app.investigation_concepts import _normalized
+    by_id = {f.finding_id: f for f in case_findings}
+    out: list = []
+    for step in steps:
+        if step.type not in _FINDING_LEVEL_STEP_TYPES \
+                or (step.arguments or {}).get("finding_id"):
+            out.append(step)
+            continue
+        # U00010 B1 (EN-loose trace): a RECORDS producer step is anchored
+        # by the STREAM rule — the finding whose OWN evidence_refs carry
+        # that stream (live: the transaction producer must anchor F1
+        # whose evidence carries the trades, NOT the first claim/request
+        # domain match "High withdrawal frequency" → F3, which executed
+        # EVIDENCE_STREAM_NOT_SUPPORTED twice). Claim/request tiers stay
+        # for explain and other non-records steps.
+        if step.type in ("inspect_withdrawals", "inspect_transactions"):
+            from app.planner_v2 import _evidence_stream_anchor
+            fnd = _evidence_stream_anchor(
+                step.type, [(None, f) for f in case_findings])
+            if fnd is not None:
+                step.arguments = dict(step.arguments or {},
+                                      finding_id=fnd.finding_id)
+            out.append(step)
+            continue
+        served = [o for o in goal_contract.outputs
+                  if _step_serves_output(step.type, o)]
+        targets: list = []
+        for o in served:
+            fnd = _output_target_finding(o, user_words, case_findings)
+            if fnd is not None and all(f.finding_id != fnd.finding_id
+                                       for f in targets):
+                targets.append(fnd)
+        if len(targets) <= 1:
+            if targets:
+                step.arguments = dict(step.arguments or {},
+                                      finding_id=targets[0].finding_id)
+            out.append(step)
+            continue
+        for fnd in targets:
+            out.append(step.model_copy(update={
+                "step_id": f"{step.step_id}-{fnd.finding_id}",
+                "arguments": dict(step.arguments or {},
+                                  finding_id=fnd.finding_id)}))
+    return out
+
+
+def _title_named_finding(user_words, case_findings):
+    """The finding whose authoritative title the REQUEST itself names —
+    exactly-one guard: None when zero or multiple titles match (never a
+    guess among candidates)."""
+    if not case_findings:
+        return None
+    t = " ".join((user_words or "").lower().split())
+    named = []
+    for f in case_findings:
+        title = " ".join((f.title or "").lower().rstrip(".").split())
+        if title and title in t:
+            named.append(f)
+    return named[0] if len(named) == 1 else None
+
+
+def _anchor_unanchored_finding_steps(steps, user_words, case_findings):
+    """Anchor finding-level steps to a finding the REQUEST itself names
+    by authoritative title (exactly-one guard via _title_named_finding).
+    Returns the applied (step_id, finding_id) pairs — empty when no
+    single title evidence exists (never a guess among candidates)."""
+    target = _title_named_finding(user_words, case_findings)
+    if target is None:
+        return []
+    applied = []
+    for s in steps:
+        if s.type in _FINDING_LEVEL_STEP_TYPES                 and not (s.arguments or {}).get("finding_id"):
+            s.arguments = dict(s.arguments or {},
+                               finding_id=target.finding_id)
+            applied.append((s.step_id, target.finding_id))
+    return applied
 
 
 def _investigation_ref(context: InvestigationContext) -> str:

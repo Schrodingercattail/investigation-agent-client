@@ -159,7 +159,9 @@ def test_scenario_b_two_turn_trading_followup_via_m2():
                                                "finding_drilldown"]
     assert all(t["outcome"] == "success" for t in tools)
     # the answer names the feature fact (fixture trade_frequency_24h=28)
-    assert "behavioral risk-feature detection" in r2["response"]
+    # — in the request's language (zh request → zh feature face)
+    assert ("behavioral risk-feature detection" in r2["response"]
+            or "行为特征观察记录" in r2["response"])
     assert "Trade frequency (24h) = 28" in r2["response"]
 
 

@@ -10,6 +10,7 @@ import json
 import tempfile
 from unittest.mock import patch
 
+from app.domain_tools.artifact_bundle import artifact_bundle
 from app.goal_postconditions import (
     POLARITY_NEGATIVE,
     POLARITY_POSITIVE,
@@ -31,6 +32,7 @@ from app.goal_resolution import (
     build_goal_contract,
 )
 from app.skills import EvidenceType
+from app.models import ToolCallStatusV2
 from app.task_store_v2 import TaskStoreV2
 from app.config import settings
 
@@ -415,6 +417,31 @@ def test_fixture_d_laundering_unresolved_even_with_evidence():
 # --- Fixture E: valid existing finding retrieval stays satisfied --------------------------
 
 def test_fixture_e_valid_retrieval_satisfied():
+    """L1: a records-listing deliverable is satisfied when the evidence is
+    complete AND the full set is emitted to the dialogue (record_rows)."""
+    contract = _contract("retrieval", "withdrawal_records_answer",
+                         "U00010", "finding_level",
+                         ["withdrawal_records"])
+    obs = _obs("inspect_withdrawals", "finding_drilldown",
+               summary={"record_count": 7,
+                        "record_rows": [
+                            {"record_id": f"W{i:03d}", "timestamp": f"t{i}",
+                             "summary": f"w{i}",
+                             "address": f"addr-{i}"} for i in range(7)],
+                        "streams": {"withdrawals_included": True},
+                        "complete": True},
+               for_outputs=["O1"], actual=["withdrawal_records"])
+    result = _eval(contract, [obs])
+    assert result.satisfaction == SAT
+    assert result.polarity == POLARITY_POSITIVE
+    assert result.reason_code == "records_retrieved_complete"
+
+
+def test_l1_no_emission_proof_is_partial():
+    """L1 (honest shape): evidence complete but the observation summary
+    carries NO record_rows — the dialogue emission cannot be proven, so a
+    records-LISTING deliverable must not be SATISFIED on retrieval
+    completeness alone (legacy shape kept for the regression record)."""
     contract = _contract("retrieval", "withdrawal_records_answer",
                          "U00010", "finding_level",
                          ["withdrawal_records"])
@@ -424,9 +451,7 @@ def test_fixture_e_valid_retrieval_satisfied():
                         "complete": True},
                for_outputs=["O1"], actual=["withdrawal_records"])
     result = _eval(contract, [obs])
-    assert result.satisfaction == SAT
-    assert result.polarity == POLARITY_POSITIVE
-    assert result.reason_code == "records_retrieved_complete"
+    assert result.satisfaction == PARTIAL
 
 
 # --- structural: purity + single write point ----------------------------------------------
@@ -793,6 +818,7 @@ def test_risk_level_conflict_through_real_loop(monkeypatch):
 # SATISFIED > PARTIALLY_SUPPORTED > UNRESOLVED
 # > NOT_SATISFIED(reserved) > UNSUPPORTED(reserved).
 
+from app.domain_tools.artifact_bundle import artifact_bundle
 from app.goal_postconditions import (
     _aggregate_requirement_results,
     _VERDICT_PRECEDENCE,
@@ -968,3 +994,176 @@ def test_test8_no_first_wins_regression():
     result2 = _eval(contract, observations)
     assert result2.satisfaction == SAT
     assert result2.polarity == POLARITY_POSITIVE
+
+
+# --- L1: records-retrieval delivery parity (records_cap_partial) -----------
+
+def _parity_contract():
+    return _contract("retrieval", "withdrawal_records_answer",
+                     "U00010", "finding_level",
+                     ["withdrawal_records"])
+
+
+def _parity_obs(summary, outcome="success"):
+    """L1 observation, associated to O1 like Fixture E (for_outputs +
+    actual evidence types — the evaluator's association contract)."""
+    return _obs("inspect_withdrawals", "finding_drilldown",
+                summary=summary, for_outputs=["O1"],
+                actual=["withdrawal_records"], outcome=outcome)
+
+
+def _rows(n, with_address=True):
+    rows = []
+    for i in range(n):
+        row = {"record_id": f"W{i:03d}",
+               "timestamp": f"t{i}",
+               "summary": f"Withdrawal {i}"}
+        if with_address:
+            row["address"] = f"addr-{i}"
+        rows.append(row)
+    return rows
+
+
+def test_l1_t3_records_gt_chat_cap_is_partial():
+    contract = _parity_contract()
+    obs = _parity_obs({"record_count": 11, "record_rows": _rows(11),
+                       "view": "evidence", "rows_truncated": False,
+                       "streams": {"withdrawals_included": True}})
+    result = _eval(contract, [obs])
+    assert result.satisfaction == PARTIAL
+    assert result.reason_code == "records_cap_partial"
+
+
+def test_l1_t4_gt_observation_cap_is_partial():
+    contract = _parity_contract()
+    obs = _parity_obs({"record_count": 25, "record_rows": _rows(25),
+                       "view": "evidence", "rows_truncated": True,
+                       "streams": {"withdrawals_included": True}})
+    result = _eval(contract, [obs])
+    assert result.satisfaction == PARTIAL
+    assert result.reason_code == "records_cap_partial"
+
+
+def test_l1_t2_le_cap_stays_satisfied():
+    contract = _parity_contract()
+    obs = _parity_obs({"record_count": 10, "record_rows": _rows(10),
+                       "view": "evidence", "rows_truncated": False,
+                       "streams": {"withdrawals_included": True}})
+    result = _eval(contract, [obs])
+    assert result.satisfaction == SAT
+    assert result.reason_code == "records_retrieved_complete"
+
+
+def test_l1_t5_count_missing_with_rows_is_partial():
+    contract = _parity_contract()
+    obs = _parity_obs({"record_rows": _rows(4),
+                       "view": "evidence",
+                       "streams": {"withdrawals_included": True}})
+    result = _eval(contract, [obs])
+    assert result.satisfaction == PARTIAL
+
+
+def test_l1_t6_count_invalid_is_partial():
+    contract = _parity_contract()
+    obs = _parity_obs({"record_count": "many", "record_rows": _rows(6),
+                       "view": "evidence",
+                       "streams": {"withdrawals_included": True}})
+    result = _eval(contract, [obs])
+    assert result.satisfaction == PARTIAL
+
+
+def test_l1_t7_count_row_mismatch_conservative_partial():
+    contract = _parity_contract()
+    obs = _parity_obs({"record_count": 5, "record_rows": _rows(11),
+                       "view": "evidence",
+                       "streams": {"withdrawals_included": True}})
+    result = _eval(contract, [obs])
+    assert result.satisfaction == PARTIAL
+
+
+def test_l1_t13a_bundle_parity_flag_on_tool_result():
+    """L1 T13a: a declared record_count != returned records is flagged on
+    the BUNDLE TOOL RESULT (record_parity_failed + the established
+    evidence_missing channel) — deterministic, tool-layer only. The
+    output-level UNRESOLVED propagation is wiring-verified separately
+    (T13b, integration batch)."""
+    from app.models import ToolCallV2, ToolResult, ToolResultOutcome
+    from app.domain_tools.artifact_bundle import artifact_bundle
+
+    recs = [{"record_kind": "withdrawal", "record_id": f"W{i:03d}",
+             "summary": f"w{i}", "address": f"addr-{i}",
+             "timestamp": f"t{i}"} for i in range(2)]
+    tc = ToolCallV2(
+        tool_call_id="TC-PARITY", investigation_id="CASE:U00010",
+        task_id="TASK-PARITY", tool_name="finding_drilldown",
+        status=ToolCallStatusV2.SUCCESS,
+        arguments={"finding_id": "F2", "view": "evidence"},
+        result=ToolResult(
+            outcome=ToolResultOutcome.SUCCESS,
+            data={"finding_id": "F2", "view": "evidence",
+                  "complete": True, "record_count": 5,
+                  "records": recs,
+                  "streams": {"withdrawals_included": True,
+                              "transactions_included": False}}))
+    result = artifact_bundle(
+        scope="finding", format="md", case_id="U00010", finding_id="F2",
+        task_id="TASK-PARITY", source_tool_calls=[tc])
+    assert result.outcome == ToolResultOutcome.SUCCESS
+    assert result.data.get("record_parity_failed") is True
+    assert result.data.get("evidence_missing") is True
+
+
+def test_l1_t13b_unresolved_channel_recognizes_parity_summary():
+    """T13b (evaluator layer): a records-retrieval output evaluated
+    against a summary carrying evidence_missing=true (the channel the
+    bundle parity failure writes) resolves UNRESOLVED, never SATISFIED."""
+    contract = _parity_contract()
+    obs = _parity_obs({"record_count": 10, "record_rows": _rows(10),
+                       "view": "evidence", "evidence_missing": True,
+                       "record_parity_failed": True,
+                       "streams": {"withdrawals_included": True}})
+    result = _eval(contract, [obs])
+    assert result.satisfaction == UNRESOLVED
+
+
+def test_l1_empty_negative_unchanged():
+    contract = _parity_contract()
+    obs = _parity_obs({"record_rows": [],
+                       "view": "evidence",
+                       "streams": {"withdrawals_included": True}},
+                      outcome="empty")
+    result = _eval(contract, [obs])
+    assert result.satisfaction == SAT
+    assert result.polarity == POLARITY_NEGATIVE
+
+
+# --- L1: split path delivery assignment ---------------------------------
+
+def test_split_multi_family_sets_file_export_delivery():
+    from app.goal_resolution import _split_fused_stream_outputs
+    fused = {
+        "claim": "withdrawal and transaction records",
+        "claim_kind": "retrieval",
+        "subject_ref": "U00010",
+        "scope": "case_level",
+        "evidence_requirements": ["withdrawal_records",
+                                  "transaction_records"],
+    }
+    result = _split_fused_stream_outputs([fused])
+    assert len(result) == 2
+    for r in result:
+        assert r.get("delivery") == "file_export"
+
+
+def test_split_single_family_no_file_delivery():
+    from app.goal_resolution import _split_fused_stream_outputs
+    single = {
+        "claim": "address listing",
+        "claim_kind": "retrieval",
+        "subject_ref": "U00010",
+        "scope": "case_level",
+        "evidence_requirements": ["withdrawal_records"],
+    }
+    result = _split_fused_stream_outputs([single])
+    assert len(result) == 1
+    assert result[0].get("delivery") is None  # not a file deliverable

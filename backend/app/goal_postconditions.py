@@ -37,6 +37,7 @@ Satisfaction semantics per state:
 """
 
 from dataclasses import dataclass, field
+import re
 from enum import Enum
 from typing import Any
 
@@ -58,6 +59,18 @@ R_SUBJECT_PRESENT = "subject_present_in_relations"
 R_SUBJECT_ABSENT_COMPLETE = "subject_absent_complete_scope"
 R_SCOPE_TRUNCATED = "scope_truncated"
 R_RECORDS_RETRIEVED_COMPLETE = "records_retrieved_complete"
+# L1: found > chat-emitted for a records-LISTING deliverable — the honest
+# disclosed-partial state (mirrors R_CANDIDATE_CAP_PARTIAL; diagnostic
+# string, not a state enum).
+R_RECORDS_CAP_PARTIAL = "records_cap_partial"
+# L1: the chat renderer's records-listing cap. SINGLE definition — the
+# agent_loop composer imports this; the 20-row observation projection cap
+# and the 10-row chat cap are distinct and must never drift.
+RECORDS_CHAT_CAP = 10
+# U00047 delivery closure: file_export delivery verified — the generated
+# file carries the complete retrieved record set (tool-layer parity
+# passed); dialogue display caps do not apply to this channel.
+R_RECORDS_FILE_DELIVERED_COMPLETE = "records_file_delivered_complete"
 R_RECORDS_EMPTY_COMPLETE = "records_empty_complete_scope"
 R_RECORDS_INCOMPLETE = "records_incomplete"
 R_EXPLANATION_AVAILABLE = "explanation_available"
@@ -81,6 +94,16 @@ R_NEW_ADDRESS_PARTIAL = "new_address_status_partial"
 # Reverse-trade-metric-semantics facet: the authoritative
 # opposite_trade_ratio echo (the metric's meaning/口径 deliverable).
 R_METRIC_SEMANTICS_COMPLETE = "reverse_trade_metric_semantics_complete"
+# Cross-scope scalar isolation: scalar facts that agree WITHIN each
+# declared analysis_scope but differ ACROSS scopes (e.g. the same
+# observation fact re-observed under target_account and
+# related_account_set) are complementary scope-shaped deliveries, not
+# contradictions. The isolation lives in _combine_summaries (partition by
+# the payload's own declared analysis_scope) — there is NO key whitelist
+# and NO per-facet exemption: same-scope disagreements of ANY key stay
+# conflicts, and only payloads that declare a scope may claim cross-scope
+# complementarity.
+SCOPE_FACTS_KEY = "__scope_facts__"
 # Set-internal cross-account analysis (analysis_scope=related_account_set):
 # candidates may involve the case account or only two related members —
 # subject membership is NOT the scope criterion; set membership is.
@@ -91,6 +114,56 @@ R_SET_MEMBERSHIP_VIOLATION = "set_membership_violation"
 # System candidate cap: found > emitted — the report carries only the
 # top-emitted candidates; the remainder is undelivered in this answer.
 R_CANDIDATE_CAP_PARTIAL = "candidate_cap_partial"
+# Explanation-type evidence requirements: when an output demands any of
+# these, a case-summary bundle alone is context, never the deliverable
+# (see the CASE_SUMMARY satisfaction branch). Value-keyed: contract reqs
+# arrive as plain strings and str-Enum members hash by NAME, not value.
+_EXPLANATION_EVIDENCE_REQ_VALUES = frozenset({
+    EvidenceType.RULE_EXPLANATION.value,
+    EvidenceType.ML_SIGNAL_EXPLANATION.value,
+    EvidenceType.GRAPH_CLUSTER_FACTS.value,
+})
+
+
+def requires_explanation_evidence(reqs) -> bool:
+    """True when the requirement list demands explanation-type evidence
+    (rule/signal/cluster facts) — the contract's own declaration that the
+    deliverable is a WHY explanation, not a data listing."""
+    for r in (reqs or []):
+        v = r.value if hasattr(r, "value") else str(r)
+        if v in _EXPLANATION_EVIDENCE_REQ_VALUES:
+            return True
+    return False
+
+
+def _claim_references_prior_detection(claim: str | None) -> bool:
+    """Plan v2.1 scope guard input (CONSERVATIVE — blocks satisfaction,
+    never grants it): bounded markers over the ACCEPTED contract claim
+    indicating the request anaphorically references hedge candidates
+    detected in an earlier turn. Applied ONLY to gate a file_export
+    delivery whose claim points at prior detection results but whose
+    evidence carries no candidate-set detail (real failure
+    INV-9808752cbc32: 85 account transactions exported for a 6-candidate
+    hedge-detail ask). Never used to grant or inherit anything."""
+    if not claim:
+        return False
+    markers = ("以上检测到的", "以上你检测到的", "上述检测到的",
+               "上述已检测到的", "以上已检测到的", "先前已检测到的",
+               "检测到的对冲", "上述对冲", "以上对冲",
+               "这些对冲", "之前检测到的", "先前检测到的")
+    return any(m in claim for m in markers)
+
+
+def _has_explanation_facts(summary: dict) -> bool:
+    """The existing explanation fact shapes (any producing tool): a rule
+    hit, an ML score, cluster attribution, feature facts, or the RP
+    risk-factor entry. A bare relation list has none of these."""
+    if not isinstance(summary, dict):
+        return False
+    if summary.get("rule_name") or summary.get("cluster_name") \
+            or summary.get("feature_facts") or summary.get("risk_factor"):
+        return True
+    return summary.get("ml_score") is not None
 
 
 @dataclass
@@ -117,25 +190,105 @@ def _as_values(types) -> list[str]:
     return [t.value if hasattr(t, "value") else str(t) for t in (types or [])]
 
 
+def _merge_disjoint_stream_summaries(observations: list[dict]) -> dict | None:
+    """R4 (U00010 F1): complementary single-stream deliveries of ONE
+    multi-stream retrieval output — their `streams` dicts are pairwise
+    key-DISJOINT (withdrawals vs transactions), so scalar disagreements
+    (7 withdrawals vs 64 transactions) are complementary populations,
+    NOT conflicts. Merge into one synthetic summary: counts sum, rows
+    concatenate, `complete` ANDs, streams union, destination-identity
+    blocks concatenate. Returns None when the observations are NOT
+    disjoint streams (same-stream duplicates keep the unanimity/conflict
+    rules), so nothing else changes."""
+    summaries = [o.get("summary") or {} for o in observations]
+    if len(summaries) < 2:
+        return None
+    streams_list = []
+    for s in summaries:
+        st = s.get("streams") or {}
+        if not isinstance(st, dict) or not st:
+            return None
+        streams_list.append(st)
+    seen: set = set()
+    for st in streams_list:
+        if set(st.keys()) & seen:
+            return None            # same stream twice → unanimity path
+        seen |= set(st.keys())
+    merged: dict = {}
+    for s in summaries:
+        for k, v in s.items():
+            if k in ("record_count", "total_events", "candidates_found",
+                     "candidates_emitted", "match_count"):
+                merged[k] = merged.get(k, 0) + (
+                    v if isinstance(v, (int, float))
+                    and not isinstance(v, bool) else 0)
+            elif isinstance(v, list):
+                merged.setdefault(k, [])
+                merged[k] = merged[k] + [
+                    x for x in v if x not in merged.get(k, [])]
+            elif k == "streams":
+                merged.setdefault("streams", {}).update(v)
+            elif k == "complete":
+                merged["complete"] = merged.get("complete", True) and bool(v)
+            elif isinstance(v, dict):
+                d = merged.setdefault(k, {})
+                for dk, dv in v.items():
+                    if isinstance(dv, (int, float)) and \
+                            not isinstance(dv, bool):
+                        d[dk] = d.get(dk, 0) + dv
+                    elif isinstance(dv, list):
+                        d[dk] = d.get(dk, [])
+                        d[dk] = d[dk] + [x for x in dv
+                                         if x not in d[dk]]
+                    else:
+                        d[dk] = dv
+            elif v == merged.get(k, v):
+                merged[k] = v
+    return merged
+
+
+def _declared_scope(summary: dict) -> str | None:
+    """The observation's DECLARED analysis scope — the scalar-partition
+    key. Missing or non-string values partition as None (conservative:
+    an observation that does not declare a scope never claims cross-scope
+    complementarity)."""
+    v = (summary or {}).get("analysis_scope")
+    return v if isinstance(v, str) else None
+
+
 def _combine_summaries(observations: list[dict]) -> tuple[dict, list[str]]:
     """Deterministically combine the associated observations' summary
     facts. Observation ORDER must never decide semantic truth:
 
     - list-valued facts: order-preserving UNION (deduplicated) — pure
       membership accumulation, order-independent by construction.
-    - scalar-valued facts (numbers/strings/bools/dicts): UNANIMITY —
-      the key is kept only when every observation agrees on the value;
-      any disagreement marks the key CONFLICTED and the key is OMITTED
-      from the combined facts (an evaluator reading it finds it absent
-      → indeterminate), and the conflicted keys are reported so the
-      verdict and telemetry can state that observations disagreed.
+    - scalar-valued facts (numbers/strings/bools/dicts): UNANIMITY within
+      each DECLARED analysis_scope partition (_declared_scope):
+        * same-partition disagreement → the key is CONFLICTED and OMITTED
+          from the combined facts (an evaluator reading it finds it absent
+          → indeterminate); the key is reported so the verdict and
+          telemetry can state that observations disagreed.
+        * every declared scope internally unanimous, but ≥2 scopes carry
+          different values → complementary scope-shaped deliveries, NOT
+          conflicts: the key is NOT merged into a top-level scalar (no
+          unanimity, never latest-wins) and is recorded per scope under
+          the reserved combined[SCOPE_FACTS_KEY] = {key: {scope: value}}.
+        * an unscoped partition (analysis_scope missing/non-string) that
+          disagrees with ANY other partition stays a CONFLICT — only a
+          payload that declares its scope may claim cross-scope
+          complementarity.
+      With at most one partition present this reduces exactly to the
+      historical all-observation unanimity semantics (byte-identical).
 
     Returns (combined_facts, conflicted_keys). No latest-wins anywhere.
     """
-    scalars: dict[str, list[Any]] = {}
     combined: dict[str, Any] = {}
+    # scalar values bucketed per declared scope partition; None = unscoped
+    scalars: dict[str, dict[str | None, list[Any]]] = {}
     for o in observations:
-        for k, v in (o.get("summary") or {}).items():
+        summary = o.get("summary") or {}
+        scope = _declared_scope(summary)
+        for k, v in summary.items():
             if v is None:
                 continue
             if isinstance(v, list):
@@ -146,15 +299,39 @@ def _combine_summaries(observations: list[dict]) -> tuple[dict, list[str]]:
                         merged.append(item)
                 combined[k] = merged
             else:
-                bucket = scalars.setdefault(k, [])
+                bucket = scalars.setdefault(k, {}).setdefault(scope, [])
                 if v not in bucket:
                     bucket.append(v)
-    conflicted = sorted(k for k, values in scalars.items()
-                        if len(values) > 1)
-    for k, values in scalars.items():
-        if len(values) == 1:
-            combined[k] = values[0]
-    return combined, conflicted
+    conflicted: list[str] = []
+    scope_facts: dict[str, dict[str, Any]] = {}
+    for k, by_scope in scalars.items():
+        unscoped = by_scope.get(None) or []
+        declared = {s: vals for s, vals in by_scope.items()
+                    if s is not None}
+        # within-partition disagreements are ALWAYS conflicts
+        if len(unscoped) > 1 or any(len(vals) > 1
+                                    for vals in declared.values()):
+            conflicted.append(k)
+            continue
+        # every partition now holds exactly one value
+        all_vals = [vals[0] for vals in declared.values()]
+        if unscoped:
+            all_vals.append(unscoped[0])
+        if all(v == all_vals[0] for v in all_vals[1:]):
+            combined[k] = all_vals[0]          # unanimous → top level
+            continue
+        if unscoped:
+            # unscoped observation disagrees with a declared scope —
+            # conservative: this is NOT established cross-scope
+            # complementarity, it stays a conflict
+            conflicted.append(k)
+            continue
+        # ≥2 declared scopes, each internally unanimous, differing values
+        scope_facts[k] = {s: declared[s][0] for s in sorted(declared)}
+    if scope_facts:
+        combined[SCOPE_FACTS_KEY] = {
+            k: scope_facts[k] for k in sorted(scope_facts)}
+    return combined, sorted(conflicted)
 
 
 def _accounts_in_candidates(candidates: list[Any]) -> set[str]:
@@ -480,6 +657,17 @@ def _category_postcondition(req: EvidenceType, output: RequiredOutput,
         if summary.get("evidence_missing"):
             return (OutputSatisfaction.UNRESOLVED, None,
                     R_FIELD_ABSENT, "absent_field")
+        # Delivery semantics (real execution TASK-268228ad0559): listing
+        # related objects is NOT explaining why the relationship is a
+        # risk item. When the output also demands explanation-type
+        # evidence, a bare relation list (no rule/ML/cluster/feature
+        # facts) is context only — the explanation deliverable stays
+        # unresolved so the loop keeps investigating or the answer
+        # states the gap honestly. No tool is mandated; any producer of
+        # the existing explanation fact shapes satisfies.
+        if requires_explanation_evidence(output.evidence_requirements) \
+                and not _has_explanation_facts(summary):
+            return None
         if summary.get("related_accounts") or summary.get("shared_devices"):
             return (OutputSatisfaction.SATISFIED, POLARITY_POSITIVE,
                     R_RELATIONS_AVAILABLE, "complete")
@@ -496,7 +684,79 @@ def _category_postcondition(req: EvidenceType, output: RequiredOutput,
         if summary.get("evidence_missing"):
             return (OutputSatisfaction.UNRESOLVED, None,
                     R_FIELD_ABSENT, "absent_field")
-        if summary.get("record_count") is not None:
+        # L1 (records-retrieval delivery parity): evidence completeness
+        # (records fully retrieved) is NOT delivery completeness. A
+        # records-LISTING deliverable (retrieval kind, no facet) is only
+        # satisfiable when the dialogue channel emitted the whole set
+        # (found <= chat cap); otherwise the honest state is a disclosed
+        # partial. Other kinds keep the legacy semantics — records are
+        # supporting evidence there, not the deliverable.
+        record_count = summary.get("record_count")
+        rows = summary.get("record_rows") or []
+        emitted = min(len(rows), RECORDS_CHAT_CAP)
+        count_valid = (isinstance(record_count, int)
+                       and not isinstance(record_count, bool)
+                       and record_count >= 0)
+        # U00047 delivery-closure (D1): the delivery mode decides what
+        # "delivered" means. file_export = the generated FILE is the
+        # deliverable — the dialogue cap must never downgrade it;
+        # detail_list (incl. the legacy default) keeps the L1 chat-parity
+        # rules byte-for-byte.
+        if getattr(output, "delivery", "detail_list") == "file_export":
+            if summary.get("evidence_missing"):
+                return (OutputSatisfaction.UNRESOLVED, None,
+                        R_FIELD_ABSENT, "absent_field")
+            # the artifact observation is associated to this output by
+            # its source streams (association fix), so the combined
+            # summary carries its artifact_id when a file was generated
+            generated = summary.get("artifact_id")
+            if not generated:
+                return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                        R_RECORDS_INCOMPLETE, "partial")
+            # file completeness evidence = the tool-layer record-parity
+            # check (rendered rows == declared record_count per source),
+            # consumed here — never re-derived from the chat cap.
+            parity = summary.get("record_parity_failed")
+            checked = summary.get("record_parity_checked")
+            if parity is True:
+                return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                        R_RECORDS_INCOMPLETE, "partial")
+            if not checked or parity is None:
+                # parity check did not run → file completeness unverified
+                # (never treated as verified)
+                return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                        R_RECORDS_INCOMPLETE, "partial")
+            # Plan v2.1 scope guard (real failure INV-9808752cbc32: an
+            # anaphoric hedge-detail file ask was satisfied by an
+            # unrelated full-stream bundle). A file_export delivery whose
+            # claim references prior detection results must carry the
+            # candidate-set detail evidence; an unrelated full-stream
+            # artifact never satisfies it (conservative: blocks only).
+            if _claim_references_prior_detection(output.claim) \
+                    and not summary.get("candidate_set_export"):
+                return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                        "candidate_set_export_scope_unverified", "partial",
+                        "导出范围指向此前检测到的对冲候选，但交付文件未包含"
+                        "候选明细证据（候选明细须基于绑定的候选集生成）。")
+            return (OutputSatisfaction.SATISFIED, POLARITY_POSITIVE,
+                    R_RECORDS_FILE_DELIVERED_COMPLETE, "complete")
+        if (count_valid and record_count > emitted
+                and getattr(output, "claim_kind", None) == "retrieval"
+                and not output.postcondition_facets):
+            return (OutputSatisfaction.PARTIALLY_SUPPORTED,
+                    POLARITY_POSITIVE, R_RECORDS_CAP_PARTIAL, "partial")
+        if count_valid and rows and record_count < len(rows):
+            # L1 T7: declared count smaller than the projected rows —
+            # evidence/declaration inconsistency → conservative partial
+            # + warning, never a silent SATISFIED.
+            return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                    R_RECORDS_INCOMPLETE, "partial")
+        if not count_valid and rows:
+            # count unreliable with rows presented — conservative partial,
+            # never a silent SATISFIED (L1 count-unreliable rule)
+            return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                    R_RECORDS_INCOMPLETE, "partial")
+        if record_count is not None:
             if summary.get("complete") is False:
                 return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
                         R_RECORDS_INCOMPLETE, "partial")
@@ -537,12 +797,74 @@ def _category_postcondition(req: EvidenceType, output: RequiredOutput,
 
     if req == EvidenceType.POLICY_REFERENCES:
         if summary.get("matches") is not None:
+            # U00029 applicability closure (I4/I5): a FINDING-anchored
+            # policy output must carry the citations the Risk Platform
+            # attached to THAT finding. Case-level matches alone do not
+            # make a policy applicable to it — without an associated
+            # (RP-attached) basis the honest state is a disclosed partial,
+            # never a finding-level "satisfied" that reads as "the policy
+            # applies". Population-subject outputs (account subjects)
+            # keep the retrieval rule — the case-level citation set IS
+            # their deliverable.
+            subj = (getattr(output, "subject_ref", "") or "").strip()
+            if re.match(r"^F\d+$", subj):
+                assoc = summary.get("associated_citations") or []
+                if (summary.get("finding_policy_status")
+                        == "no_finding_level_basis") or not assoc:
+                    return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                            R_FIELD_PRESENT, "partial")
             return (OutputSatisfaction.SATISFIED, POLARITY_POSITIVE,
                     R_FIELD_PRESENT, "complete")
         return None
 
     if req == EvidenceType.CASE_SUMMARY:
         if summary.get("finding_count") is not None:
+            # Satisfaction semantics (real execution
+            # INV-727c5a264c85/TASK-740e83a1b5f5): the case bundle is the
+            # DELIVERABLE only for outputs that ask for case context.
+            # When the same output also demands explanation-type evidence
+            # (rule/signal/cluster facts), the bundle is supporting
+            # context — its presence is NOT the requested explanation of
+            # a specific risk finding, and must never satisfy the output
+            # by itself (the deeper requirement decides, or the existing
+            # indeterminate fallback keeps the output honest so the loop
+            # can continue investigating). No tool is mandated here.
+            if any((r.value if hasattr(r, "value") else str(r))
+                   in _EXPLANATION_EVIDENCE_REQ_VALUES
+                   for r in output.evidence_requirements):
+                return None
+            return (OutputSatisfaction.SATISFIED, POLARITY_POSITIVE,
+                    R_FIELD_PRESENT, "complete")
+        return None
+
+    if req == EvidenceType.TIMELINE_EVENTS:
+        # R6 (U00010 F7): a finding-scoped timeline delivery satisfies a
+        # timeline ask from the ACTUAL focused-finding events (subject
+        # binding enforced); truncation stays bounded-partial; zero events
+        # stay a bounded authoritative zero for the scope.
+        #
+        # Completeness consistency (emission/total parity): the verdict
+        # is judged from the FULL projected event set (`event_summaries`,
+        # uncapped) against the tool's authoritative `total_events` —
+        # never from the _MAX_IDS-bounded `event_ids` metadata. A
+        # shortfall between the projected set and the declared total is
+        # a non-complete delivery (never a silent SATISFIED).
+        subject = (output.subject_ref or "").strip()
+        scoped = str(summary.get("finding_id") or "").strip()
+        events = summary.get("event_summaries") or []
+        if subject.startswith("F") and subject[1:].isdigit() \
+                and scoped and scoped != subject:
+            return None
+        if summary.get("truncated"):
+            return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                    R_FIELD_PRESENT, "partial")
+        total_events = summary.get("total_events")
+        if events and isinstance(total_events, int) \
+                and not isinstance(total_events, bool) \
+                and len(events) < total_events:
+            return (OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                    R_FIELD_PRESENT, "partial")
+        if events:
             return (OutputSatisfaction.SATISFIED, POLARITY_POSITIVE,
                     R_FIELD_PRESENT, "complete")
         return None
@@ -635,6 +957,54 @@ def evaluate_output(output: RequiredOutput, case_id: str | None,
         return _result(OutputSatisfaction.PENDING,
                        reason="no_evaluable_observation")
 
+    # Plan v2.1: a candidate-scoped export output (anaphoric "以上检测到
+    # 的对冲交易" + bound candidate set) is satisfiable ONLY by the
+    # verified candidate-detail delivery — never by existence evidence,
+    # retrieval records, or a full-stream bundle. Zero candidates, an
+    # analysis failure, or field-incomplete records each produce a
+    # distinct honest not-satisfied outcome (see the scoped synthesis).
+    if getattr(output, "candidate_scope", None) == "prior_candidates" \
+            and "opposite_trade_relations" in (
+                r.value if hasattr(r, "value") else str(r)
+                for r in output.evidence_requirements):
+        # Plan v2.1: a candidate-scoped export output is satisfiable ONLY
+        # by the verified candidate-detail delivery (synthesized from the
+        # bound session candidate set). Existence evidence, retrieval
+        # records, or a full-stream bundle never satisfy it.
+        cs = None
+        for ob in evaluable:
+            s_ = ob.get("summary") or {}
+            if isinstance(s_, dict) and s_.get(
+                    "candidate_set_export") is not None:
+                cs = s_["candidate_set_export"]
+                break
+        if isinstance(cs, dict) and (cs.get("verification") or {}).get(
+                "passed"):
+            bounded = bool(cs.get("bounded_data"))
+            detail = (
+                f"已导出绑定的对冲候选明细（候选集 {cs.get('set_ref')}；"
+                f"{cs.get('verification', {}).get('candidates')} 组候选、"
+                f"{len((cs.get('verification') or {}).get('transaction_ids') or [])} 笔交易）。"
+                + ("检索受限：以上为已识别候选，不代表已穷尽全部可能的对冲交易。"
+                   if bounded else ""))
+            return _result(OutputSatisfaction.SATISFIED, POLARITY_POSITIVE,
+                           "candidate_set_export_verified", "complete",
+                           detail)
+        rej = cs.get("candidate_set_export_rejected") if isinstance(cs, dict) else None
+        if isinstance(rej, dict) and rej.get("reason") == "no_candidates":
+            detail = ("重新分析未发现对冲候选；不存在可导出的交易明细文件，"
+                      "亦不得以其他交易记录代替。")
+            return _result(OutputSatisfaction.UNRESOLVED, None,
+                           "candidate_set_export_no_candidates", "partial",
+                           detail)
+        detail = ("候选明细文件未交付：候选范围导出必须基于绑定的候选集生成，"
+                  "且每笔交易需含账号、时间、方向、金额。")
+        if isinstance(rej, dict) and rej.get("missing"):
+            detail += ("确定性校验拒绝（字段不完整）: "
+                       + "; ".join(rej["missing"][:10]) + "。")
+        return _result(OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                       "candidate_set_export_not_delivered", "partial",
+                       detail)
     # Domain-judgment claims are not adjudicable by this runtime —
     # regardless of which (successful) evidence categories were gathered.
     if output.claim_kind == ClaimKind.ASSESSMENT:
@@ -646,7 +1016,17 @@ def evaluate_output(output: RequiredOutput, case_id: str | None,
                     "review; this system does not adjudicate this "
                     "judgment."))
 
-    combined, conflicts = _combine_summaries(evaluable)
+    # R4 (U00010 F1): complementary single-stream deliveries of ONE
+    # multi-stream retrieval output are merged first — scalar disagreements
+    # across DIFFERENT streams (7 withdrawals vs 64 transactions) are
+    # complementary populations, not conflicts. Same-stream observations
+    # keep the unanimity/conflict rules unchanged.
+    disjoint_merge = _merge_disjoint_stream_summaries(evaluable)
+    if disjoint_merge is not None:
+        combined = dict(disjoint_merge)
+        conflicts = []
+    else:
+        combined, conflicts = _combine_summaries(evaluable)
     # Outcome is DERIVED from the union, never latest-wins: any success
     # means facts exist in the combined record; only a unanimous empty
     # run is a determinate empty.
@@ -707,8 +1087,13 @@ def evaluate_output(output: RequiredOutput, case_id: str | None,
         if facet is not None:
             s, pol, reason, completeness, detail = facet
             result = _result(s, pol, reason, completeness, detail)
+            # Cross-scope scalar isolation (SCOPE_FACTS_KEY) already kept
+            # complementary cross-scope differences out of `conflicts` —
+            # no key whitelist here: every reported conflict is a real
+            # same-scope (or unscoped-involved) disagreement and
+            # downgrades via apply_postcondition.
             result.conflicts = sorted(conflicts)
-            if conflicts and result.satisfaction == \
+            if result.conflicts and result.satisfaction == \
                     OutputSatisfaction.UNRESOLVED:
                 result.reason_code = R_CONFLICTING_OBSERVATIONS
             return result

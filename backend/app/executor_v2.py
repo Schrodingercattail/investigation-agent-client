@@ -172,7 +172,13 @@ def default_tool_provider() -> ToolProvider:
         task_id=args.get("task_id"),
         source_tool_calls=args.get("source_tool_calls"),
         source_step_ids=args.get("source_step_ids"),
+        source_streams=args.get("source_streams"),
         prior_artifacts=args.get("prior_artifacts"),
+        source_kind=args.get("source_kind"),
+        set_ref=args.get("set_ref"),
+        candidate_records=args.get("candidate_records"),
+        bounded_data=bool(args.get("bounded_data", False)),
+        source_task_id=args.get("source_task_id"),
     ))
     return provider
 

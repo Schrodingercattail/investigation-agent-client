@@ -485,11 +485,15 @@ def _overall_outcome(sats: list[str]) -> str:
     return outcome.value
 
 
-def coverage_lines(coverage: dict | None) -> list[str]:
+def coverage_lines(coverage: dict | None,
+                   lang: str | None = None) -> list[str]:
     """User-safe turn-response lines for the aspects that are NOT
     determinately answered. Located and specific — never a generic
     "request may not be covered". Satisfied aspects render nothing
-    here: their answers live in the payload prose above."""
+    here: their answers live in the payload prose above.
+    lang selects the disclosure face (default/None keeps the
+    historical zh face for backward compatibility)."""
+    en = lang == "en"
     if not coverage:
         return []
     lines: list[str] = []
@@ -498,27 +502,39 @@ def coverage_lines(coverage: dict | None) -> list[str]:
         sat = a.get("satisfaction")
         if sat == OutputSatisfaction.SATISFIED.value:
             continue
-        state = ("尚未覆盖" if sat == UNCOVERED
+        state = ("not yet covered" if en and sat == UNCOVERED
+                 else "尚未覆盖" if sat == UNCOVERED
+                 else "insufficient evidence" if en and sat ==
+                 OutputSatisfaction.UNRESOLVED.value
                  else "证据不足，无法确定" if sat ==
                  OutputSatisfaction.UNRESOLVED.value
+                 else "partially covered" if en
                  else "仅部分覆盖")
         detail = a.get("detail") or ""
         open_items.append((state, a.get("claim") or "", detail))
     if not open_items:
         return lines
-    lines.append("请求覆盖情况：")
+    lines.append("Request coverage:" if en else "请求覆盖情况：")
     for state, claim, detail in open_items:
-        line = f"- [{state}] {claim}。"
+        line = (f"- [{state}] {claim}."
+                if en else f"- [{state}] {claim}。")
         if detail:
             line += f" {detail}"
         lines.append(line)
     outcome = coverage.get("outcome")
     if outcome == "partial":
         lines.append(
+            "Overall status: the request was partially answered — the "
+            "aspects listed above did not receive conclusions matching "
+            "their evidence; answers for the remaining aspects are "
+            "above." if en else
             "整体状态：请求已部分回答——上列方面未获得与证据状态相符的"
             "结论；其余方面的答案以上文为准。")
     elif outcome == "unanswerable":
         lines.append(
+            "Overall status: this run could not answer the identified "
+            "aspects of the request (see the per-aspect states above); "
+            "the request is not claimed to be fully answered." if en else
             "整体状态：本次运行未能回答所识别的请求方面（见上列各项"
             "状态）；不宣称请求已完整回答。")
     return lines

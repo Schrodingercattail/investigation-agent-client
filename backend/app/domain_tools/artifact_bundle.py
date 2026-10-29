@@ -200,15 +200,23 @@ def _render_evidence_records(payload: dict[str, Any]) -> list[str]:
     records = payload.get("records") or []
     lines: list[str] = []
     if records:
-        lines.append("| Record | Details | Time |", )
-        lines.append("|---|---|---|")
+        # evidence field preservation: render the record's own address
+        # when the source records carry one (generic — presence-driven,
+        # never synthesized). Records without an address render "—".
+        has_addr = any(
+            isinstance(r, dict) and (r.get("address") or "").strip()
+            for r in records)
+        lines.append("| Record | Details | Time |" + (" Address |" if has_addr else ""),)
+        lines.append("|---|---|---|" + ("---|" if has_addr else ""))
         for r in records:
             details = (r.get("summary") or "").replace("|", "\\|")
             ts = r.get("timestamp") or "—"
-            lines.append(
-                f"| {r.get('record_kind', '')}:{r.get('record_id', '')} | "
-                f"{details} | {ts} |"
-            )
+            row = (f"| {r.get('record_kind', '')}:{r.get('record_id', '')} | "
+                   f"{details} | {ts} |")
+            if has_addr:
+                addr = (r.get("address") or "").replace("|", "\\|")
+                row += f" {addr or '—'} |"
+            lines.append(row)
     # Scope integrity (Artifact Scope Integrity task): a pure records file
     # carries the record rows and their own provenance — aggregate risk
     # features are conversation/composer facts, never auto-attached
@@ -403,6 +411,149 @@ def _findings_of(tc: ToolCallV2) -> list:
 # Tool
 # ---------------------------------------------------------------------------
 
+def _render_candidate_set_export(
+    set_ref: str,
+    bounded_data: bool,
+    source_task_id: str,
+    candidates: list[dict],
+    case_id: str | None,
+    format: str,
+    source_tool_calls: list[ToolCallV2] | None = None,
+) -> ToolResult:
+    """Deterministic candidate-detail file for a bound candidate set.
+
+    Each candidate renders BOTH legs with the user-requested fields
+    (交易账号/时间/方向/金额) taken verbatim from the persisted supporting
+    records — no field is inferred, merged across candidates, or
+    fabricated. Validation: every candidate must carry exactly the two
+    referenced legs with complete required fields; any violation rejects
+    the export (no artifact is produced) with the specific gaps named.
+    bounded_data stays truthful: the export covers the IDENTIFIED
+    candidates only, never claims exhaustiveness."""
+    required = ("transaction_id", "account_id", "side", "quantity",
+                "value", "symbol", "timestamp")
+    missing: list[str] = []
+    cleaned: list[dict] = []
+    for c in candidates or []:
+        sup = c.get("supporting") or []
+        legs = [s for s in sup if isinstance(s, dict)]
+        if len(legs) != 2:
+            missing.append(f"{c.get('candidate_id')}: legs={len(legs)}")
+            continue
+        gaps = [f"{c.get('candidate_id')}/{s.get('transaction_id')}: "
+                + ",".join(sorted(k for k in required if s.get(k) is None))
+                for s in legs
+                if any(s.get(k) is None for k in required)]
+        if gaps:
+            missing.extend(gaps)
+            continue
+        cleaned.append({"candidate": c, "legs": legs})
+    if not candidates:
+        # zero candidates is a DETERMINATE negative — reported honestly,
+        # never dressed up as an export.
+        return ToolResult(
+            outcome=ToolResultOutcome.SUCCESS,
+            data={"candidate_set_export_rejected": {
+                "set_ref": set_ref,
+                "reason": "no_candidates",
+                "missing": [],
+                "candidates_total": 0,
+            }},
+            evidence_refs=[],
+        )
+    if missing:
+        return ToolResult(
+            outcome=ToolResultOutcome.SUCCESS,
+            data={"candidate_set_export_rejected": {
+                "set_ref": set_ref,
+                "reason": "field_incomplete",
+                "missing": missing[:20],
+                "candidates_total": len(candidates),
+            }},
+            evidence_refs=[],
+        )
+    lines: list[str] = [
+        "# 对冲候选交易明细（绑定候选集）",
+        "",
+        f"候选集: {set_ref}",
+        f"来源任务: {source_task_id}",
+        "",
+    ]
+    tids: list[str] = []
+    for item in cleaned:
+        c = item["candidate"]
+        lines.append(
+            f"## {c.get('candidate_id')} — "
+            f"{c.get('account_a')} ↔ {c.get('account_b')}")
+        lines.append("")
+        for leg in item["legs"]:
+            lines.append(
+                f"- 交易 {leg.get('transaction_id')} | 账号 "
+                f"{leg.get('account_id')} | 方向 {leg.get('side')} | "
+                f"数量 {leg.get('quantity')} | 计价金额 "
+                f"{leg.get('value')} {leg.get('symbol')} | 时间 "
+                f"{leg.get('timestamp')}")
+            tids.append(str(leg.get("transaction_id")))
+        lines.append("")
+    if bounded_data:
+        lines.append(
+            "说明: 以上为本次分析已识别的候选交易明细；检索受限，"
+            "不代表已穷尽全部可能的对冲交易。")
+        lines.append("")
+    content = "\n".join(lines)
+    title = f"对冲候选交易明细 — 绑定候选集 {set_ref}"
+    import hashlib as _hashlib
+    artifact_id = "ART-" + _hashlib.sha256(
+        (set_ref + "|" + content).encode()).hexdigest()[:10]
+    # FULL ArtifactV2 record — the executor harvests data["artifact"] as
+    # the task artifact; a partial dict breaks the TaskDetailResponse
+    # schema (real 500: INV-18dd9f073a1c GET /tasks/{id}).
+    provenance = [tc.tool_call_id for tc in (source_tool_calls or [])
+                  if getattr(tc, "tool_call_id", None)]
+    if not provenance:
+        # provenance invariant (models.ArtifactV2 min_length=1): without a
+        # traceable source tool call the export is unverifiable → reject.
+        return ToolResult(
+            outcome=ToolResultOutcome.SUCCESS,
+            data={"candidate_set_export_rejected": {
+                "set_ref": set_ref,
+                "reason": "no_source_tool_call_provenance",
+                "missing": ["source_tool_calls"],
+                "candidates_total": len(candidates or []),
+            }},
+            evidence_refs=[],
+        )
+    artifact = ArtifactV2(
+        artifact_id=artifact_id,
+        investigation_id=f"CASE:{case_id}",
+        task_id=source_task_id,
+        scope=f"candidate_set:{set_ref}",
+        artifact_type=ArtifactTypeV2.INVESTIGATION_NOTES,
+        format="md",
+        title=title,
+        content=content,
+        source_tool_calls=provenance,
+    )
+    return ToolResult(
+        outcome=ToolResultOutcome.SUCCESS,
+        data={
+            "artifact": artifact.model_dump(),
+            "artifact_id": artifact.artifact_id,
+            "title": title,
+            "candidate_set_export": {
+                "set_ref": set_ref,
+                "bounded_data": bounded_data,
+                "source_task_id": source_task_id,
+                "verification": {"passed": True,
+                                 "transaction_ids": sorted(set(tids)),
+                                 "candidates": len(cleaned)},
+            },
+        },
+        evidence_refs=[{"kind": "transaction", "id": t}
+                       for t in sorted(set(tids))],
+    )
+
+
 def artifact_bundle(
     scope: str,
     format: str = "md",
@@ -411,7 +562,13 @@ def artifact_bundle(
     task_id: str | None = None,
     source_tool_calls: list[ToolCallV2] | None = None,
     source_step_ids: list[str] | None = None,
+    source_streams: list[str] | None = None,
     prior_artifacts: list[dict] | None = None,
+    source_kind: str | None = None,
+    set_ref: str | None = None,
+    candidate_records: list[dict] | None = None,
+    bounded_data: bool = False,
+    source_task_id: str | None = None,
 ) -> ToolResult:
     """Compose an investigation bundle from executed tool results.
 
@@ -436,6 +593,29 @@ def artifact_bundle(
     if not isinstance(case_id, str) or not case_id.strip():
         return _validation_error("case_id is required (non-empty string).")
     case_id = case_id.strip()
+    # Plan v2.1: candidate-set detail export (cross-turn anaphoric
+    # scope). Deterministic synthesis from the PERSISTED candidate
+    # records — never from a full transaction stream, never with
+    # fabricated fields. Field-incomplete records REJECT the export
+    # (no success-marked incomplete file) with the specific gaps named.
+    if source_kind == "candidate_set":
+        import logging as _log
+        _log.getLogger("app.artifact_bundle").info(
+            "DIAG candidate export: set_ref=%s n_candidates=%s "
+            "n_records=%s bounded=%s", set_ref,
+            len(candidate_records or []),
+            sum(len((c.get("supporting") or []))
+                for c in (candidate_records or [])),
+            bounded_data)
+        return _render_candidate_set_export(
+            set_ref=set_ref or "",
+            bounded_data=bool(bounded_data),
+            source_task_id=source_task_id or task_id or "",
+            candidates=candidate_records or [],
+            case_id=case_id,
+            format=format,
+            source_tool_calls=source_tool_calls,
+        )
     if scope == "finding":
         if not isinstance(finding_id, str) or not finding_id.strip():
             return _validation_error(
@@ -497,6 +677,56 @@ def artifact_bundle(
             return _validation_error(
                 "No executed tool results match the declared source "
                 f"step(s) {source_step_ids}; no artifact was fabricated."
+            )
+    # U00010 B1 (Batch H) — deliverable-boundary guard: ONE file = ONE
+    # record stream. When the plan declares the artifact's record
+    # stream(s) (source_streams stamped at adoption), any included
+    # records call of a DIFFERENT declared stream is a binding/content
+    # mismatch: reject the deliverable with a diagnosable error instead
+    # of silently composing cross-stream content.
+    if source_streams:
+        # normalize vocabularies: call arguments carry the view/stream
+        # name ("withdrawals"/"transactions"); the plan stamps the
+        # evidence-type name ("withdrawal_records"/"transaction_records")
+        _STREAM_TO_FAMILY = {"withdrawals": "withdrawal_records",
+                             "transactions": "transaction_records"}
+        declared = {str(x) for x in source_streams}
+        offenders = []
+        for tc in executed:
+            stream = (tc.arguments or {}).get("stream")
+            family = _STREAM_TO_FAMILY.get(str(stream or ""))
+            if family and family not in declared:
+                offenders.append(
+                    f"{tc.tool_call_id} (stream={stream})")
+        if offenders:
+            return _validation_error(
+                "Artifact content/declaration mismatch: the declared "
+                f"record stream(s) {sorted(declared)} do not cover the "
+                f"included record call(s) {offenders}. The deliverable "
+                "was rejected — one file composes from exactly its "
+                "declared record stream."
+            )
+        # Hollow-shell guard (U00010 B1 EN): a records deliverable whose
+        # declared streams have NO successful records call would render a
+        # near-empty file that reads as a delivery — reject it
+        # diagnosably; the honest path is a failed step + partial goal,
+        # never a fabricated-looking file.
+        def _family_of(tc):
+            fam = _STREAM_TO_FAMILY.get(
+                str((tc.arguments or {}).get("stream") or ""))
+            ok = bool(tc.result is not None
+                      and tc.result.outcome == ToolResultOutcome.SUCCESS)
+            return (fam, ok)
+        delivered = {fam for tc in executed
+                     for fam, ok in [_family_of(tc)]
+                     if fam in declared and ok}
+        if not delivered:
+            return _validation_error(
+                "No SUCCESSFUL record results for the declared record "
+                f"stream(s) {sorted(declared)}; the file would be an "
+                "empty shell (its evidence step failed or carried no "
+                "records). The deliverable was rejected — the run stays "
+                "honestly partial instead of shipping a hollow file."
             )
 
     # --- C1 idempotency: semantic evidence fingerprint ------------------------
@@ -933,6 +1163,30 @@ def artifact_bundle(
     # (bounded honesty, conversation semantics, logging, future use) — only
     # the artifact rendering is removed.
     gaps = _gather_gaps(executed)          # still computed for the result
+    # L1 record-parity check (tool layer): the evidence section renders
+    # the FULL uncapped payload record set — the rendered row count must
+    # equal the declared record_count. A mismatch is surfaced on the tool
+    # result (never silently absorbed); output-level satisfaction
+    # propagation is out of L1 scope (no output↔bundle binding exists).
+    record_parity_failed = False
+    # U00047 delivery closure: distinguish "parity checked and passed"
+    # from "parity check never ran" — record_parity_failed=False alone is
+    # ambiguous (a bundle rendered from NO record-bearing source also
+    # leaves the flag False), and consumers must not read that as a
+    # verified-complete file.
+    record_parity_checked = False
+    for tc in executed:
+        d = tc.result.data if isinstance(tc.result.data, dict) else {}
+        if d.get("view") == "evidence" and isinstance(
+                d.get("record_count"), int):
+            record_parity_checked = True
+            if d["record_count"] != len(d.get("records") or []):
+                record_parity_failed = True
+                gaps.append(
+                    f"record count parity: declared record_count "
+                    f"{d['record_count']} != {len(d.get('records') or [])} "
+                    f"records in the evidence view "
+                    f"({d.get('finding_id', '?')})")
     # metadata (evidence_missing / next_data_needed on the ToolResult payload)
 
     # --- provenance -----------------------------------------------------------------------
@@ -1000,6 +1254,8 @@ def artifact_bundle(
             "source_step_ids": source_step_ids or [],
             "evidence_fingerprint": fingerprint,
             "evidence_missing": bool(gaps),
+            "record_parity_failed": record_parity_failed,
+            "record_parity_checked": record_parity_checked,
             "next_data_needed": gaps,
         },
         evidence_refs=_dedupe_evidence_refs(

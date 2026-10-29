@@ -14,14 +14,11 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ArtifactsPanel } from '@/components/investigation/ArtifactsPanel'
 import { InvestigationHistory } from '@/components/investigation/InvestigationHistory'
 import { ConversationPanel, type ConversationTurn } from '@/components/investigation/ConversationPanel'
-import { ContextPanel } from '@/components/investigation/ContextPanel'
 import { FindingsPanel } from '@/components/investigation/FindingsPanel'
 import { TimelineView } from '@/components/investigation/TimelineView'
-import { AgentActivityPanel } from '@/components/investigation/AgentActivityPanel'
 import { useAgentActivity } from '@/hooks/useAgentActivity'
 import type {
   Artifact,
@@ -31,10 +28,15 @@ import type {
   InvestigationContext,
   InvestigationHistoryItem,
   TaskResultsResponse,
-  TurnResponse,
 } from '@/api/types'
 import { InvestigationApiError, investigationApi } from '@/api/investigation'
-import { Bot, Loader2, PanelLeftOpen, PanelRightOpen, SendHorizonal, Workflow } from 'lucide-react'
+import {
+  detectResponseLanguage,
+  investigatingEventText,
+  investigatingText,
+  type ResponseLanguage,
+} from '@/lib/responseLanguage'
+import { Bot, Loader2, PanelLeftOpen, PanelRightOpen, SendHorizonal } from 'lucide-react'
 
 type TurnPhase = 'idle' | 'creating' | 'loading' | 'error'
 
@@ -91,17 +93,18 @@ export function InvestigationPage() {
   >(null)
   const [leftSheet, setLeftSheet] = useState(false)
   const [rightSheet, setRightSheet] = useState(false)
+  /** Conversation language for the page's OWN narratives (selection
+   * confirmations): the current user request's language, seeded from the
+   * server-captured creation language on restore. The ANSWER language is
+   * server-owned — this never influences API calls. */
+  const [responseLang, setResponseLang] = useState<ResponseLanguage>('en')
   /** Backend-provided follow-ups for the CURRENT context (previewed via the
    * read-only followups endpoint once a finding is selected). Never
    * generated client-side; superseded by each turn response's own set. */
-  /** Controlled value for the right-side Context/Artifacts/Activity tabs so
-   * UI navigation follow-ups can focus the Artifacts panel. */
-  const [rightTab, setRightTab] = useState<'context' | 'artifacts' | 'activity'>('context')
   /** The loop task whose Agent Activity is displayed (Agent Activity V1:
    * started via the explicit "Run Agent Loop" action; rendered read-only
    * from the durable activity projection afterwards). */
   const [activityTaskId, setActivityTaskId] = useState<string | null>(null)
-  const [goalPhase, setGoalPhase] = useState<'idle' | 'running' | 'error'>('idle')
   const agentActivity = useAgentActivity(activityTaskId)
   /** AL-2.7: loop tasks started in this session (live conversation
    * absorption) vs restored ones (already rendered by the restore path),
@@ -111,37 +114,6 @@ export function InvestigationPage() {
 
   const setPhase = (phase: TurnPhase, errorMessage: string | null = null) =>
     setState((s) => ({ ...s, phase, errorMessage }))
-
-  function absorbTurn(response: TurnResponse) {
-    // Findings and timeline rows come from the task results API — the
-    // bounded execution summary intentionally does not carry raw payloads.
-    persistInvestigationId(response.investigation_id)
-    void refreshHistory()
-    // the turn's own backend follow-ups supersede any previewed set
-    setState((s) => ({
-      ...s,
-      phase: 'idle',
-      investigationId: response.investigation_id,
-      context: response.context,
-      artifacts: response.artifacts.length
-        ? [...s.artifacts, ...response.artifacts]
-        : s.artifacts,
-      turns: [
-        ...s.turns,
-        {
-          id: `a-${response.task.task_id}`,
-          role: 'agent',
-          text: response.response,
-          task: response.task,
-          plan: response.plan,
-          execution: response.execution,
-          artifacts: response.artifacts,
-          followUps: response.follow_ups,
-          focusedEventId: response.context.focused_event_id,
-        },
-      ],
-    }))
-  }
 
   const errorMessage = (err: unknown): string =>
     err instanceof InvestigationApiError
@@ -241,10 +213,17 @@ export function InvestigationPage() {
           conversation.push({
             id: `ack-restored-${focusedId}`,
             role: 'agent',
-            text: `You're now investigating ${label}.`,
+            text: investigatingText(
+              restoredContext?.initial_response_language === 'zh'
+                ? 'zh'
+                : 'en', label),
           })
         }
 
+        setResponseLang(
+          restoredContext?.initial_response_language === 'zh'
+            ? 'zh'
+            : 'en')
         setState({
           investigationId: investigationId,
           context: restoredContext,
@@ -322,7 +301,7 @@ export function InvestigationPage() {
     ): Promise<FollowUp[] | null> => {
       try {
         const payload = await investigationApi.listFollowups(
-          investigationId, contextAction,
+          investigationId, contextAction, responseLang,
         )
         return payload.follow_ups
       } catch {
@@ -330,7 +309,9 @@ export function InvestigationPage() {
         return null
       }
     },
-    [],
+    // responseLang: the chips render into the CURRENT conversation
+    // language — a stale closure would pin them to the first value
+    [responseLang],
   )
 
   const refreshFindings = useCallback(
@@ -376,36 +357,57 @@ export function InvestigationPage() {
         const created = await investigationApi.createInvestigation({
           message: rawMessage,
         })
-        // Case Intake runs ONCE, using the server-provided canonical intake
+        // the investigation id becomes authoritative for ALL subsequent
+        // submissions of this conversation (never create a second one)
+        const newInvId = created.investigation.investigation_id
+        persistInvestigationId(newInvId)
+        void refreshHistory()
+        setState((s) => ({ ...s, investigationId: newInvId }))
+        // Case Intake runs ONCE, on the SAME bounded Agent Loop as every
+        // other submission, using the server-provided canonical intake
         // message — the raw case-reference text is an identification input
         // and must never be re-sent as a conversational turn.
         const intakeMessage = created.intake_message
         if (!intakeMessage) {
           setPhase('error', 'Investigation created, but no intake request was returned.')
-          return
+          return null
         }
-        const response = await investigationApi.runTurn(
-          created.investigation.investigation_id,
-          { message: intakeMessage },
-        )
-        absorbTurn(response)
-        await refreshFindings(response.task.task_id)
+        const submitted = await investigationApi.submitRequest(
+          created.investigation.investigation_id, intakeMessage)
+        persistInvestigationId(created.investigation.investigation_id)
+        void refreshHistory()
+        setActivityTaskId(submitted.task_id)
+        sessionLoopTasksRef.current.add(submitted.task_id)
+        setPhase('idle')
+        return created
       } catch (err) {
         setPhase('error', errorMessage(err))
+        return null
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [refreshFindings],
+    [],
   )
 
-  /** Submit a normal turn (typed message or follow-up click). */
+  /** Unified submission (typed message or follow-up click): ONE send
+   * action; EVERY submission executes on the bounded Agent Loop — the
+   * server owns the runtime choice and there is no other path. The live
+   * inline Activity block renders after the user's request while the run
+   * executes; the composed answer is absorbed as a conversation turn at
+   * the terminal state (useAgentActivity stops itself there). */
   const submitTurn = useCallback(
     async (opts?: { message?: string; followUp?: FollowUp }) => {
       const message = opts?.message ?? input
       const followUp = opts?.followUp
+      // the page's own narratives follow the CURRENT request's language
+      // (a follow-up click submits the server's canonical intent text)
+      setResponseLang(
+        detectResponseLanguage(followUp ? followUp.label : message))
       if (!state.investigationId) {
-        // No investigation yet: the RAW message is sent to the API, which
-        // resolves the case reference server-side (e.g. "00299" → U00299).
+        // No investigation yet: the RAW message creates it (the server
+        // resolves the case reference, e.g. "00299" → U00299) and
+        // startInvestigation submits the canonical Case Intake on the
+        // SAME Agent Loop — nothing else to submit here.
         await startInvestigation(message)
         setInput('')
         return
@@ -421,74 +423,36 @@ export function InvestigationPage() {
       setInput('')
 
       try {
-        // A follow-up click carries the canonical intent AND any pending
-        // selection (its context_action) — "this finding" in the intent
-        // refers to that selection, which the server applies for the turn.
-        const body = followUp
-          ? {
-              follow_up_id: followUp.follow_up_id,
-              ...(pendingFocus ? { context_action: pendingFocus } : {}),
-            }
-          : {
-              message,
-              ...(pendingFocus ? { context_action: pendingFocus } : {}),
-            }
-        const response = await investigationApi.runTurn(state.investigationId, body)
-        absorbTurn(response)
-        if (response.execution?.tool_calls.some((tc) => tc.outcome === 'success')) {
-          await refreshFindings(response.task.task_id)
-        }
+        const contextAction: FocusAction | undefined =
+          pendingFocus && pendingFocus.type !== 'clear_focus'
+            ? {
+                type: pendingFocus.type === 'focus_event'
+                  ? 'focus_event' : 'focus_finding',
+                finding_id: pendingFocus.finding_id,
+                ...(pendingFocus.type === 'focus_event'
+                  ? { event_id: pendingFocus.event_id }
+                  : {}),
+              }
+            : undefined
+        const submitted = await investigationApi.submitRequest(
+          state.investigationId,
+          followUp ? '' : message,
+          contextAction,
+          followUp?.follow_up_id,
+          followUp ? responseLang : undefined)
+        persistInvestigationId(state.investigationId)
+        void refreshHistory()
+        setActivityTaskId(submitted.task_id)
+        sessionLoopTasksRef.current.add(submitted.task_id)
+        setPhase('idle')
         if (pendingFocus) setPendingFocus(null)
       } catch (err) {
         setPhase('error', errorMessage(err))
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state.investigationId, input, pendingFocus, startInvestigation, refreshFindings],
+    [state.investigationId, input, pendingFocus, startInvestigation],
   )
-
-  /** Agent Loop (Agent Activity V1): run the current input as a bounded
-   * loop goal. The pending finding selection travels with the goal as its
-   * context_action (QA-01: the loop honors the user-selected focus exactly
-   * like a turn); the backend starts the run and persists state per
-   * transition; the workspace switches to the Activity tab and polls
-   * until the terminal status (useAgentActivity stops itself there). */
-  const runAgentLoop = useCallback(async () => {
-    const goal = input.trim()
-    if (!state.investigationId || !goal || goalPhase === 'running') return
-    setGoalPhase('running')
-    setInput('')
-    setState((s) => ({
-      ...s,
-      turns: [...s.turns, { id: `u-${Date.now()}`, role: 'user' as const, text: goal }],
-    }))
-    try {
-      const started = await investigationApi.startAgentGoal(
-        state.investigationId,
-        goal,
-        pendingFocus && pendingFocus.type !== 'clear_focus'
-          ? {
-              type: pendingFocus.type === 'focus_event'
-                ? 'focus_event' : 'focus_finding',
-              finding_id: pendingFocus.finding_id,
-              ...(pendingFocus.type === 'focus_event'
-                ? { event_id: pendingFocus.event_id }
-                : {}),
-            }
-          : undefined,
-      )
-      // the selection is now authoritative persisted context
-      if (pendingFocus) setPendingFocus(null)
-      setActivityTaskId(started.task_id)
-      sessionLoopTasksRef.current.add(started.task_id)
-      setRightTab('activity')
-    } catch (err) {
-      setGoalPhase('error')
-      setPhase('error', errorMessage(err))
-      return
-    }
-    setGoalPhase('idle')
-  }, [state.investigationId, input, goalPhase, pendingFocus, setPhase])
 
   /** AL-2.7 (Defect B): when a goal run started in THIS session reaches
    * its terminal state, the composed assistant response (persisted by the
@@ -541,6 +505,8 @@ export function InvestigationPage() {
               : s.turns,
           }
         })
+        // findings/timeline refresh (same source the turn path used)
+        void refreshFindings(taskId)
       } catch {
         // best-effort: the durable surfaces (Activity / reopen restore)
         // still carry the response if this transient fetch fails
@@ -576,7 +542,7 @@ export function InvestigationPage() {
     )?.title
     const label = findingLabel
       ? `${action.finding_id} — ${findingLabel.replace(/\.$/, '')}`
-      : action.finding_id
+      : (action.finding_id ?? '')
     setState((s) => ({
       ...s,
       turns: [
@@ -586,8 +552,9 @@ export function InvestigationPage() {
           role: 'agent' as const,
           text:
             action.type === 'focus_event'
-              ? `You're now investigating event ${action.event_id} of ${label}.`
-              : `You're now investigating ${label}.`,
+              ? investigatingEventText(
+                  responseLang, action.event_id ?? '', label)
+              : investigatingText(responseLang, label),
           followUps,
         },
       ],
@@ -657,15 +624,12 @@ export function InvestigationPage() {
     }
   }
 
-  const clearFocus = () => {
-    setPendingFocus({ type: 'clear_focus' })
-  }
-
   /** Pure UI navigation (P13): open/focus a panel. No Agent turn, no Task,
    * no Planner — this never enters the investigation pipeline. */
   const navigateTo = (f: FollowUp) => {
-    // The only Week 1 ui_navigation follow-up opens the Artifacts panel.
-    setRightTab('artifacts')
+    // The only Week 1 ui_navigation follow-up opens the Artifacts panel —
+    // now always visible on desktop; on narrow screens open the Sheet.
+    setRightSheet(true)
     void f
   }
 
@@ -732,13 +696,6 @@ export function InvestigationPage() {
       focus_source: 'user_selected' as const,
     }
   }, [state.context, pendingFocus])
-  const contextPanel = state.context ? (
-    <ContextPanel
-      context={effectiveContext!}
-      findings={state.findings}
-      onClearFocus={clearFocus}
-    />
-  ) : null
 
   // Three complementary paths (never competing): A) select a finding → the
   // Agent response explains the focus and carries the backend's Suggested
@@ -774,7 +731,6 @@ export function InvestigationPage() {
 
   const rightPanel = (
     <div className="flex h-full flex-col gap-3 overflow-y-auto">
-      {contextPanel}
       {artifactsPanel}
     </div>
   )
@@ -813,7 +769,7 @@ export function InvestigationPage() {
               </Button>
             </SheetTrigger>
             <SheetContent side="right" className="w-96 overflow-y-auto p-3">
-              <SheetTitle className="sr-only">Artifacts and context</SheetTitle>
+              <SheetTitle className="sr-only">Artifacts</SheetTitle>
               <div className="space-y-3">{rightPanel}</div>
             </SheetContent>
           </Sheet>
@@ -835,6 +791,19 @@ export function InvestigationPage() {
               onNavigate={navigateTo}
               followUpsDisabled={state.phase !== 'idle'}
               focusedFindingId={effectiveContext?.focused_finding_id ?? null}
+              liveActivity={
+                activityTaskId &&
+                // render the LIVE inline block only while the run has no
+                // conversation turn yet — session-absorbed turns use the
+                // `loop-${taskId}` id, reopened/restored turns use
+                // `a-${taskId}` with task.task_id; either match means the
+                // historical block already renders inside that turn.
+                !state.turns.some(
+                  (t) => t.task?.task_id === activityTaskId
+                    || t.id === `loop-${activityTaskId}`)
+                  ? { taskId: activityTaskId, state: agentActivity }
+                  : null
+              }
             />
           </div>
           <form
@@ -865,86 +834,16 @@ export function InvestigationPage() {
               )}
               <span className="sr-only">Send message</span>
             </Button>
-            {state.investigationId && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={
-                  goalPhase === 'running' ||
-                  !input.trim() ||
-                  state.phase === 'loading' ||
-                  state.phase === 'creating'
-                }
-                title="Run this request with the bounded Agent Loop (shows its execution trace in the Activity tab)"
-                onClick={() => void runAgentLoop()}
-              >
-                {goalPhase === 'running' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                ) : (
-                  <Workflow className="h-4 w-4" aria-hidden />
-                )}
-                <span className="hidden sm:inline">Run loop</span>
-                <span className="sr-only">Run with Agent Loop</span>
-              </Button>
-            )}
           </form>
         </main>
 
-        <aside className="hidden min-h-0 overflow-hidden lg:block">
-          <Tabs
-            value={rightTab}
-            onValueChange={(v) => setRightTab(v as 'context' | 'artifacts' | 'activity')}
-            className="flex h-full min-h-0 flex-col"
-          >
-            <TabsList className="shrink-0">
-              <TabsTrigger value="context" className="flex-1">Context</TabsTrigger>
-              <TabsTrigger value="artifacts" className="flex-1">
-                Artifacts{state.artifacts.length > 0 ? ` (${state.artifacts.length})` : ''}
-              </TabsTrigger>
-              <TabsTrigger value="activity" className="flex-1">
-                Activity
-                {agentActivity.activity && !agentActivity.activity.is_terminal && (
-                  <Loader2 className="ml-1 inline h-3 w-3 animate-spin" aria-hidden />
-                )}
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="context" className="mt-3 min-h-0 flex-1 overflow-y-auto">{contextPanel}</TabsContent>
-            <TabsContent value="artifacts" className="mt-3 min-h-0 flex-1 overflow-hidden">
-              {artifactsPanel}
-            </TabsContent>
-            <TabsContent value="activity" className="mt-3 min-h-0 flex-1 overflow-y-auto">
-              {state.phase === 'loading' || state.phase === 'creating' ? (
-                <Card>
-                  <CardContent className="p-3 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                    Restoring investigation…
-                  </CardContent>
-                </Card>
-              ) : agentActivity.notFound ? (
-                <Card>
-                  <CardContent className="p-3 text-xs text-muted-foreground">
-                    No Agent Activity for this task. Regular investigation turns are
-                    shown in the conversation; start a bounded Agent Loop run to see
-                    its execution trace here.
-                  </CardContent>
-                </Card>
-              ) : agentActivity.activity ? (
-                <Card>
-                  <CardContent className="p-3">
-                    <AgentActivityPanel activity={agentActivity.activity} />
-                  </CardContent>
-                </Card>
-              ) : (
-                <Card>
-                  <CardContent className="p-3 text-xs text-muted-foreground">
-                    {agentActivity.loading
-                      ? 'Loading Agent Activity…'
-                      : 'No Agent Loop run yet for this investigation.'}
-                  </CardContent>
-                </Card>
-              )}
-            </TabsContent>
-          </Tabs>
+        {/* Artifacts only: the execution trace lives in the conversation
+            main line (AgentActivityBlock); the Context panel was retired
+            from the UI (its data paths are untouched server-side). The
+            aside must be a BOUNDED flex column (lg:flex): with display
+            block the card grows past the aside and gets clipped. */}
+        <aside className="hidden min-h-0 flex-col overflow-hidden lg:flex">
+          {artifactsPanel}
         </aside>
       </div>
     </div>

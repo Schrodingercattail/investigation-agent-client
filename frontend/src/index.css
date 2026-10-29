@@ -57,3 +57,13 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Conversation scroll fix (QA: right-boundary text clipping): Radix
+   ScrollArea renders its content wrapper as `display: table;
+   min-width: 100%`, which lets unbreakable content (long hex ids, URLs)
+   widen the wrapper past the viewport — the overflow is then hidden under
+   the right panel. Scoped to the conversation scroll area only. */
+/* !important required: Radix sets display:table as an INLINE style. */
+.conversation-scroll [data-radix-scroll-area-viewport] > div {
+  display: block !important;
+}

@@ -97,6 +97,13 @@ class CandidateTemplate(BaseModel):
     follow_up_id: str
     label: str
     intent: str
+    # Per-turn response-language faces (None = not translated; the EN face
+    # is the historical default for undeterminable language). The ids,
+    # capabilities, targeting and ranks are language-INDEPENDENT: a zh chip
+    # and its en twin are the same follow-up (one registry entry).
+    label_zh: str | None = None
+    intent_zh: str | None = None
+    reason_zh: str | None = None
     required_capabilities: list[str]
     applicable_context: FollowUpApplicableContext
     target_skill: str
@@ -105,12 +112,23 @@ class CandidateTemplate(BaseModel):
     reason: str
     action_kind: FollowUpActionKind = FollowUpActionKind.AGENT_INTENT
 
+    def face(self, lang: str | None) -> tuple[str, str, str]:
+        """(label, intent, reason) in the response language; the EN face is
+        the default for None/undeterminable or untranslated templates."""
+        if lang == "zh" and self.label_zh and self.intent_zh:
+            return (self.label_zh, self.intent_zh,
+                    self.reason_zh or self.reason)
+        return (self.label, self.intent, self.reason)
+
 
 FINDING_TEMPLATES: list[CandidateTemplate] = [
     CandidateTemplate(
         follow_up_id="explain_finding",
         label="Why is this finding flagged?",
         intent="Why was this finding flagged? Explain its detection signals.",
+        label_zh="这个发现为什么被标记？",
+        intent_zh="这个发现为什么被标记？解释它的检测信号。",
+        reason_zh="理解该聚焦发现的检测依据。",
         required_capabilities=["signal_explain"],
         applicable_context=FollowUpApplicableContext.FINDING,
         target_skill="timeline_investigation",
@@ -122,6 +140,9 @@ FINDING_TEMPLATES: list[CandidateTemplate] = [
         follow_up_id="show_timeline",
         label="Show related timeline",
         intent="Show the timeline of this finding.",
+        label_zh="查看相关时间线",
+        intent_zh="展示这个发现的时间线。",
+        reason_zh="查看该发现背后的时序证据。",
         required_capabilities=["timeline"],
         applicable_context=FollowUpApplicableContext.FINDING,
         target_skill="timeline_investigation",
@@ -133,6 +154,8 @@ FINDING_TEMPLATES: list[CandidateTemplate] = [
         follow_up_id="check_policy",
         label="Which policy requirements apply?",
         intent="Which policy requirements apply to this finding?",
+        label_zh="该发现适用哪些政策要求？",
+        intent_zh="这个发现适用哪些政策要求？",
         # No capability gate: policy retrieval is case-wide, so this
         # follow-up is executable for every focused finding. It routes
         # through case_intake (always eligible — no required capabilities),
@@ -146,6 +169,7 @@ FINDING_TEMPLATES: list[CandidateTemplate] = [
         target_step="retrieve_policy",
         rank=3,                        # policy continuation
         reason="Ground the finding in applicable policy requirements.",
+        reason_zh="将该发现锚定到适用的政策要求。",
     ),
     # NOTE: show_evidence / next_actions finding-level candidates from the
     # contract are intentionally ABSENT — their target steps do not resolve
@@ -166,12 +190,14 @@ CASE_TEMPLATES: list[CandidateTemplate] = [
         # yet the panel says so; the user can then ask for one explicitly.)
         label="Check investigation bundle in the Artifacts",
         intent="(navigates to the Artifacts panel — not an Agent request)",
+        label_zh="在 Artifacts 面板查看调查证据包",
         required_capabilities=[],
         applicable_context=FollowUpApplicableContext.CASE,
         target_skill="case_intake",
         target_step="generate_artifact",
         rank=4,                        # artifact continuation (last preference)
         reason="Inspect the investigation bundle in the Artifacts panel.",
+        reason_zh="在 Artifacts 面板查看调查证据包。",
         action_kind=FollowUpActionKind.UI_NAVIGATION,
     ),
 ]
@@ -181,6 +207,9 @@ EVENT_TEMPLATES: list[CandidateTemplate] = [
         follow_up_id="explain_event",
         label="Why is this event important?",
         intent="Why is this event important for this finding?",
+        label_zh="这个事件为什么重要？",
+        intent_zh="这个事件为什么对该发现重要？",
+        reason_zh="理解该事件在发现中的角色。",
         required_capabilities=["signal_explain"],
         applicable_context=FollowUpApplicableContext.TIMELINE_EVENT,
         target_skill="timeline_investigation",
@@ -192,6 +221,9 @@ EVENT_TEMPLATES: list[CandidateTemplate] = [
         follow_up_id="related_events",
         label="Show related events",
         intent="Show related events for this finding's timeline.",
+        label_zh="查看相关事件",
+        intent_zh="展示该发现时间线中的相关事件。",
+        reason_zh="查看时间线中的相邻事件。",
         required_capabilities=["timeline"],
         applicable_context=FollowUpApplicableContext.TIMELINE_EVENT,
         target_skill="timeline_investigation",
@@ -292,11 +324,15 @@ class SelectionInput(BaseModel):
     result_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-def select_followups(selection: SelectionInput) -> list[FollowUp]:
+def select_followups(selection: SelectionInput,
+                     lang: str | None = None) -> list[FollowUp]:
     """Deterministic follow-up selection (max 3).
 
     Pipeline: candidate templates → capability filtering → context/scope
     filtering → executable-only rule → stable ordering → max 3.
+    `lang` is the per-turn response language of the conversation the chips
+    render into ("zh"/"en"; None/undeterminable keeps the historical EN
+    face). Ids/capabilities/targeting are language-independent.
     """
     ctx = selection.context
     caps = set(selection.finding_capabilities)
@@ -323,22 +359,22 @@ def select_followups(selection: SelectionInput) -> list[FollowUp]:
         if not _is_executable(t, implemented, caps):
             continue
 
+        label, intent, reason = t.face(lang)
         # intent text: event-level intents reference the focused event id so
         # the next turn's Context Resolution has an unambiguous anchor
-        intent = t.intent
         if t.applicable_context == FollowUpApplicableContext.TIMELINE_EVENT \
                 and ctx.focused_event_id:
             intent = f"[event: {ctx.focused_event_id}] {intent}"
 
         suggestions.append(FollowUp(
             follow_up_id=t.follow_up_id,
-            label=t.label,
+            label=label,
             intent=intent,
             required_capabilities=list(t.required_capabilities),
             applicable_context=t.applicable_context,
             target_skill=t.target_skill,
             target_step=t.target_step,
-            reason=t.reason,
+            reason=reason,
             action_kind=t.action_kind,
         ))
 

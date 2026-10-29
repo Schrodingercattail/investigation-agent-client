@@ -70,7 +70,8 @@ def test_different_case_id_keeps_cross_case_guard():
     out = _resolve("调查00999")
     assert out.status == "unresolved"
     assert "U00999" in (out.clarification_message or "")
-    assert "start a new investigation" in (out.clarification_message or "")
+    # per-turn response language: a zh request gets the zh guidance face
+    assert "新建一个调查" in (out.clarification_message or "")
 
 
 def test_explicit_focus_still_wins_over_case_mention():

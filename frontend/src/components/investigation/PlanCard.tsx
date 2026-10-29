@@ -74,7 +74,7 @@ interface PlanCardProps {
 export function PlanCard({ plan }: PlanCardProps) {
   if (!plan) return null
   return (
-    <Card>
+    <Card data-testid="plan-card">
       <CardContent className="p-0">
         <Accordion type="single" collapsible>
           <AccordionItem value="plan" className="border-none">
