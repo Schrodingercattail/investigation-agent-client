@@ -115,6 +115,23 @@ def has_account_delivery_intent(text: str) -> bool:
     return any(m in t for m in _ACCOUNT_DELIVERY_MARKERS)
 
 
+_EXPLICIT_ACCOUNT_LIST_RE = re.compile(
+    r"列出|清单|明细|名单|哪些账号|哪些账户|哪些关联"
+    r"|list all|account list|account names|list the (related )?accounts",
+    re.IGNORECASE)
+
+
+def has_explicit_account_list_request(text: str) -> bool:
+    """2026-11-05 acceptance (TASK-b0019ac3e0e1): the request demands the
+    account LIST itself (列出/清单/明细/名单/哪些账号…) — listing nouns,
+    NOT the bare delivery verbs (发我/发一下/send me the) which double as
+    the POLICY-delivery verb in 政策原文发我 asks. Used by the candidate's
+    network aspect to yield to a policy ask that merely names the
+    linked-account domain (关联账号相关的政策原文), while an explicit
+    account-list demand keeps the network deliverable."""
+    return bool(_EXPLICIT_ACCOUNT_LIST_RE.search(text or ""))
+
+
 def is_related_account_analysis_request(text: str) -> bool:
     """GOVERNED ROUTING predicate: case-level related-account analysis
     intent (「哪些账号是这个账号的关联账号」). A cross-account TRADE
@@ -135,6 +152,14 @@ def is_related_account_analysis_request(text: str) -> bool:
 # ---------------------------------------------------------------------------
 _EXPLAIN_INTENT_RE = re.compile(
     r"为什么|為什麼|怎么会|怎麼|why\b|explain", re.IGNORECASE)
+# U00004/GJ-OPPOSITE-TRADE-RATIO: the WHY-vocabulary subset of the
+# explain intent — a finding-explanation ask proper (为什么 is X risky /
+# why was X flagged). "explain" alone is deliberately excluded: it is
+# also the metric-question verb ("explain how the ratio is calculated"),
+# which must not by itself turn a metric ask into a finding-explanation
+# ask (real incident TASK-6ed61aee47a0).
+WHY_ASK_RE = re.compile(
+    r"为什么|為什麼|怎么会|怎麼|why\b", re.IGNORECASE)
 # AL-2.9: the user's own record vocabulary includes 明细 ("交易明细") —
 # strongly record-flavored, so it joins 证据/evidence as concrete-evidence
 # intent. Deliberately narrow: English "details" is NOT added (vague
@@ -253,6 +278,24 @@ def is_policy_citation_original_text_request(text: str) -> bool:
     (政策引文原文 / citation original text) — the policy-citation delivery,
     not the related-account network list that merely shares the topic."""
     return bool(_POLICY_CITATION_ORIGINAL_RE.search(text or ""))
+
+
+_RELATED_POLICY_RE = re.compile(
+    r"(send|give|share)\s+(me\s+)?(the\s+)?related\s+(policy|citation)"
+    r"|(related|relevant)\s+policy\s*(or|/)\s*(citation|reference)"
+    r"|相关(的)?政策(或|或者)?引?文",
+    re.IGNORECASE)
+
+
+def is_related_policy_citation_request(text: str) -> bool:
+    """2026-11-04 acceptance (TASK-7f707394f962): the request asks for
+    the RELATED policy/citation of the finding under discussion
+    (EN: “send me the related policy or citation”) — a related-policy
+    delivery, distinct from the citation ORIGINAL-TEXT ask
+    (is_policy_citation_original_text_request), whose 原文/original-text
+    vocabulary this EN phrasing does not match. Callers gate this aspect
+    off when the original-text ask fires (a superset intent)."""
+    return bool(_RELATED_POLICY_RE.search(text or ""))
 
 
 def mentions_withdrawals(text: str) -> bool:
@@ -442,6 +485,12 @@ _EXPLAIN_DOMAINS: tuple[tuple[str, str, str], ...] = (
     # entries above; EN request element mirrors the title vocabulary).
     ("linked_account", "关联账号相关", "linked account"),
     ("linked_account", "linked account", "linked account"),
+    # U00033 Fix-1: bare population/linked-account elements — the real
+    # ask 「关联账号为什么是风险项」 names the population without the
+    # 相关/网络 suffixes; without these entries the explain anchoring
+    # could not resolve the linked-account finding.
+    ("linked_account", "关联账号", "linked account"),
+    ("linked_account", "linked accounts", "linked account"),
     ("ml_pattern", "ml pattern", "ml pattern"),
     ("ml_pattern", "机器学习检测", "ml pattern"),
     ("opposite_trade_ratio", "反向交易率", "opposite trade"),

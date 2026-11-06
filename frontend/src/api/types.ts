@@ -201,6 +201,14 @@ export interface ArtifactsResponse {
  * shapes only — findings, timeline events, explanations, policy context). */
 export interface TaskResultsResponse {
   task_id: string
+  // Contract-owned delivery signal (2026-11-03, incident
+  // TASK-66d942582954): true only when the user's accepted goal actually
+  // required timeline delivery (EvidenceType.TIMELINE_EVENTS in some
+  // output's evidence_requirements — the same truth the response
+  // composer uses). The conversation card attaches its structured
+  // Timeline section ONLY on this signal; tools may still return events
+  // as internal evidence without the card rendering them.
+  timeline_delivery_required: boolean
   results: {
     tool_call_id: string
     tool_name: string

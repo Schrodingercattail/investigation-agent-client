@@ -35,6 +35,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 
+from app.goal_resolution import ClaimKind
 from app.skills import EvidenceType, STEP_TOOL_MAP
 
 
@@ -231,6 +232,13 @@ class SupplementSpec:
     output_ids: list[str] = field(default_factory=list)
 
 
+# Explanation-class evidence: requirements whose serving steps ANSWER
+# "why / which rule / what threshold" questions (vs concrete record
+# delivery). Drives claim-kind-aware supplement ordering — never
+# eligibility (the ANY-match admission semantics are untouched).
+_EXPLANATION_EVIDENCE_TYPES = {"rule_explanation", "ml_signal_explanation"}
+
+
 def _ordered_eligible(output) -> list:
     """Eligible step types in preference order: a finding-subject output
     keeps registry order (its target is pinnable); any other subject puts
@@ -258,6 +266,29 @@ def _ordered_eligible(output) -> list:
         eligible = [t for t in eligible
                     if t not in _METRIC_NON_COVERING_STEPS]
         eligible = [t for t in eligible if t != "generate_artifact"]
+    # 2026-11-03 final-acceptance incident (TASK-bf7fdbf887a1, U00033
+    # 「新账号高频活动的判定阈值…生成一份文件」): a MIXED-requirement output
+    # (rule_explanation + transaction_records, claim_kind=explanation) was
+    # supplemented with the registry-first records driller
+    # (inspect_evidence) — structurally EMPTY for a rule-based finding
+    # ("only aggregate feature values exist") — while the rule-capable
+    # explain_signal ranked later, so the threshold answer
+    # ("account_age_days < 7 AND trade_frequency_24h > 50") stayed
+    # unretrieved and the output rendered "当前证据不足以确定该项".
+    # Claim-kind-aware preference: for an EXPLANATION output whose
+    # requirements include explanation evidence, steps DECLARING that
+    # evidence lead (registry order preserved within each group);
+    # records-only steps remain eligible behind them — they still serve
+    # the record-stream requirement. Ordering only; eligibility and the
+    # ANY-match admission semantics are unchanged.
+    claim_kind = getattr(output.claim_kind, "value", output.claim_kind)
+    if (claim_kind == ClaimKind.EXPLANATION.value
+            and _req_values & _EXPLANATION_EVIDENCE_TYPES):
+        def _declares_explanation(step_type: str) -> bool:
+            return bool(_binding_evidence_types(step_type)
+                        & _EXPLANATION_EVIDENCE_TYPES)
+        eligible = ([t for t in eligible if _declares_explanation(t)]
+                    + [t for t in eligible if not _declares_explanation(t)])
     if _FINDING_ID_RE.match((output.subject_ref or "").strip()):
         return eligible
     eligible = sorted(

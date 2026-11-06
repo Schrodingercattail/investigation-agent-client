@@ -34,6 +34,10 @@ from app.models import (
     ToolResult,
     ToolResultOutcome,
 )
+# WP-2 Version B (S2): the ONE shared canonical digest implementation —
+# the admission service (injection side) and this tool (verification
+# side) must call the same function (frozen Final Ruling 2).
+from app.delivery_admission import canonical_records_digest
 
 logger = logging.getLogger(__name__)
 
@@ -419,6 +423,10 @@ def _render_candidate_set_export(
     case_id: str | None,
     format: str,
     source_tool_calls: list[ToolCallV2] | None = None,
+    expected_records_digest: str | None = None,
+    expected_binding: dict | None = None,
+    delivery_target_id: str | None = None,
+    source_step_id: str | None = None,
 ) -> ToolResult:
     """Deterministic candidate-detail file for a bound candidate set.
 
@@ -472,6 +480,79 @@ def _render_candidate_set_export(
             }},
             evidence_refs=[],
         )
+    # --- WP-2 Version B (S2) integrity gates — BOTH run BEFORE any
+    # rendering and BEFORE ArtifactV2 construction (frozen pipeline:
+    # verification precedes creation, so a failed export never produces
+    # an artifact — no harvest, no persistence, no visibility). They
+    # apply ONLY when the B admission injected the expected values; the
+    # legacy contract path (no expected args) is byte-unchanged.
+    actual_records_digest = None
+    #
+    # Gate 1 — records digest (content integrity P1/P2/P3): the actual
+    # digest is computed over the RENDER-PARTICIPATING records
+    # (post-clean, supporting = exactly the legs that will render), so
+    # any cleaning-side drop/modification of business fields fails the
+    # comparison. Never claims Markdown byte-equality (the text is a
+    # deterministic function of these records, pinned by unit tests).
+    if expected_records_digest is not None:
+        render_records = [dict(item["candidate"],
+                               supporting=item["legs"])
+                          for item in cleaned]
+        try:
+            actual_records_digest = canonical_records_digest(
+                render_records)
+        except (ValueError, TypeError):
+            actual_records_digest = None
+        if actual_records_digest != expected_records_digest:
+            return ToolResult(
+                outcome=ToolResultOutcome.SUCCESS,
+                data={"candidate_set_export_rejected": {
+                    "set_ref": set_ref,
+                    "reason": "digest_mismatch",
+                    "expected_records_digest": expected_records_digest,
+                    "actual_records_digest": actual_records_digest,
+                    "candidates_total": len(candidates or []),
+                }},
+                evidence_refs=[],
+            )
+    # Gate 2 — provenance binding verification (source/authorization
+    # chain, independent from the records digest): exact match of the
+    # received identity fields against the admission-verified binding
+    # envelope. set_ref / source_task_id / case_id are compared to THIS
+    # call's received values; source_step_id / delivery_target_id are
+    # envelope-bound loop-side at injection — here they must be present
+    # and well-formed (their binding association is asserted by the
+    # admission service). Any missing/replaced/malformed field rejects.
+    if expected_binding is not None:
+        mismatches: list[str] = []
+        received = {"set_ref": set_ref,
+                    "source_task_id": source_task_id,
+                    "case_id": case_id,
+                    "delivery_target_id": delivery_target_id,
+                    "source_step_id": source_step_id}
+        for field_name in ("set_ref", "source_task_id", "source_step_id",
+                           "delivery_target_id", "case_id"):
+            expected_value = expected_binding.get(field_name)
+            if not expected_value or not isinstance(expected_value, str):
+                mismatches.append(f"{field_name}: missing_or_malformed")
+                continue
+            actual_value = received.get(field_name)
+            if actual_value is None:
+                continue        # envelope-only field (bound loop-side)
+            if actual_value != expected_value:
+                mismatches.append(
+                    f"{field_name}: {actual_value!r} != {expected_value!r}")
+        if mismatches:
+            return ToolResult(
+                outcome=ToolResultOutcome.SUCCESS,
+                data={"candidate_set_export_rejected": {
+                    "set_ref": set_ref,
+                    "reason": "provenance_mismatch",
+                    "mismatches": mismatches[:10],
+                    "candidates_total": len(candidates or []),
+                }},
+                evidence_refs=[],
+            )
     lines: list[str] = [
         "# 对冲候选交易明细（绑定候选集）",
         "",
@@ -508,21 +589,39 @@ def _render_candidate_set_export(
     # FULL ArtifactV2 record — the executor harvests data["artifact"] as
     # the task artifact; a partial dict breaks the TaskDetailResponse
     # schema (real 500: INV-18dd9f073a1c GET /tasks/{id}).
-    provenance = [tc.tool_call_id for tc in (source_tool_calls or [])
-                  if getattr(tc, "tool_call_id", None)]
-    if not provenance:
-        # provenance invariant (models.ArtifactV2 min_length=1): without a
-        # traceable source tool call the export is unverifiable → reject.
-        return ToolResult(
-            outcome=ToolResultOutcome.SUCCESS,
-            data={"candidate_set_export_rejected": {
-                "set_ref": set_ref,
-                "reason": "no_source_tool_call_provenance",
-                "missing": ["source_tool_calls"],
-                "candidates_total": len(candidates or []),
-            }},
-            evidence_refs=[],
-        )
+    #
+    # WP-2 Version B (Resume Option B fix): when the B admission
+    # injected the verified binding envelope, the export's
+    # source/authorization chain IS that binding — a resumed run may
+    # legitimately have NO in-run tool calls to cite (the read-only
+    # prefix ran in a previous process). The legacy
+    # no_source_tool_call_provenance rejection applies only to the
+    # non-B path; for B deliveries the binding-derived provenance is
+    # STRICTER than non-empty ids (Gate 2 already verified the five
+    # envelope fields against the admission record).
+    if expected_binding is not None:
+        provenance = [
+            "ADMISSION-BINDING:{set_ref}@{task}/{target}".format(
+                set_ref=expected_binding.get("set_ref"),
+                task=expected_binding.get("source_task_id"),
+                target=expected_binding.get("delivery_target_id"))]
+    else:
+        provenance = [tc.tool_call_id for tc in (source_tool_calls or [])
+                      if getattr(tc, "tool_call_id", None)]
+        if not provenance:
+            # provenance invariant (models.ArtifactV2 min_length=1):
+            # without a traceable source tool call the export is
+            # unverifiable → reject.
+            return ToolResult(
+                outcome=ToolResultOutcome.SUCCESS,
+                data={"candidate_set_export_rejected": {
+                    "set_ref": set_ref,
+                    "reason": "no_source_tool_call_provenance",
+                    "missing": ["source_tool_calls"],
+                    "candidates_total": len(candidates or []),
+                }},
+                evidence_refs=[],
+            )
     artifact = ArtifactV2(
         artifact_id=artifact_id,
         investigation_id=f"CASE:{case_id}",
@@ -547,6 +646,21 @@ def _render_candidate_set_export(
                 "verification": {"passed": True,
                                  "transaction_ids": sorted(set(tids)),
                                  "candidates": len(cleaned)},
+                # WP-2 Version B (S2): dual-verification echo for the
+                # loop's delivered-marking (frozen: verification returns
+                # both digests + the provenance comparison result).
+                **({
+                    "records_digest_verification": {
+                        "expected": expected_records_digest,
+                        "actual": actual_records_digest,
+                        "passed": True},
+                    "provenance_verification": {
+                        "passed": True,
+                        "checked_fields": sorted(
+                            expected_binding.keys()),
+                    },
+                } if (expected_records_digest is not None
+                      or expected_binding is not None) else {}),
             },
         },
         evidence_refs=[{"kind": "transaction", "id": t}
@@ -569,6 +683,10 @@ def artifact_bundle(
     candidate_records: list[dict] | None = None,
     bounded_data: bool = False,
     source_task_id: str | None = None,
+    expected_records_digest: str | None = None,
+    expected_binding: dict | None = None,
+    delivery_target_id: str | None = None,
+    source_step_id: str | None = None,
 ) -> ToolResult:
     """Compose an investigation bundle from executed tool results.
 
@@ -615,6 +733,10 @@ def artifact_bundle(
             case_id=case_id,
             format=format,
             source_tool_calls=source_tool_calls,
+            expected_records_digest=expected_records_digest,
+            expected_binding=expected_binding,
+            delivery_target_id=delivery_target_id,
+            source_step_id=source_step_id,
         )
     if scope == "finding":
         if not isinstance(finding_id, str) or not finding_id.strip():
@@ -1015,6 +1137,32 @@ def artifact_bundle(
         lines.append("## Candidate Cross-Account Relationships")
         lines.extend(candidate_lines)
 
+    # U00004 file-delivery closure: a related-account analysis in the run
+    # renders its authoritative account list — the hedging-candidate file
+    # carries the set context the pairs were found in (standalone file,
+    # user DoD: the complete related-account list beside the candidates).
+    # Bounded like the chat rendering: the count plus the shown list, with
+    # an explicit shown/total disclosure when the payload is a preview.
+    for tc in executed:
+        data = tc.result.data if isinstance(tc.result.data, dict) else {}
+        if data.get("analysis") != "related_account_analysis":
+            continue
+        accounts = [
+            (a.get("user_id") if isinstance(a, dict) else str(a))
+            for a in (data.get("related_accounts") or []) if a]
+        count = data.get("related_accounts_count") or len(accounts)
+        if not accounts and not count:
+            continue
+        lines.append("")
+        lines.append(f"## Related Accounts ({count})")
+        shown = accounts[:25]
+        lines.extend(f"- {a}" for a in shown)
+        if len(shown) < count:
+            lines.append(
+                f"(first {len(shown)} shown; {count} related accounts in "
+                "total — the complete list is in the evidence result.)")
+        contributing_calls.append(tc)
+
     # --- self-opposite (same-account) trade activity -----------------------
     # The canonical self view: RP's own ratio + rule, the account's complete
     # transaction record set, same-account wording only. Rendered BEFORE
@@ -1187,6 +1335,41 @@ def artifact_bundle(
                     f"{d['record_count']} != {len(d.get('records') or [])} "
                     f"records in the evidence view "
                     f"({d.get('finding_id', '?')})")
+    # 2026-11-03 final-acceptance incident (ART-01f4b21df3): cross-call
+    # aggregation consistency. The renderer above dedupes rows by
+    # (record_kind, record_id); per-call parity alone cannot see a
+    # repeated set (69==69 per call while the file held 138 rows). When
+    # ≥2 evidence calls cover the SAME finding, their record-ID sets are
+    # compared: identical sets ⇒ the deduplicated section IS the declared
+    # complete set (consistent); divergent sets ⇒ the union is rendered
+    # but completeness against the authoritative source CANNOT be proven
+    # and is reported as such — never silently claimed. A single call is
+    # vacuously consistent (no second source to disagree with).
+    record_id_sets: list[tuple[str, list[str]]] = []
+    for tc in executed:
+        d = tc.result.data if isinstance(tc.result.data, dict) else {}
+        if d.get("view") == "evidence" and isinstance(
+                d.get("record_count"), int):
+            ids = sorted(str(r.get("record_id")
+                             if isinstance(r, dict) else r)
+                         for r in (d.get("records") or []))
+            record_id_sets.append((d.get("finding_id", "?"), ids))
+    record_set_consistent: bool | None = None
+    if len(record_id_sets) >= 2:
+        fid0, ids0 = record_id_sets[0]
+        same_finding = all(fid == fid0 for fid, _ in record_id_sets)
+        if not same_finding:
+            record_set_consistent = None      # per-finding sections; no
+        else:                                 # cross-call repetition
+            record_set_consistent = all(
+                ids == ids0 for _, ids in record_id_sets[1:])
+            if not record_set_consistent:
+                gaps.append(
+                    "record set consistency: repeated evidence calls for "
+                    f"{fid0} returned DIFFERENT record sets — the "
+                    "deduplicated union is rendered, but completeness "
+                    "against the authoritative source could not be "
+                    "verified")
     # metadata (evidence_missing / next_data_needed on the ToolResult payload)
 
     # --- provenance -----------------------------------------------------------------------
@@ -1256,6 +1439,7 @@ def artifact_bundle(
             "evidence_missing": bool(gaps),
             "record_parity_failed": record_parity_failed,
             "record_parity_checked": record_parity_checked,
+            "record_set_consistent": record_set_consistent,
             "next_data_needed": gaps,
         },
         evidence_refs=_dedupe_evidence_refs(
@@ -1270,16 +1454,47 @@ def _render_concrete_evidence(executed: list[ToolCallV2]) -> list[str]:
     Included ONLY when the conversation actually entered concrete-evidence
     detail (a finding_drilldown view="evidence" result exists). Those
     results carry complete=True — the complete authoritative record set by
-    contract; they are rendered verbatim, never re-truncated."""
+    contract; they are rendered verbatim, never re-truncated.
+
+    2026-11-03 final-acceptance incident (ART-01f4b21df3): a RE_PLAN may
+    re-run the SAME records step (new call ids, identical 69-record set).
+    Per-call rendering then wrote the complete set TWICE (138 rows for 69
+    records) while the per-call parity check (69==69 per call) could not
+    see it. Records now aggregate across calls with (record_kind,
+    record_id) as the identity key — FIRST occurrence wins (original
+    fields preserved verbatim), duplicates skipped; one section renders
+    per finding. Record-less rows (no record_id) cannot be identified and
+    are always included — dedup is never guessed."""
     lines: list[str] = []
+    seen_keys: set = set()
+    section_order: list[str] = []
+    records_by_section: dict[str, list] = {}
     for tc in executed:
         data = tc.result.data if isinstance(tc.result.data, dict) else {}
-        if data.get("view") == "evidence" and data.get("complete"):
-            block = _render_evidence_records(data)
-            if block:
-                if lines:
-                    lines.append("")
-                lines.append(f"### Evidence for {data.get('finding_id', '?')} "
-                             f"(complete record set)")
-                lines.extend(block)
+        if data.get("view") != "evidence" or not data.get("complete"):
+            continue
+        finding_id = data.get("finding_id", "?")
+        if finding_id not in records_by_section:
+            records_by_section[finding_id] = []
+            section_order.append(finding_id)
+        for r in (data.get("records") or []):
+            rid = r.get("record_id") if isinstance(r, dict) else None
+            kind = r.get("record_kind") if isinstance(r, dict) else None
+            if rid:
+                key = (str(kind), str(rid))
+                if key in seen_keys:
+                    continue        # cross-call duplicate — first wins
+                seen_keys.add(key)
+            records_by_section[finding_id].append(r)
+    for finding_id in section_order:
+        rows = records_by_section[finding_id]
+        if not rows:
+            continue
+        block = _render_evidence_records({"records": rows})
+        if block:
+            if lines:
+                lines.append("")
+            lines.append(f"### Evidence for {finding_id} "
+                         f"(complete record set)")
+            lines.extend(block)
     return lines

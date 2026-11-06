@@ -407,7 +407,29 @@ class InvestigationAPI:
             view = result_view(tc)
             if view is not None:
                 results.append(view)
-        return {"task_id": task_id, "results": results}
+        # 2026-11-03 (real incident TASK-66d942582954, U00033 "what
+        # contributed to ML Pattern detection score?"): the conversation
+        # card attaches its structured Timeline section from THIS payload,
+        # so whether the user's accepted goal actually required timeline
+        # delivery must ride with it. Unconditional attachment rendered a
+        # re-plan's unrelated timeline probe (69 trade events) under an
+        # unrelated score-explanation answer. Same contract truth the
+        # response composer uses (EvidenceType.TIMELINE_EVENTS in
+        # output.evidence_requirements), so the card section and the
+        # composed answer text cannot diverge. Evidence stays in results
+        # and Activity regardless — provenance is never dropped.
+        from app.skills import EvidenceType
+        timeline_delivery_required = False
+        state = self.store.get_agent_state(task_id)
+        contract_outputs = (getattr(state.goal_contract, "outputs", None)
+                            if state is not None else None) or []
+        for output in contract_outputs:
+            if EvidenceType.TIMELINE_EVENTS in \
+                    (output.evidence_requirements or []):
+                timeline_delivery_required = True
+                break
+        return {"task_id": task_id, "results": results,
+                "timeline_delivery_required": timeline_delivery_required}
 
     def list_followups(self, investigation_id: str,
                        context_action: str | None = None,

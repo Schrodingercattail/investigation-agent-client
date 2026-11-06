@@ -2275,6 +2275,113 @@ class InvestigationService:
         selected_skill = self._infer_selected_skill(plan, eligible_ids)
         task.selected_skill = selected_skill
 
+        # R2.2.3 WP-2 Version B (S5 forensics fix, user-authorized):
+        # Case Intake plans on the /turn surface must honor the Option A
+        # boundary — the overview is delivered WITHOUT the artifact
+        # bundle (Decision 2: the boundary applies to BOTH paths). The
+        # loop enforces this via the U00004 delivery-intent gate; /turn
+        # has no contract machinery, so the equivalent deterministic
+        # strip runs here: a Case Intake plan (INVESTIGATION intent +
+        # the SAME intake recognizers the planner's intake branch used)
+        # has its generate_artifact steps removed BEFORE execution.
+        # Non-intake /turn requests are untouched.
+        from app.context_resolution import (
+            RequestIntent as _RI,
+            _classify_request_intent as _turn_classify_intent,
+        )
+        from app.planner_v2 import (
+            _is_bound_case_reference as _turn_is_bound_ref,
+            _is_plain_case_intake as _turn_is_plain_intake,
+        )
+        if (plan is not None
+                and _turn_classify_intent(user_request) == _RI.INVESTIGATION
+                and (_turn_is_plain_intake(user_request)
+                     or _turn_is_bound_ref(user_request, resolved_ctx))):
+            _intake_artifact_steps = [s for s in plan.steps
+                                      if s.type == "generate_artifact"]
+            if _intake_artifact_steps:
+                plan.steps[:] = [s for s in plan.steps
+                                 if s.type != "generate_artifact"]
+                for other in plan.steps:
+                    other.depends_on = [
+                        d for d in (other.depends_on or [])
+                        if d not in {s.step_id
+                                     for s in _intake_artifact_steps}]
+                logger.warning(
+                    "WP2 Option A (turn): stripped Case Intake artifact "
+                    "step(s) %s — the /turn intake delivers the "
+                    "restricted overview WITHOUT an artifact bundle",
+                    [s.step_id for s in _intake_artifact_steps])
+
+        # R2.2.3 WP-2 Version B (S3): /turn shares the deterministic
+        # admission — NO bypass (frozen /turn requirement). This path has
+        # NO GU decision record, so the service is called with
+        # hsg_only=False: EVERY no-contract artifact delivery is gated.
+        # Case Intake (non-ARTIFACT intent) passes through — Option A
+        # behavior unchanged; contract-path runs pass through (the loop
+        # owns them).
+        _turn_admission = None
+        _turn_invalid: list[dict] = []
+        if plan is not None and any(
+                s.type == "generate_artifact" for s in plan.steps):
+            from app.delivery_admission import admit_delivery_targets
+            _inv_tasks: set[str] = set()
+            try:
+                if self.task_store is not None:
+                    _inv_tasks = {t.task_id for t in
+                                  self.task_store.list_by_investigation(
+                                      investigation_id)}
+            except Exception:
+                logger.exception("admission task listing failed")
+            _session_sets = []
+            try:
+                if self.task_store is not None:
+                    _session_sets = (self.task_store.get_session(
+                        investigation_id) or {}).get("candidate_sets") or []
+            except Exception:
+                logger.exception("admission session read failed")
+            _turn_admission = admit_delivery_targets(
+                goal_contract=None,
+                decision_outcome=None,
+                request_text=user_request,
+                plan_steps=[{"step_id": s.step_id, "type": s.type,
+                             "arguments": dict(s.arguments)}
+                            for s in plan.steps],
+                session_sets=_session_sets,
+                investigation_task_ids=_inv_tasks,
+                case_id=resolved_ctx.case_id,
+                hsg_only=False)
+            if _turn_admission.get("mode") == "admitted":
+                _bad = {r["step_id"] for r in _turn_admission["invalid"]}
+                if _bad:
+                    plan.steps[:] = [s for s in plan.steps
+                                     if s.step_id not in _bad]
+                    for other in plan.steps:
+                        other.depends_on = [
+                            d for d in (other.depends_on or [])
+                            if d not in _bad]
+                _turn_invalid = list(_turn_admission["invalid"])
+                for inj in _turn_admission["valid"]:
+                    for s in plan.steps:
+                        if s.step_id != inj["step_id"]:
+                            continue
+                        s.arguments.update({
+                            "source_kind": inj["source_kind"],
+                            "set_ref": inj["set_ref"],
+                            "candidate_records": inj["candidate_records"],
+                            "bounded_data": inj["bounded_data"],
+                            "source_task_id": inj["source_task_id"],
+                            "expected_records_digest":
+                                inj["expected_records_digest"],
+                            "expected_binding": inj["expected_binding"],
+                            "delivery_target_id":
+                                inj["delivery_target_id"],
+                            "source_step_id":
+                                (inj["expected_binding"] or {})
+                                .get("source_step_id"),
+                        })
+                        break
+
         # --- 4) Executor -------------------------------------------------------
         task.status = TaskStatusV2.EXECUTING
         self._persist(store, task)
@@ -2320,6 +2427,19 @@ class InvestigationService:
         if coverage is not None:
             target_resolution = {**target_resolution,
                                  "request_coverage": coverage}
+        # WP-2 Version B (S3): /turn rejected delivery targets render the
+        # pending clarification in the response — no bundle, no delivered
+        # mark, per-target reasons listed.
+        if _turn_invalid:
+            _zh_t = response_language == "zh"
+            response = response.rstrip() + "\n\n" + (
+                "以下交付目标未通过确定性准入，等待澄清："
+                if _zh_t else
+                "The following delivery targets failed deterministic "
+                "admission and await clarification:")
+            for rec in _turn_invalid:
+                response += ("\n- DT " + rec["delivery_target_id"]
+                             + " fail-closed (" + rec["reason"] + ")")
 
         # --- 6) Follow-ups (only after a valid structured result) ---------------
         follow_ups: list[FollowUp] = []

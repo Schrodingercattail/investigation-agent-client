@@ -9,7 +9,10 @@ submissions:
   (finding count, overall risk level/score, finding id+title list) built
   from the risk_case_fetch observation summary — never just an artifact
   id, tool log, or the "可能未覆盖全部内容" warning alone;
-- the artifact still generates alongside the answer;
+- Option A (user ruling 2026-10-31): the intake overview is delivered
+  WITHOUT a coexisting artifact bundle — the U00004 delivery-intent
+  gate strips the planned generate_artifact step, and the strip is
+  auditable;
 - the fetched evidence is REUSED: an identical re-plan collapses to the
   bounded completion instead of re-running the same fetch;
 - no findings → no fabricated overview (honest empty/thin answer);
@@ -247,8 +250,16 @@ class TestCaseIntakeAnswerClosure:
         assert "86.1" in text
         assert "ML Pattern Detection" in text
 
-    def test_artifact_and_answer_coexist(self, tmp_path):
-        n = len(default_findings())
+    def test_option_a_intake_overview_without_artifact_bundle(
+            self, tmp_path):
+        """Case Intake product contract — user ruling 2026-10-31,
+        Option A (KEEP EXISTING STRIP BEHAVIOR): the first submission's
+        accepted intake contract carries detail_list, so the U00004
+        delivery-intent gate strips the planned generate_artifact step
+        BEFORE execution. The受限 case-level overview is still delivered
+        conversationally; NO artifact bundle coexists with it; the
+        stripped step's tool payload is never consumed; the strip is
+        auditable via planning_diagnostics.delivery_intent_gate."""
         client, api, store, inv, holder = build_env(
             tmp_path,
             [fetch_with_findings(), artifact_bundle_success()],
@@ -260,14 +271,24 @@ class TestCaseIntakeAnswerClosure:
         task_id_artifacts = set(
             client.get(f"/api/v2/tasks/{task_id}").json()
             .get("task", {}).get("artifact_ids") or [])
-        # the artifact was produced AND the conversational overview exists
-        assert detail["artifacts"]
-        assert detail["artifacts"][0]["artifact_id"] in task_id_artifacts
-        # ArtifactV2 investigation_id is the CASE scope id (domain shape)
-        assert detail["artifacts"][0]["investigation_id"] == "CASE:" + CASE
-        assert detail["artifacts"][0]["scope"] == "case:" + CASE
+        # Option A: NO artifact bundle coexists with the intake answer
+        # (task container AND loop state both bundle-free)
+        assert detail["artifacts"] == []
+        assert task_id_artifacts == set()
+        state = holder.result.state
+        assert state.artifact_ids == []
+        # the stripped step never reached the tool boundary
+        assert holder.provider.calls.count("artifact_bundle") == 0
+        # the strip is auditable (U00004 delivery-intent gate record)
+        stripped = (state.planning_diagnostics or {}).get(
+            "delivery_intent_gate") or []
+        assert any(s.get("step_id") == "S2"
+                   and s.get("type") == "generate_artifact"
+                   for s in stripped)
+        # the受限 conversational case overview IS delivered (substantive:
+        # the identified findings are enumerated with their titles)
         text = detail.get("task_response_text") or ""
-        assert f"retrieved {n} identified risk findings" in text
+        assert "identified risk findings" in text
         assert "ML Pattern Detection" in text
 
     def test_identical_replan_reuses_evidence_no_duplicate_fetch(

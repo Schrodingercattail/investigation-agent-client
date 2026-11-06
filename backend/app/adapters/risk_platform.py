@@ -676,7 +676,16 @@ def normalize_timeline_events(
         kw in finding_lower for kw in ("trade", "trading", "transaction", "pattern detection")
     )
     wants_withdrawals = "withdrawal" in finding_lower
-    wants_detection = True   # detection event anchors most findings' start
+    # Finding-scoped timelines carry ONLY finding-associated evidence.
+    # The RP payload has NO explicit finding-to-detection association:
+    # risk_summary.detected_at is a CASE-level value and the event it
+    # would produce references risk_event:<case_id> — shared case
+    # membership is never ownership (U00047 F3 audit, 2026-10-29). The
+    # case-level detection event stays on the case-level surfaces (raw
+    # evidence payload / case summary) and never enters a finding
+    # timeline. If RP later exposes an explicit finding-to-detection
+    # link, gate the synthesis below on that field instead.
+    wants_detection = False
 
     raw_events: list[dict[str, Any]] = []
 

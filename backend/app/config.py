@@ -108,10 +108,43 @@ class Settings(BaseSettings):
     # Declared here as the baseline contract requires both to default OFF;
     # NO runtime behavior reads them yet — they gate later work items
     # (coverage check / admissibility gate respectively).
-    ENABLE_GOAL_SEMANTIC_CONTRACT: bool = False   # GSP WP-GSP-2
-    ENABLE_TARGET_VALIDITY_GUARD: bool = False    # GSP-7/QA
-    ENABLE_CANDIDATE_METADATA_COVERAGE: bool = False   # WI-2
-    ENABLE_SAFE_SELECT_ADMISSIBILITY: bool = False     # WI-5
+    # Final-acceptance calibration (2026-11-02, project-wide readiness):
+    # verified, E2E-accepted product capabilities default ON; deployer-
+    # choice / not-yet-E2E-verified guards stay OFF with documented
+    # reasons (see the governance inventory in the acceptance reports).
+    ENABLE_GOAL_SEMANTIC_CONTRACT: bool = True    # GSP WP-GSP-2 (core accepted goal/contract system; every accepted journey runs on it)
+    # AL-3.5.1 G1 — Target Validity Admission Gate (S11: unevidenced
+    # wrong-topic→wrong-finding binding drove finding-scoped execution and
+    # a confident wrong answer; decide() admits VALID/clarifies
+    # AMBIGUOUS/UNGROUNDED/INVALID). NOTE (naming): "GSP-7" was a config
+    # mislabel — WP-GSP-7 is RE_PLAN/Loop Preservation (always-on, no
+    # flag). Formally enabled 2026-11-03 after the isolated Flag-ON
+    # verification round (legal-path compatibility: N1 safety, P1-P6, P4
+    # resume, GJ-001/002/003/B1 browser — no regression; decide() covered
+    # by the 41-test al351 suite). Remaining verification limits
+    # (UNGROUNDED/INVALID/AMBIGUOUS real-API field evidence) are recorded
+    # as known limitations in
+    # docs/architecture/FEATURE_FLAG_INVENTORY.md §6 — accepted at
+    # enablement, not hidden. Explicit env override still supported.
+    ENABLE_TARGET_VALIDITY_GUARD: bool = True
+    # WI-2 — unit + metadata_coverage_e2e_wi2 evidence, BUT default-ON
+    # calibration (2026-11-02) broke the U00010-shape intake with
+    # planning_failure (candidate.metadata.coverage invalidated/gone
+    # cascade against non-seeded cases) — reverted to OFF; WI-2 default
+    # flip is a post-acceptance verification item.
+    ENABLE_CANDIDATE_METADATA_COVERAGE: bool = False
+    ENABLE_SAFE_SELECT_ADMISSIBILITY: bool = True     # WI-5 — unit + safe_select_e2e_wi5/wi6 evidence; follow-up admissibility is normal product behavior
+    # U00004 bounded partial completion (PMO-approved, design-validated):
+    # when ON, a STOP proposal is accepted while outputs remain within an
+    # honestly DISCLOSED data boundary (partially_supported + structured
+    # truncation evidence, hard file_export deliverables SATISFIED, no
+    # pending steps, no uncovered actionable outputs) — the run ends
+    # completed / BOUNDED_DATA / goal_outcome=partial instead of forcing
+    # endless re-plans (real incident TASK-14dcda628770). OFF preserves
+    # the legacy coercion byte-for-byte.
+    # U00004 bounded partial completion — REAL API E2E + 3-browser-journey
+    # acceptance PASS (2026-11-02); normal Agent Loop termination capability.
+    ENABLE_BOUNDED_PARTIAL_STOP: bool = True
 
     # AL-2.8: the M2 semantic foundation (Concept Registry + Candidate
     # Metadata + SemanticNormalizer) as conversational finding-resolution

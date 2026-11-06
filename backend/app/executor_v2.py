@@ -179,6 +179,13 @@ def default_tool_provider() -> ToolProvider:
         candidate_records=args.get("candidate_records"),
         bounded_data=bool(args.get("bounded_data", False)),
         source_task_id=args.get("source_task_id"),
+        # WP-2 Version B (S2/S3): the admission-injected verification
+        # arguments must reach the tool — the digest/provenance gates
+        # cannot run (fail-closed) without them.
+        expected_records_digest=args.get("expected_records_digest"),
+        expected_binding=args.get("expected_binding"),
+        delivery_target_id=args.get("delivery_target_id"),
+        source_step_id=args.get("source_step_id"),
     ))
     return provider
 

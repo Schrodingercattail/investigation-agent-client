@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 from anthropic import Anthropic
@@ -9,6 +10,7 @@ from anthropic import APIConnectionError, APIStatusError
 from dotenv import load_dotenv
 
 from app.exceptions import (
+    LLMLocalError,
     LLMConfigurationError,
     LLMEmptyResponseError,
     LLMError,
@@ -20,7 +22,67 @@ from app.exceptions import (
 load_dotenv()
 
 
+
+
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# R2.2.3 Phase 2 — bounded connection-retry classification (GU scope).
+# Frozen rules: max TWO physical calls; only transport connection failures
+# are retryable; local program defects keep their real type and are never
+# retried or mislabeled provider-unavailable; parse/structure errors after
+# a non-empty response are not retried (they are not transport failures).
+# ---------------------------------------------------------------------------
+
+_CONNECTION_SIGNATURES = (
+    # audited mid-stream drop signature (U00010 GU failure,
+    # httpx.RemoteProtocolError) — bounded fallback for wrappers that
+    # lose the transport type in the chain
+    "peer closed connection",
+    "incomplete chunked read",
+    "connection reset",
+    "connection error",
+)
+
+_PROGRAMMING_ERRORS = (NameError, TypeError, AttributeError, KeyError,
+                       IndexError, ValueError, ImportError,
+                       UnboundLocalError, RecursionError,
+                       ZeroDivisionError, NotImplementedError)
+
+
+def _is_connection_error(exc: BaseException) -> bool:
+    """Type/chain-first detection of transport connection failures
+    (anthropic.APIConnectionError / httpx.TransportError, including
+    mid-stream RemoteProtocolError), with the bounded audited-signature
+    fallback for wrappers that lose the transport type."""
+    import httpx
+    cur: BaseException | None = exc
+    seen = 0
+    while cur is not None and seen < 8:
+        if isinstance(cur, APIConnectionError):
+            return True
+        if isinstance(cur, httpx.TransportError):
+            return True
+        cur = cur.__cause__ or cur.__context__
+        seen += 1
+    text = str(exc) or ""
+    return any(sig in text for sig in _CONNECTION_SIGNATURES)
+
+
+def _is_local_programming_error(exc: BaseException) -> bool:
+    """Chain-walk detection of LOCAL program defects (builtins from this
+    codebase, e.g. the audited `_system_for_stream` NameError). SDK and
+    httpx types are excluded by module so transport failures are never
+    mislabeled local."""
+    cur: BaseException | None = exc
+    seen = 0
+    while cur is not None and seen < 8:
+        mod = type(cur).__module__ or ""
+        if not mod.startswith(("anthropic", "httpx", "openai"))                 and isinstance(cur, _PROGRAMMING_ERRORS):
+            return True
+        cur = cur.__cause__ or cur.__context__
+        seen += 1
+    return False
 
 
 class ClaudeProvider:
@@ -41,6 +103,14 @@ class ClaudeProvider:
     # same way the old same-budget retry did. Success attempts observed
     # at 2.4k-7.6k output tokens fit comfortably.
     EMPTY_RETRY_BUDGET_FACTOR = 2
+    # Connection-class retry backoff (2026-11-04 acceptance
+    # TASK-7f707394f962): the two physical calls of the bounded
+    # connection retry fired back-to-back within milliseconds and BOTH
+    # hit the same provider blip (streaming truncation); a bounded pause
+    # before the second physical call gives instantaneous blips a chance
+    # to clear without extending the overall budget (still 2 calls, still
+    # bounded, never unbounded waiting).
+    CONNECTION_RETRY_BACKOFF_SECONDS = 2.0
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None, model: str | None = None):
         """
@@ -91,6 +161,7 @@ class ClaudeProvider:
         timeout: float | None = None,
         sdk_max_retries: int | None = None,
         stream: bool = False,
+        connection_retry: bool = False,
     ) -> str:
         """
         Generate a response from the LLM.
@@ -119,6 +190,7 @@ class ClaudeProvider:
             LLMConfigurationError: If configuration is invalid
         """
         last_empty: LLMEmptyResponseError | None = None
+        last_connection: LLMError | None = None
         attempt_max_tokens = max_tokens
         # A-fix observability: per-application-attempt diagnostics for THIS
         # call. Consumed by structured callers (goal understanding) and
@@ -134,6 +206,10 @@ class ClaudeProvider:
                 text = self._generate_once(messages, attempt_max_tokens,
                                            temperature, timeout,
                                            sdk_max_retries, stream)
+                if attempt > 1:
+                    logger.info(
+                        "LLM retry succeeded on attempt 2/2 (the first "
+                        "attempt failed; no prompt content logged)")
                 attempts.append({
                     "attempt_index": attempt,
                     "max_application_attempts": 2,
@@ -208,15 +284,90 @@ class ClaudeProvider:
                                           max_tokens=max_tokens,
                                           timeout_seconds=timeout,
                                           sdk_max_retries=sdk_max_retries)
+            except ValueError as e:
+                # R2.2.3 Phase 2: local program defects surfaced as plain
+                # builtins (never transport) — honest local_error
+                # classification, single physical call, no retry.
+                attempts.append({
+                    "attempt_index": attempt,
+                    "max_application_attempts": 2,
+                    "outcome": "local_error",
+                    "error_class": type(e).__name__,
+                    "detail": str(e)[:120],
+                    "elapsed_ms": int((__import__("time").monotonic()
+                                       - _t0) * 1000),
+                    "model": self.model,
+                    "max_tokens": max_tokens,
+                    "timeout_seconds": timeout,
+                    "sdk_max_retries": sdk_max_retries,
+                    "retry_triggered": False,
+                    "accepted": False,
+                })
+                logger.error(
+                    "local LLM provider programming error (%s: %s); "
+                    "no retry — this is not provider unavailability",
+                    type(e).__name__, str(e)[:120])
+                raise
+
             except (APIConnectionError, LLMError) as e:
-                self._record_and_reraise("service_unavailable", type(e).__name__, e, _t0,
-                                          max_tokens=max_tokens,
-                                          timeout_seconds=timeout,
-                                          sdk_max_retries=sdk_max_retries)
+                # R2.2.3 Phase 2: bounded GU connection retry. ONLY
+                # transport connection failures are retryable, at most
+                # ONCE, inside the SAME (1, 2) application budget the
+                # empty-response retry uses — total physical calls can
+                # never exceed 2. Local program defects are classified
+                # local_error and never retried; timeout/rate-limit/
+                # configuration keep their unchanged handlers below.
+                _retry_conn = (connection_retry
+                               and _is_connection_error(e)
+                               and not _is_local_programming_error(e))
+                _local = _is_local_programming_error(e)
+                attempts.append({
+                    "attempt_index": attempt,
+                    "max_application_attempts": 2,
+                    "outcome": ("local_error" if _local
+                                else "service_unavailable"),
+                    "error_class": type(e).__name__,
+                    "detail": str(e)[:120],
+                    "elapsed_ms": int((__import__("time").monotonic()
+                                       - _t0) * 1000),
+                    "model": self.model,
+                    "max_tokens": max_tokens,
+                    "timeout_seconds": timeout,
+                    "sdk_max_retries": sdk_max_retries,
+                    "retry_triggered": bool(_retry_conn
+                                            and attempt == 1),
+                    "connection_retry": bool(connection_retry),
+                    "accepted": False,
+                    **getattr(self, "last_attempt_window", {}),
+                })
+                if _retry_conn and attempt == 1:
+                    logger.warning(
+                        "connection-class LLM failure on attempt 1/2 "
+                        "(%s: %s); retrying once in %.1fs",
+                        type(e).__name__, str(e)[:120],
+                        type(self).CONNECTION_RETRY_BACKOFF_SECONDS)
+                    last_connection = e
+                    time.sleep(type(self).CONNECTION_RETRY_BACKOFF_SECONDS)
+                    continue
+                if _retry_conn:
+                    logger.error(
+                        "connection-class LLM failure persisted after the "
+                        "bounded retry (2/2 physical calls); giving up")
+                if _local:
+                    logger.error(
+                        "local LLM provider programming error (%s: %s); "
+                        "no retry — this is not provider unavailability",
+                        type(e).__name__, str(e)[:120])
+                raise
             except APIStatusError as e:
                 outcome = ("configuration_error" if getattr(e, "status_code", None) in (401, 400)
                            else "service_unavailable")
                 self._record_and_reraise(outcome, type(e).__name__, e, _t0)
+        if last_connection is not None:
+            # bounded connection retry exhausted: propagate the ORIGINAL
+            # connection exception — real type and chain preserved
+            raise last_connection
+
         context = dict(last_empty.context or {}) if last_empty else {}
         context["attempts"] = 2
         raise LLMEmptyResponseError(

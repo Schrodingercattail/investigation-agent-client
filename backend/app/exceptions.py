@@ -31,6 +31,15 @@ class LLMError(InvestigationAgentError):
     pass
 
 
+class LLMLocalError(LLMError):
+    """Local program defect inside the LLM provider boundary (audited:
+    the 10-17 `_system_for_stream` NameError was mislabeled
+    service_unavailable). Keeps the REAL exception type via the cause
+    chain and is never retried as a transport failure."""
+
+    pass
+
+
 class LLMConfigurationError(LLMError):
     """LLM is misconfigured (missing API key, invalid model, etc.)."""
 

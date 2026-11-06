@@ -362,6 +362,10 @@ class GoalRepresentation(BaseModel):
             "ambiguous_goal_types": list(self.ambiguous_goal_types),
             "reason": self.reason,
             "source": self.source,
+            # R2.2.3: the coverage gate classifies accepted contracts by
+            # the recorded proposal origin — the persisted projection must
+            # carry it or every accepted contract degrades to UNKNOWN.
+            "proposal_source": self.proposal_source,
         }
 
 
@@ -425,6 +429,12 @@ def _canonical_output_key(out: RequiredOutput) -> tuple:
         out.subject_ref,
         _kind_value(out.scope),
         frozenset(_kind_value(e) for e in out.evidence_requirements),
+        # F1 (2026-11-05 U00043): the delivery CHANNEL is part of the
+        # deliverable identity — a detail_list and a file_export output
+        # over the same evidence stream are TWO deliverables, never
+        # canonical duplicates (out.delivery is model-normalized to the
+        # closed vocabulary by RequiredOutput's validator).
+        _kind_value(out.delivery),
     )
 
 
@@ -445,6 +455,46 @@ def _dedup_canonical_outputs(outputs: list[RequiredOutput]
         seen.add(key)
         kept.append(out)
     return kept
+
+
+_DELIVERY_OVERREACH_RE = re.compile(
+    r"\b(downloadable|downloads?|export(?:s|ed|ing)?|uploads?|shared?|"
+    r"sends?|sent|email(?:s|ed|ing)?)\b", re.IGNORECASE)
+_UNSUPPORTED_DELIVERY_RE = re.compile(
+    r"\b(downloadable|downloads?|upload(?:s|ed|ing)?|shar(?:e|ed|ing)|"
+    r"send|sent|email(?:s|ed|ing)?)\b", re.IGNORECASE)
+
+
+def _delivery_overreach_words(text: str, request_text: str) -> list[str]:
+    """Delivery-capability words present in an LLM-coined claim text but
+    NEVER used by the user (case-insensitive, word-boundary). These are
+    over-inference: the system generates artifacts; it does not
+    download/export/upload/share/send/email them (WP-2 goal-overreach
+    fix)."""
+    request_lower = (request_text or "").lower()
+    overreach = []
+    for m in _DELIVERY_OVERREACH_RE.finditer(text or ""):
+        w = m.group(0)
+        if w.lower() not in request_lower and w.lower() not in overreach:
+            overreach.append(w.lower())
+    return overreach
+
+
+def _strip_delivery_overreach(text: str,
+                              overreach: list[str]) -> tuple[str, bool]:
+    """Remove over-reach delivery words from a claim text (word
+    boundary, case-preserving for the surrounding text) and clean up
+    whitespace/leftover connectors. Returns (new_text, changed)."""
+    new_text = text or ""
+    for w in overreach:
+        new_text = re.sub(r"\b" + re.escape(w) + r"\b\s*", "", new_text,
+                          flags=re.IGNORECASE)
+        new_text = re.sub(r"\s*" + re.escape(w) + r"\b", "", new_text,
+                          flags=re.IGNORECASE)
+    new_text = re.sub(r"\s{2,}", " ", new_text)
+    new_text = re.sub(r"\s+([,.;:)])", r"\1", new_text)
+    new_text = re.sub(r"\([)\s]*", "( ", new_text)
+    return new_text.strip(), new_text.strip() != (text or "").strip()
 
 
 def build_goal_contract(
@@ -501,6 +551,40 @@ def build_goal_contract(
         claim = str(item.get("claim") or "").strip()
         if not claim:
             return None, "missing_claim"
+        # WP-2 goal-overreach fix: an LLM-coined claim must not introduce
+        # delivery/transfer semantics the user never expressed
+        # (downloadable/download/export/...). Strip such words from the
+        # user-facing claim texts; words the USER used are preserved
+        # (intent is never silently deleted) and flagged unsupported
+        # below. Registry/heuristic canonical texts contain no such
+        # vocabulary, so the no-op path is the norm for them.
+        claim_overreach = _delivery_overreach_words(
+            claim, goal_representation.request_text)
+        if claim_overreach:
+            claim, _ = _strip_delivery_overreach(claim, claim_overreach)
+            claim = claim or str(item.get("claim") or "").strip()
+        description = item.get("claim_description")
+        description_en = item.get("claim_description_en")
+        # WP-2 goal-overreach fix: strip delivery-capability words the
+        # user never used from the LLM-coINED user-facing claim texts.
+        desc_overreach = _delivery_overreach_words(
+            str(description or ""), goal_representation.request_text) \
+            if description else []
+        if description and desc_overreach:
+            description, _ = _strip_delivery_overreach(
+                str(description), desc_overreach)
+        desc_en_overreach = _delivery_overreach_words(
+            str(description_en or ""), goal_representation.request_text) \
+            if description_en else []
+        if description_en and desc_en_overreach:
+            description_en, _ = _strip_delivery_overreach(
+                str(description_en), desc_en_overreach)
+        # user-requested unsupported delivery modes: intent PRESERVED in
+        # the claim words, but the output carries a bounded user-safe
+        # note that the system does not perform them (never silently
+        # reported as done).
+        unsupported_modes = _UNSUPPORTED_DELIVERY_RE.findall(
+            goal_representation.request_text or "")
         if claim.casefold() in EVIDENCE_TYPES:
             return None, "claim_evidence_conflation"
         reqs = item.get("evidence_requirements") or []
@@ -521,8 +605,9 @@ def build_goal_contract(
                               (case_id or "").strip(),
                               decomposed=decomposed_ids):
             return None, "subject_mismatch"
-        description = item.get("claim_description")
-        description_en = item.get("claim_description_en")
+        # NOTE: claim/claim_description/description_en were sanitized
+        # ABOVE (delivery-overreach strip) — do not re-read the raw
+        # proposal values here.
         try:
             claim_kind = ClaimKind(str(item.get("claim_kind")
                                        or ClaimKind.RETRIEVAL.value))
@@ -560,6 +645,27 @@ def build_goal_contract(
                              item.get("candidate_scope") in
                              ("prior_candidates", "fresh") else None),
         ))
+        # WP-2 goal-overreach fix: bounded user-safe note when the USER
+        # explicitly requested an unsupported delivery mode (download/
+        # email/share/upload) — the intent stays verbatim in the claim,
+        # the system does not perform it and never reports it done.
+        if unsupported_modes:
+            _modes = sorted({m.lower() for m in unsupported_modes})
+            required[-1].detail = (
+                "[delivery note: " + "/".join(_modes)
+                + " not supported — the system generates the artifact; "
+                "no " + _modes[0] + " was performed]")
+        # WP-2 goal-overreach fix: bounded user-safe note when the USER
+        # explicitly requested an unsupported delivery mode (intent is
+        # preserved verbatim in the claim; the system never performs it
+        # and never reports it done).
+        modes = sorted({m.lower() for m in _UNSUPPORTED_DELIVERY_RE
+                        .findall(goal_representation.request_text or "")})
+        if modes:
+            required[-1].detail = (
+                "[delivery note: " + "/".join(modes)
+                + " is not supported — the system generates the artifact; "
+                "no " + modes[0] + " was performed]")
     # WP-CG-2 (design §10-E2, AD-3): a COMPOUND contract must retain at
     # least two SEMANTICALLY INDEPENDENT outputs after canonical
     # deduplication. All-or-nothing is unchanged — every field-level
@@ -1088,6 +1194,23 @@ def deterministic_contract_proposal(
             # focus set but unresolvable in this case: the safe generic
             # policy delivery is the case-level citation set (population)
             outputs.append(_policy_citation_output(account_subject))
+    if (investigation_concepts.is_related_policy_citation_request(text)
+            and not investigation_concepts.is_policy_citation_original_text_request(text)):
+        # 2026-11-04 acceptance (TASK-7f707394f962): EN related-policy
+        # delivery (“send me the related policy or citation”) — the
+        # U00020 fix-A anchor discipline applies: when the explain
+        # decomposition resolves exactly ONE finding, the policy basis is
+        # finding-scoped to THAT finding; otherwise the case-level
+        # citation set is the safe generic delivery. Skipped when the
+        # original-text ask fires (superset intent — its own aspect
+        # already owns the policy delivery).
+        _related = [f for _d, f in explain_pairs]
+        if len(_related) == 1:
+            outputs.append(_finding_policy_output(_related[0]))
+        else:
+            outputs.append(_policy_citation_output(account_subject))
+        if fired_aspects is not None:
+            fired_aspects.append("policy_related_citation")
     if investigation_concepts.is_policy_citation_original_text_request(
             text):
         # U00029 fix (I1): resolve the anaphoric focus ONCE — the same
@@ -1126,9 +1249,38 @@ def deterministic_contract_proposal(
             investigation_concepts.mentions_reverse_trade_rate(text)
             and _question_shape is not None
             and not investigation_concepts.has_account_delivery_intent(text))
-        if not _metric_question:
+        # U00004/GJ-OPPOSITE-TRADE-RATIO: a finding-why ask that names the
+        # network domain (explain pairs for linked_account fired) is
+        # served by the explanation output's own evidence — a standalone
+        # related-account list output duplicates the relations the
+        # explanation already renders. Kept whenever the request carries
+        # explicit account delivery intent (list/details/清单/明细).
+        # Policy-ask yield (2026-11-05 acceptance TASK-b0019ac3e0e1): a
+        # POLICY-original-text ask that merely NAMES the linked_account
+        # domain (「把关联账号相关的政策原文发我」) does not demand the
+        # account list — the bare delivery verb 发我 there is the POLICY
+        # delivery verb, and the generic has_account_delivery_intent
+        # marker list cannot see that. Without this yield the candidate
+        # emitted the network output and _merge_with_candidate re-admitted
+        # it into the GU's policy-only set (18 accounts + shared device
+        # expanded in a policy-only answer). An explicit account-list
+        # demand (列出/清单/明细/名单/哪些账号…) keeps the network
+        # deliverable — the three-intent boundary stays intact.
+        _policy_ask_names_network = (
+            (investigation_concepts.is_policy_citation_original_text_request(text)
+             or investigation_concepts.is_related_policy_citation_request(text))
+            and any(_d == "linked_account" for _d, _f in explain_pairs)
+            and not investigation_concepts.has_explicit_account_list_request(text))
+        _network_oversupplied = ((bool(explain_pairs) and any(
+            _d == "linked_account" for _d, _f in explain_pairs) \
+            and not investigation_concepts.has_account_delivery_intent(text))
+            or _policy_ask_names_network)
+        if not _metric_question and not _network_oversupplied:
             outputs.append(_related_accounts_network_output(account_subject))
         if fired_aspects is not None:
+            if _policy_ask_names_network:
+                fired_aspects.append(
+                    "related_accounts_network:yielded_to_policy_ask")
             fired_aspects.append("related_accounts_network")
     if (investigation_concepts.is_related_account_set_trade_analysis(text)
             or investigation_concepts.is_cross_account_trade_analysis_request(
@@ -1159,7 +1311,28 @@ def deterministic_contract_proposal(
     _explain_intent = (
         investigation_concepts.is_explain_finding_request(text)
         or investigation_concepts.is_rule_criteria_request(text))
-    _emitted_explain_pairs = explain_pairs if _explain_intent else []
+    # U00004/GJ-OPPOSITE-TRADE-RATIO: an "explain" verb serving a
+    # METRIC-calculation question ("explain how the opposite-trade ratio
+    # is calculated [within the linked accounts]") is not a
+    # finding-explanation ask — the domain-paired explain outputs it
+    # produced (real incident TASK-6ed61aee47a0: O2
+    # 为什么「Linked Account Network」被标记为风险) answered a question
+    # the user never asked. Suppress the domain-paired explain outputs
+    # when the request is a reverse-trade-rate question carrying NO
+    # why-vocabulary of its own; a genuine finding-why ask
+    # (为什么 / why is X risky) keeps them, and a compound metric+why ask
+    # keeps them via the why signal. Same suppression-audit pattern as
+    # skipped_policy_intent below.
+    _metric_how_ask = (
+        investigation_concepts.mentions_reverse_trade_rate(text)
+        and not investigation_concepts.WHY_ASK_RE.search(text or ""))
+    _emitted_explain_pairs = (
+        [] if _metric_how_ask
+        else explain_pairs if _explain_intent else [])
+    if fired_aspects is not None and explain_pairs and _metric_how_ask:
+        fired_aspects.append(
+            "explain_compound:skipped_metric_question:"
+            + ":".join(sorted({f.finding_id for _d, f in explain_pairs})))
     if fired_aspects is not None and explain_pairs and not _explain_intent:
         fired_aspects.append(
             "explain_compound:skipped_policy_intent:"
@@ -1183,6 +1356,67 @@ def deterministic_contract_proposal(
             "postcondition_facets": [],
         })
 
+    # Delivery-intent completeness (2026-11-04 acceptance
+    # TASK-7f707394f962): when the GU LLM is unavailable, the
+    # deterministic candidate must still carry the request's FILE
+    # deliverable. The classifier vocabulary
+    # (RequestIntent.ARTIFACT_CASE/FINDING) already recognizes it and the
+    # deterministic plan proposes generate_artifact — but the fallback
+    # CONTRACT previously expressed only the explain output, so the
+    # delivery-intent gate stripped the artifact step and the noise
+    # filter dropped the records step (real incident: the policy and
+    # artifact deliverables of a three-goal EN request were lost). The
+    # anchor follows the U00020 fix-A discipline: a unique explain-
+    # resolved finding scopes the file output to THAT finding; otherwise
+    # the artifact is case-level. Record streams with an address column
+    # are the bounded file family here (withdrawal/transaction).
+    from app.context_resolution import _classify_request_intent
+    from app.models import RequestIntent
+    _artifact_intent = _classify_request_intent(text)
+    # Stream scope (2026-11-05 regression guard): ONLY the withdrawal
+    # stream is covered here. Transaction/trade-stream file asks are
+    # owned by the established WP-2 hedge file closure (its hedge-bound
+    # claim and candidate-set evidence binding are the accepted
+    # semantics) — a generic trade-records file candidate would
+    # suppress that closure and downgrade the accepted claim
+    # (test_u00004_file_delivery_api_v1 / test_wp2_goal_overreach_api_v1
+    # regression: the generic claim displaced 对冲交易明细文件导出).
+    if (_artifact_intent in (RequestIntent.ARTIFACT_CASE,
+                             RequestIntent.ARTIFACT_FINDING)
+            and investigation_concepts.mentions_withdrawals(text)):
+        _file_stream = "withdrawal_records"
+        _label = "提现"
+        _file_finding = (_emitted_explain_pairs[0][1]
+                         if len(_emitted_explain_pairs) == 1 else None)
+        if _file_finding is not None:
+            outputs.append({
+                "claim": (f"发现 {_file_finding.finding_id}"
+                          f"「{_file_finding.title}」的全部{_label}"
+                          "记录文件（含地址）"),
+                "claim_kind": ClaimKind.RETRIEVAL.value,
+                "delivery": "file_export",
+                "subject_ref": _file_finding.finding_id,
+                "scope": ScopeLevel.FINDING_LEVEL.value,
+                "evidence_requirements": [_file_stream],
+                "postcondition_facets": [],
+            })
+            _file_aspect = (f"artifact_file_export:{_file_stream}:"
+                            f"{_file_finding.finding_id}")
+        else:
+            outputs.append({
+                "claim": (f"案件 {account_subject} 的全部{_label}"
+                          "记录文件（含地址）"),
+                "claim_kind": ClaimKind.RETRIEVAL.value,
+                "delivery": "file_export",
+                "subject_ref": account_subject,
+                "scope": record_scope,
+                "evidence_requirements": [_file_stream],
+                "postcondition_facets": [],
+            })
+            _file_aspect = (f"artifact_file_export:{_file_stream}:"
+                            f"{account_subject}")
+        if fired_aspects is not None:
+            fired_aspects.append(_file_aspect)
     if assess_comparison_intent(text):
         outputs.append(_destination_identity_output(record_subject,
                                                     record_scope))
@@ -1331,6 +1565,87 @@ def _normalize_explanation_evidence(outputs: list) -> list:
     return out
 
 
+# U00004 file-delivery closure (PMO Option 1): the USER'S OWN WORDS are
+# the only source of a file deliverable. The goal-understanding LLM may
+# or may not propose the file leg (real-run variance: the SAME compound
+# ask produced the file output in TASK-288d6e252389 / TASK-219873aadac2
+# and lost it in TASK-ae1a634a4f1b) — when the request explicitly asks
+# for a generated file, the accepted contract carries one deterministically.
+_REQUEST_FILE_DELIVERY_RE = re.compile(
+    r"(?:生成|导出|输出|下载|提供)[^。；\n]{0,12}文件"
+    r"|一份[^。；\n]{0,10}文件"
+    r"|(?:generate|export|download|provide)\b[^.\n]{0,30}\bfiles?\b",
+    re.IGNORECASE)
+
+
+def _request_demands_file(request_text: str) -> bool:
+    """Whether the USER'S OWN request text explicitly demands a generated
+    file deliverable (生成/导出/一份…文件). Tight explicit-intent
+    vocabulary only — a plain detail_list query never matches."""
+    return bool(_REQUEST_FILE_DELIVERY_RE.search(request_text or ""))
+
+
+def _apply_request_file_delivery(request_text: str, outputs: list) -> list:
+    """Deterministic file-delivery closure over the FINAL output set.
+
+    Fires ONLY when the user's request text explicitly demands a file,
+    and binds to the HEDGING deliverable the set already carries (the
+    output whose evidence requirements include opposite_trade_relations
+    — its own subject anchors the file). The authored leg mirrors the
+    accepted S6 shape: retrieval kind, delivery=file_export, evidence =
+    the hedge analysis plus the trade stream the bundle composes from
+    (never the chat text). Scope limiter IS the content binding: a set
+    without a hedging deliverable never gains a file leg (other file
+    shapes keep their existing LLM/split paths); an existing file leg
+    (LLM-proposed and user-backed) is never duplicated; without explicit
+    file intent this is identity — the LLM alone can never create a file
+    deliverable the user did not ask for, and plain detail_list queries
+    are untouched."""
+    if not isinstance(outputs, list) or not _request_demands_file(
+            request_text):
+        return outputs
+    if any(isinstance(o, dict) and o.get("delivery") == "file_export"
+           for o in outputs):
+        return outputs        # a file leg already exists — never duplicated
+    subject = None
+    for o in outputs:
+        if not isinstance(o, dict):
+            continue
+        reqs = {str(e) for e in (o.get("evidence_requirements") or [])}
+        if EvidenceType.OPPOSITE_TRADE_RELATIONS.value in reqs:
+            subject = o.get("subject_ref")
+            break
+    subject = (subject or "").strip() or None
+    if subject is None:
+        return outputs        # nothing to bind the file to — never guessed
+    return list(outputs) + [{
+        "claim": "对冲交易明细文件导出",
+        "claim_kind": ClaimKind.RETRIEVAL.value,
+        "claim_description": (
+            "生成集合内部对冲交易候选明细文件：包含候选双方账户、买卖"
+            "方向、资产、交易ID、时间差与价值差，及检索范围与数据覆盖"
+            "边界（候选关系是调查线索，不构成交易意图结论）"),
+        "claim_description_en": (
+            "generate the set-internal hedging-candidate detail file: "
+            "both sides' accounts, trade sides, asset, trade ids, time "
+            "and value gaps, plus the retrieval scope and data-coverage "
+            "boundary (candidates are investigative leads, never proven "
+            "trading intent)"),
+        "subject_ref": subject,
+        "scope": ScopeLevel.CASE_LEVEL.value,
+        "evidence_requirements": [
+            EvidenceType.OPPOSITE_TRADE_RELATIONS.value,
+            EvidenceType.TRANSACTION_RECORDS.value,
+            # the network context: the file carries the related-account
+            # set the pairs were found in (user DoD: the complete list in
+            # the file) — the bundle renders it from this requirement.
+            EvidenceType.NETWORK_RELATIONS.value,
+        ],
+        "postcondition_facets": [],
+        "delivery": "file_export",
+    }]
+
+
 def _apply_output_guards(request_text: str, outputs: list) -> list:
     """Deterministic business-constraint backstops over the FINAL output
     set (applies to aspect-canonicalized AND free-form entries alike):
@@ -1406,6 +1721,18 @@ def _merge_with_candidate(llm_outputs: list, candidate: dict | None) -> list:
     if not candidate:
         return llm_outputs
 
+    def _channel_of(entry) -> str:
+        """Delivery-channel normalizer (F1, 2026-11-05 U00043
+        dual-delivery fix): mirrors RequiredOutput's closed-vocabulary
+        default — a raw proposal dict WITHOUT a delivery key is a
+        detail_list output, never its own channel; missing/None/invalid
+        values normalize to detail_list exactly like the model validator
+        (goal_resolution.py:216-221). Candidate merge signature and
+        coverage therefore discriminate the two delivery channels."""
+        d = (entry.get("delivery")
+             if isinstance(entry, dict) else None)
+        return d if d in ("detail_list", "file_export") else "detail_list"
+
     def _sig(entry) -> tuple:
         if not isinstance(entry, dict):
             return (str(entry),)
@@ -1413,13 +1740,53 @@ def _merge_with_candidate(llm_outputs: list, candidate: dict | None) -> list:
                 str(entry.get("subject_ref") or ""),
                 tuple(sorted({str(e) for e in
                               (entry.get("evidence_requirements")
-                               or [])})))
+                               or [])})),
+                _channel_of(entry))
+
+    def _covers(covered, entry) -> bool:
+        """U00004/GJ-OPPOSITE-TRADE-RATIO: the documented "already
+        covers" semantics for EXPLANATION candidates — same deliverable
+        kind and subject, and the covering entry's evidence categories
+        INTERSECT the candidate's (evidence_requirements is an ANY-set:
+        the shared category means both entries are satisfiable by the
+        same evidence, so the deterministic twin adds no demand and no
+        facts the LLM-authored output would not render). Exact-signature
+        entries keep the canonical-dict preference below; LLM outputs
+        are never dropped by this check — only candidates are.
+        F1 (2026-11-05 U00043): the channels must MATCH — a file_export
+        output never covers a detail_list candidate (or vice versa):
+        different delivery channels are different user deliverables."""
+        if _channel_of(covered) != _channel_of(entry):
+            return False
+        if str(covered.get("claim_kind") or "") \
+                != str(entry.get("claim_kind") or ""):
+            return False
+        if str(covered.get("subject_ref") or "") \
+                != str(entry.get("subject_ref") or ""):
+            return False
+        cov = {str(e) for e in
+               (covered.get("evidence_requirements") or [])}
+        req = {str(e) for e in
+               (entry.get("evidence_requirements") or [])}
+        return bool(req) and bool(cov & req)
 
     merged = list(llm_outputs)
     for entry in candidate.get("required_outputs", []):
         sig = _sig(entry)
         hit = next((i for i, e in enumerate(merged) if _sig(e) == sig),
                    None)
+        # U00004/GJ-OPPOSITE-TRADE-RATIO coverage dedup (candidates only,
+        # NON-exact candidates): a candidate whose explanation
+        # deliverable an LLM-authored output ALREADY COVERS — same kind
+        # and subject, intersecting evidence categories, but a different
+        # signature (real incident TASK-6ed61aee47a0: the zh
+        # explain_compound twin beside the LLM's own EN why for the same
+        # finding) — is a semantic duplicate and is dropped. Exact
+        # signature matches keep the canonical-dict preference above;
+        # LLM outputs are never dropped by this check.
+        if hit is None and isinstance(entry, dict) and any(
+                _covers(e, entry) for e in llm_outputs):
+            continue
         if hit is None:
             merged.append(entry)          # dropped by the LLM → re-admit
         elif str(merged[hit].get("claim")) != str(entry.get("claim")):
@@ -1480,6 +1847,16 @@ def heuristic_goal(request_text: str, resolved_finding_id: str | None,
             subject_ref=resolved_finding_id or case_id,
             reason="inferred from the request (deterministic fast path)",
             source="heuristic",
+            # F3 (2026-11-05 U00043): record the proposal ORIGIN — the
+            # deterministic candidate is guard-clean bounded recognition,
+            # and the G7'' delivery gate grades it "candidate" (delivery
+            # within the declared boundary). Without this field the gate
+            # grades "unknown" and fail-closes artifact generation even
+            # when the candidate itself recognized the artifact intent
+            # (real incident TASK-ff03b5e8a68f: the EN dual-delivery ask
+            # lost its file leg to the UNKNOWN grade while the detail
+            # channel delivered).
+            proposal_source="heuristic",
             request_text=text[:400],
             contract_proposal=proposal,
         )
@@ -1493,6 +1870,9 @@ def heuristic_goal(request_text: str, resolved_finding_id: str | None,
                 subject_ref=resolved_finding_id or case_id,
                 reason="inferred from the request (deterministic fast path)",
                 source="heuristic",
+                # F3: proposal origin recorded — see the cross-account
+                # construction above for the G7'' grading rationale.
+                proposal_source="heuristic",
                 request_text=text[:400],
                 contract_proposal=proposal,
                 decomposed_finding_ids=decomposed,
@@ -1506,6 +1886,8 @@ def heuristic_goal(request_text: str, resolved_finding_id: str | None,
         reason="the investigation objective could not be determined from "
                "the request",
         source="heuristic",
+        # F3: the UNRESOLVED rep has no accepted proposal to grade — G7''
+        # keeps its honest fail-closed for this shape (no origin change).
         request_text=text[:400],
         # request-coverage closure: goal TYPING may stay unresolved while
         # the request still deterministically names supported deliverable
@@ -1584,7 +1966,20 @@ def _build_goal_prompt(request_text: str, resolved_finding_id: str | None,
             "\"goal_type\": null, with one required_outputs entry per "
             "deliverable in request order. Reserve \"AMBIGUOUS\" for "
             "requests where you genuinely cannot tell WHICH single "
-            "objective the user means. A claim is "
+            "objective the user means. "
+            "Channel split rule (2026-11-05 U00043 dual-delivery fix): "
+            "when the user asks for the SAME evidence stream to be "
+            "(a) shown as details in the dialogue (发我/展示/列出 … "
+            "明细/记录 wording) AND (b) generated as a file (生成一份文件/"
+            "生成文件 wording), that is TWO distinct deliverables — output "
+            "ONE entry with \"delivery\": \"detail_list\" for the dialogue "
+            "details and ONE entry with \"delivery\": \"file_export\" for "
+            "the generated file, in request order. Never merge the two "
+            "channels into a single file_export entry. Conversely, a "
+            "request that ONLY asks for the file (生成一份文件, no "
+            "detail-display wording) is ONE file_export deliverable, and "
+            "a request that ONLY asks for details in dialogue is ONE "
+            "detail_list deliverable. A claim is "
             "the judgment requested — never an evidence type, never a tool "
             "name. claim_kind: existence_check when the user asks whether "
             "something is present (e.g. whether hedging trades exist); "
@@ -1601,6 +1996,12 @@ def _build_goal_prompt(request_text: str, resolved_finding_id: str | None,
             "gets Chinese sentences); keep ids and technical terms "
             "verbatim. The claim_description is shown to the user as a "
             "section header.\n"
+            "Delivery semantics in claims: use ONLY delivery words the "
+            "user themselves used. NEVER add downloadable, download, "
+            "export, share, send, email or upload to a claim or "
+            "claim_description when the user did not use those words. "
+            "The system GENERATES artifacts; an artifact is never "
+            "downloadable, exported, emailed or sent.\n"
             "Each output MAY also carry \"postcondition_facets\": "
             "[\"destination_address_identity\"] — propose this facet when "
             "the output's claim requires a deterministic same-vs-different "
@@ -1853,13 +2254,18 @@ def understand_goal(
                 _gen_kwargs = {"messages": _messages,
                                "max_tokens": _gu_max_tokens,
                                "temperature": 0.0}
-                if {"timeout", "sdk_max_retries", "stream"} <= set(
+                if {"timeout", "sdk_max_retries", "stream",
+                    "connection_retry"} <= set(
                         _gen_params):
                     # Q2: GU uses streaming — keeps the connection alive
                     # during long thinking (live-verified on this endpoint).
+                    # R2.2.3 Phase 2: GU opts into the bounded
+                    # connection-retry budget (max 2 physical calls; the
+                    # provider enforces the whitelist and the budget).
                     _gen_kwargs["timeout"] = float(_gu_timeout)
                     _gen_kwargs["sdk_max_retries"] = _gu_sdk_retries
                     _gen_kwargs["stream"] = True
+                    _gen_kwargs["connection_retry"] = True
                 response_text = provider.generate(**_gen_kwargs)
                 # A-fix observability: persist this call's per-application-
                 # attempt records (success/empty_response per attempt).
@@ -1950,6 +2356,12 @@ def understand_goal(
                     outputs = _split_fused_stream_outputs(outputs)
                     outputs = _normalize_explanation_evidence(outputs)
                     outputs = _apply_output_guards(request_text, outputs)
+                    # U00004 (PMO Option 1): the file deliverable is
+                    # guaranteed by the USER'S OWN WORDS, never by LLM
+                    # variance — applied to the FINAL guarded set so no
+                    # substitution/guard/merge step can silently drop it.
+                    outputs = _apply_request_file_delivery(request_text,
+                                                           outputs)
                 if isinstance(outputs, list) and outputs:
                     # the accepted set's origin: LLM-reviewed ONLY when the
                     # model's own outputs formed the proposal; a candidate

@@ -73,7 +73,8 @@ from app.skills import (
     eligible_skills_for_finding,
 )
 from app.goal_postconditions import (
-    RECORDS_CHAT_CAP, derive_goal_outcome, requires_explanation_evidence,
+    GoalOutcome, RECORDS_CHAT_CAP, derive_goal_outcome,
+    requires_explanation_evidence,
     _claim_references_prior_detection)
 from app import telemetry as _telemetry
 from app import target_validity
@@ -1067,6 +1068,14 @@ class AgentLoopState(BaseModel):
                            for t in (o.evidence_requirements or [])):
                         if o.satisfaction != OutputSatisfaction.SATISFIED:
                             return False
+            # R2.2.3 G7 backstop (contract-less defense): a delivery that
+            # exists only because goal coverage was none/unknown never
+            # completes the task. The G7'' gate blocks generation up
+            # front; this is the criteria-side backstop, not a substitute.
+            if self.goal_contract is None \
+                    and _artifact_delivery_intent(self) \
+                    and _goal_coverage_of(self) in ("none", "unknown"):
+                return False
             return True
         # question_answered: an authoritative, non-gap success observation
         for obs in self.observations:
@@ -1096,6 +1105,315 @@ class AgentLoopState(BaseModel):
         if last.get("outcome") == ToolResultOutcome.EMPTY.value:
             return True
         return last.get("semantic_status") == "NO_MATCH"
+
+
+# ---------------------------------------------------------------------------
+# R2.2.3 — goal coverage grading and delivery evidence (design-frozen pure
+# derivations over persisted state; no I/O, no new persisted fields)
+# ---------------------------------------------------------------------------
+
+def _deterministic_withdrawal_records_fallback_plan(
+        failure_code: str, state, task, findings):
+    """F3 (2026-11-05 U00043-A): deterministic account-level
+    withdrawal-records planning fallback — ONLY for planner-LLM shape
+    failures (LLM_OUTPUT_INVALID) on an accepted contract whose every
+    output is a pure account-level withdrawal_records delivery.
+
+    Real incident TASK-8b67ad17e3ec: the planner LLM returned a 45-char
+    malformed payload (LLM_OUTPUT_INVALID) for a pure account-level
+    withdrawal-records ask; the loop terminated planning_failure with
+    zero tools while the SAME records delivered fine through the
+    file-only/dual shapes (whose plans anchored the withdrawal stream at
+    plan time). The fallback reuses the existing deterministic coverage
+    builder (coverage_supplement_steps over an empty plan → the FIRST
+    preferred eligible step) and the existing execution-time
+    STREAM-RULE-FIRST anchoring — the contract keeps its account-level
+    subject and delivery; the step's finding argument is the RP
+    evidence-view binding over the finding-INVARIANT record population
+    (shared-stream findings expose the same records), never a
+    finding-level attribution of the request.
+
+    Returns the fallback Plan, or None when ANY gate refuses (the caller
+    keeps the honest planning_failure). Single construction, no retry,
+    no LLM involvement."""
+    if failure_code != "LLM_OUTPUT_INVALID":
+        return None
+    contract = getattr(state, "goal_contract", None)
+    if contract is None or not (contract.outputs or []):
+        return None
+    from app.goal_resolution import _RECORD_STREAM_FAMILIES
+    from app.skills import STEP_TOOL_MAP
+
+    def _vals(o):
+        return {(_e.value if hasattr(_e, "value") else str(_e))
+                for _e in (o.evidence_requirements or [])}
+
+    strict = {"withdrawal_records"}
+    for o in contract.outputs:
+        reqs = _vals(o)
+        if not reqs or reqs != strict:
+            return None
+    if not findings:
+        return None
+    stream_findings = [f for f in findings
+                       if "withdrawal" in (getattr(f, "title", "")
+                                           or "").lower()]
+    if not stream_findings:
+        return None
+    binding = STEP_TOOL_MAP.get("inspect_withdrawals")
+    if binding is None:
+        return None
+    anchor = stream_findings[0]
+    from app.models import Plan as _Plan, PlanStep as _PlanStep, \
+        PlanStatus as _PlanStatus, PlanStepStatus as _StepStatus
+    from app.planning_coverage import step_covers_output
+    step = _PlanStep(
+        step_id="S1", type="inspect_withdrawals",
+        tool_name=binding.tool_name,
+        arguments={"view": "evidence", "stream": "withdrawals",
+                   "finding_id": anchor.finding_id,
+                   "case_id": state.case_id},
+        status=_StepStatus.PENDING)
+    # coverage gate: EVERY accepted output must be covered by this step
+    # (the account-level subject is served by the finding-INVARIANT
+    # record population; an uncovered output refuses the fallback)
+    for o in contract.outputs:
+        if not step_covers_output(step, o):
+            return None
+    return _Plan(
+        plan_id=f"deterministic-{task.task_id}",
+        investigation_id=state.investigation_id,
+        goal=state.goal,
+        steps=[step],
+        created_at=None,
+    )
+
+
+def _suppress_agent_stream_anchor_focus(goal: str, goal_contract,
+                                        focus_source) -> bool:
+    """Delivery-boundary focus suppression (2026-11-05 U00043-A fix).
+
+    The deterministic stream anchor (ContextResolver._stream_anchor)
+    legitimately resolves an ACCOUNT-LEVEL records ask (「把此账号的提现
+    明细发我」) to the case's withdrawal finding by TITLE metadata —
+    focus_source=agent_resolved, typically with no evidence kind. If
+    that auto focus is adopted for an ACCOUNT-LEVEL records contract,
+    the AL-3.5.1 G1 admission correctly reports TARGET_UNGROUNDED (the
+    resolution layer never declares an evidence kind for it) and a pure
+    detail-list ask blocks — while the same records deliver fine through
+    the case-level path the file-only/dual shapes use (planner anchors
+    the stream at plan time). Returns True when ALL hold:
+
+    - the focus source is AGENT_RESOLVED (never user_selected — an
+      explicit user selection is authoritative and always kept);
+    - an accepted contract exists with NO finding-id subject
+      (account-level records retrieval — a finding-anchored contract
+      keeps its anchor via the contract-subject re-anchor);
+    - the request names NO finding id explicitly (an explicitly named
+      finding target is preserved);
+    - the contract's evidence requirements are record streams (this is
+      a records-delivery contract; explanation/policy contracts keep
+      their own focus semantics).
+
+    Pure predicate — the caller drops the auto focus and proceeds
+    case-level; G1, flags and the delivery vocabulary are untouched."""
+    if (focus_source or "") != FocusSource.AGENT_RESOLVED.value:
+        return False
+    if goal_contract is None:
+        return False
+    if any(re.match(r"^F\d+$", (o.subject_ref or "").strip())
+           for o in goal_contract.outputs):
+        return False
+    if target_validity._mentioned_finding_ids(goal):
+        return False
+    from app.goal_resolution import _RECORD_STREAM_FAMILIES
+
+    def _stream_val(e):
+        return e.value if hasattr(e, "value") else str(e)
+
+    return any(
+        {_stream_val(e) for e in (o.evidence_requirements or [])}
+        & set(_RECORD_STREAM_FAMILIES)
+        for o in goal_contract.outputs)
+
+
+def _artifact_delivery_intent(state) -> bool:
+    """R2.2.3: the request carries a delivery-generation goal
+    (ARTIFACT_CASE / ARTIFACT_FINDING intent)."""
+    from app.context_resolution import _classify_request_intent
+    from app.models import RequestIntent
+    return _classify_request_intent(state.goal or "") in (
+        RequestIntent.ARTIFACT_CASE, RequestIntent.ARTIFACT_FINDING)
+
+
+def _goal_coverage_of(state) -> str:
+    """R2.2.3 coverage-evidence grading — evidence strength, NEVER proof
+    that the original request was fully represented:
+      reviewed  : accepted contract whose final output set was authored by
+                  the GU LLM's own review of the original request
+      candidate : accepted contract from the deterministic bounded
+                  candidate (guard-clean recognition, never a confirmed
+                  review)
+      unknown   : accepted contract whose proposal origin was not recorded
+                  — never inherits delivery permission
+      none      : no accepted contract (heuristic fallback, UNRESOLVED,
+                  multi-category conflict, ...)"""
+    decision = state.goal_contract_decision or {}
+    if state.goal_contract is not None:
+        if decision.get("outcome") != "contract_accepted":
+            return "none"
+        src = (state.goal_representation or {}).get("proposal_source")
+        if src == "llm":
+            return "reviewed"
+        if src == "heuristic":
+            return "candidate"
+        return "unknown"
+    return "none"
+
+
+def _delivery_evidence_of(state) -> dict:
+    """R2.2.3 delivery-evidence derivation over existing observations
+    (declared plan delivery vs produced artifact vs source/parity).
+    Criteria-side BACKSTOP only — never a substitute for the G7''
+    pre-generation gate."""
+    produced = bool(state.artifact_ids)
+    declared_records = any(
+        (s.get("arguments") or {}).get("source_streams")
+        for s in (state.plan_steps or [])
+        if s.get("type") == "generate_artifact")
+    parity_checked = any(
+        (o.get("summary") or {}).get("record_parity_checked")
+        for o in state.observations or [])
+    if not produced:
+        return {"verdict": "not_delivery"}
+    if declared_records and not parity_checked:
+        return {"verdict": "unverified"}
+    return {"verdict": "verified"}
+
+
+def _heuristic_category_count(state) -> int:
+    """R2.2.3 None-C signal: how many DISTINCT bounded heuristic
+    categories the request text matches. Reads the EXISTING pattern table
+    (no new keywords); ≥2 distinct matches contradict the single
+    goal_type the fallback produced."""
+    from app.goal_resolution import _HEURISTIC_RULES
+    text = (state.goal_representation or {}).get("request_text") \
+        or state.goal or ""
+    return sum(1 for _gt, pat in _HEURISTIC_RULES if pat.search(text))
+
+
+def _delivery_gate_block(state, step) -> dict | None:
+    """R2.2.3 G7'' — pre-generation delivery safety gate. Returns a block
+    descriptor when the pending generate_artifact step must NOT execute;
+    None lets the step proceed. Blocks BEFORE execution — a post-hoc
+    criteria downgrade never substitutes for this gate."""
+    if step is None or step.type != "generate_artifact":
+        return None
+    if not _artifact_delivery_intent(state):
+        return None
+    coverage = _goal_coverage_of(state)
+    if coverage in ("reviewed", "candidate"):
+        return None                     # delivery within declared boundary
+    decision = state.goal_contract_decision or {}
+    repr_obj = state.goal_representation or {}
+    if coverage == "unknown":
+        return {
+            "branch": "UNKNOWN",
+            "goal_outcome": GoalOutcome.PARTIAL.value,
+            "stop_reason": StopReason.CLARIFICATION_NEEDED,
+            "reason": ("accepted contract but the proposal origin was not "
+                       "recorded; delivery generation requires a verified "
+                       "coverage boundary")}
+    # WP-2 Version B (S3, Final Ruling 7): an HSG step carrying the
+    # admission's verification injection is ADMITTED (bound_ready) — the
+    # per-target admission owns the HSG class, so neither the None-C
+    # category heuristic nor the None-B block may override a verified
+    # binding. This check PRECEDES the None-C branch (the category
+    # heuristic would otherwise preempt an admitted target). None-C's
+    # legacy fail-closed stands for any HSG step WITHOUT the injection
+    # (e.g. a post-admission re-plan step the admission never saw).
+    if decision.get("outcome") == "heuristic_single_goal" \
+            and (step.arguments or {}).get("expected_records_digest"):
+        return None
+    if repr_obj.get("goal_resolution") == "UNRESOLVED" \
+            or _heuristic_category_count(state) >= 2:
+        # None-C takes precedence over None-B when both condition sets
+        # match (proposal miss ∧ unreliable structure): the more
+        # conservative terminal wins — both are frozen R2.2.3 conditions.
+        return {
+            "branch": "None-C",
+            "goal_outcome": GoalOutcome.UNANSWERABLE.value,
+            "stop_reason": StopReason.CLARIFICATION_NEEDED,
+            "reason": ("the request's goal structure could not be "
+                       "reliably identified; delivery generation is "
+                       "blocked pending clarification")}
+    if decision.get("outcome") == "heuristic_single_goal":
+        # WP-2 Version B (S3): None-B fail-closed for non-injected HSG
+        # artifact steps (no accepted contract, no verified binding) —
+        # injected steps were already admitted above.
+        return {
+            "branch": "None-B",
+            "goal_outcome": GoalOutcome.PARTIAL.value,
+            "stop_reason": StopReason.CLARIFICATION_NEEDED,
+            "reason": ("no accepted contract: the fallback produced a "
+                       "single artifact goal without evidence that the "
+                       "whole request was covered")}
+    return None
+
+
+def _cap_complete(outcome_value: str) -> str:
+    """R2.2.3 G6 (WP-1): request completeness is UNKNOWN on every path —
+    no independent completeness evidence exists — so a derived COMPLETE
+    is capped at PARTIAL with the reviewed-scope disclosure. COMPLETE
+    stays unreachable until a completeness-proof mechanism exists
+    (frozen matrix; explicit design limitation)."""
+    return "partial" if outcome_value == "complete" else outcome_value
+
+
+def _gate_clarification_response(state) -> str:
+    """R2.2.3 G7'' clarification terminal: already-obtained read-only
+    facts are presented, followed by the clarification framing. Never
+    renders a whole-request completion claim."""
+    en = _turn_lang(state) == "en"
+    decision = state.goal_contract_decision or {}
+    if decision.get("outcome") == "contract_accepted":
+        head = ("The accepted scope has been investigated, but the "
+                "delivery boundary for this request was not recorded, "
+                "so no artifact was generated. Please confirm the "
+                "delivery scope." if en else
+                "已接受范围内的事实已调查如上；但该交付请求的范围未被记录，"
+                "为避免误导性交付，系统未生成 artifact。请确认交付范围。")
+    elif decision.get("outcome") == "heuristic_single_goal":
+        head = ("This request appears to include a delivery-generation "
+                "goal, but the system could not reliably establish the "
+                "request's complete goal structure, so no artifact was "
+                "generated. The verified facts obtained so far are below; "
+                "please restate the remaining goals separately (for "
+                "example: first the rule threshold, then the trade-record "
+                "export)." if en else
+                "本次请求包含交付生成（artifact）类目标，但系统未能可靠建立"
+                "该请求的完整目标结构，因此未生成任何 artifact。以下为本次"
+                "已获得的可信事实；其余目标请补充说明或分别提出（例如：先"
+                "询问规则阈值，再单独要求导出交易明细）。")
+    else:
+        head = ("The request's goal structure could not be reliably "
+                "identified, so no delivery was generated. The verified "
+                "facts obtained so far are below; please clarify the "
+                "intended goals." if en else
+                "无法可靠识别该请求的目标结构，因此未生成交付。以下为本次"
+                "已获得的可信事实；请澄清您期望的目标。")
+    lines = [head]
+    facts = _case_level_answer_lines(state) or _finding_answer_lines(state)
+    if facts:
+        lines.append("")
+        lines.extend(facts)
+    lines.append("")
+    lines.append(
+        "整体结果: 已按上述已确认范围呈现；交付类目标未执行，等待澄清。"
+        if not en else
+        "Overall result: only the confirmed scope above is presented; "
+        "the delivery goal was NOT executed pending clarification.")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1419,6 +1737,97 @@ def _observation_fingerprint(obs: dict[str, Any]) -> str | None:
         return None
 
 
+def _uncovered_actionable_outputs(state: AgentLoopState) -> list[str]:
+    """U00004 bounded-partial STOP predicate (PMO-approved): outputs that
+    are neither finally answered nor at a capability boundary — work the
+    loop could still legally do. Deterministic over the GSP-6 coverage
+    records (`state.planning_coverage`, recomputed at EVERY plan
+    adoption, covering ALL contract outputs):
+
+    - COVERED                    the plan's own path — its execution state
+                                 is judged elsewhere (pending steps /
+                                 satisfaction), not here;
+    - NOT_COVERED_BY_PLAN        the registry HAS a legal path and the
+                                 plan omitted it → actionable (refuse);
+    - NO_ELIGIBLE_CAPABILITY     capability boundary — already marked
+                                 UNSUPPORTED at admission → not actionable;
+    - missing record / missing contract coverage verdict → conservative
+      refuse (never stop on unknown coverage)."""
+    contract = state.goal_contract
+    if contract is None:
+        return ["no-contract"]          # conservative: never allow
+    cov = {r.get("output_id"): r
+           for r in (state.planning_coverage or [])}
+    uncovered: list[str] = []
+    for out in contract.outputs:
+        if out.satisfaction == OutputSatisfaction.SATISFIED:
+            continue
+        r = cov.get(out.output_id)
+        if r is None:
+            uncovered.append(out.output_id)     # unknown coverage → refuse
+        elif r.get("coverage_status") == "not_covered_by_plan":
+            uncovered.append(out.output_id)     # actionable omission
+    return uncovered
+
+
+def _has_boundary_disclosure(state: AgentLoopState, output) -> bool:
+    """Whether THIS output's associated observations carry the structured
+    bounded-retrieval disclosure (`summary.retrieval.truncated` — set by
+    the analysis tool from the real retrieval window, e.g.
+    `truncated_reasons: ['account_set:retrieval_budget_exhausted(...)]'`).
+    Structured evidence only: no natural-language detail matching. An
+    output without the structured disclosure on its own associated
+    evidence has no proven boundary and is refused."""
+    for o in state.observations or []:
+        if output.output_id not in (o.get("for_outputs") or []):
+            continue
+        if o.get("outcome") not in ("success", "empty"):
+            continue
+        summary = o.get("summary") or {}
+        if not isinstance(summary, dict):
+            continue
+        retrieval = summary.get("retrieval") or {}
+        if isinstance(retrieval, dict) and retrieval.get("truncated"):
+            return True
+    return False
+
+
+def _bounded_partial_stop_allowed(state: AgentLoopState) -> bool:
+    """U00004 bounded partial completion (PMO-approved, flag-gated):
+    accept a STOP proposal when the run's outputs are all in honest final
+    states within a DISCLOSED data boundary —
+      - no pending steps (planned work fully executed);
+      - no uncovered actionable outputs (GSP-6 coverage verdicts);
+      - every output SATISFIED, or PARTIALLY_SUPPORTED with structured
+        bounded-retrieval evidence on its OWN associated observations;
+      - hard file_export deliverables must be SATISFIED (a pending file
+        is never blessed by a data boundary);
+      - UNRESOLVED/UNSUPPORTED/PENDING are refused (v1 scope).
+    The outcome stays partial (goal_outcome derives from the mixed
+    satisfactions) — this predicate never rewrites any state."""
+    from app.config import settings as _cfg
+    if not getattr(_cfg, "ENABLE_BOUNDED_PARTIAL_STOP", False):
+        return False
+    if state.goal_contract is None:
+        return False
+    if state.pending_steps():
+        return False
+    if _uncovered_actionable_outputs(state):
+        return False
+    for out in state.goal_contract.outputs:
+        if (out.delivery or "detail_list") == "file_export" \
+                and out.satisfaction != OutputSatisfaction.SATISFIED:
+            return False                        # hard deliverable unmet
+        if out.satisfaction == OutputSatisfaction.SATISFIED:
+            continue
+        if out.satisfaction == OutputSatisfaction.PARTIALLY_SUPPORTED:
+            if not _has_boundary_disclosure(state, out):
+                return False                    # no proven boundary
+            continue
+        return False                            # PENDING/UNRESOLVED/etc.
+    return True
+
+
 class LoopPolicy:
     """System-side decision enforcement. The proposal is INPUT; this policy
     is authoritative. Minimal, explainable rules in fixed order."""
@@ -1502,6 +1911,22 @@ class LoopPolicy:
                     decision=LoopDecision.STOP,
                     reason="maximum investigation iterations reached",
                     coerced_from="STOP", limit_reached=True)
+            # U00004 bounded partial completion (flag-gated): every output
+            # is final within a DISCLOSED data boundary and no planned or
+            # uncovered actionable work remains — a STOP proposal is
+            # honored instead of forcing a re-plan that can only repeat
+            # executed work (real incident TASK-14dcda628770: two
+            # no-information re-plans before AL-2.13 stopped the run).
+            # The terminal stays completed / BOUNDED_DATA / partial —
+            # never a satisfaction rewrite.
+            if _bounded_partial_stop_allowed(state):
+                return EnforcedDecision(
+                    decision=LoopDecision.STOP,
+                    reason=(
+                        "bounded partial completion: all outputs are "
+                        "final within the disclosed data boundary; no "
+                        "uncovered actionable work remains"),
+                    coerced_from="STOP")
             coerced_to = (LoopDecision.CONTINUE
                           if state.pending_steps() else LoopDecision.RE_PLAN)
             return EnforcedDecision(
@@ -2456,6 +2881,19 @@ class AgentLoopRunner:
                     StopReason.GOAL_SATISFIED, "", _now)
                 result.response = guidance     # the answer IS the guidance
                 return result
+            # Delivery-boundary focus suppression (2026-11-05 U00043-A
+            # fix): an ACCOUNT-LEVEL records contract keeps the case-level
+            # path — the stream anchor's auto finding focus must not
+            # upgrade it into a finding-level run (which G1 would then
+            # honestly block as UNGROUNDED). See
+            # _suppress_agent_stream_anchor_focus for the full boundary.
+            if (ctx.focused_finding_id
+                    and _suppress_agent_stream_anchor_focus(
+                        goal, state.goal_contract,
+                        ctx.focus_source.value if ctx.focus_source
+                        else None)):
+                ctx = ctx.model_copy(update={"focused_finding_id": None,
+                                              "focus_source": None})
             state.focused_finding_id = ctx.focused_finding_id
             state.focus_source = (ctx.focus_source.value
                                   if ctx.focus_source else None)
@@ -2601,10 +3039,11 @@ class AgentLoopRunner:
             self._persist(state, task)
             task.status = TaskStatusV2.EXECUTING
         else:
-            plan, failure_code = self._plan(planner, goal, ctx, eligible_ids,
-                                            finding_caps,
-                                            goal_contract=state.goal_contract,
-                                            findings=findings)
+            plan, failure_code = self._plan(
+                planner, goal, ctx, eligible_ids,
+                finding_caps,
+                goal_contract=state.goal_contract,
+                findings=findings)
             # U00008 planner reliability fix: persist the planner's LLM
             # attempt diagnostics (safe fields only — stop_reason, usage,
             # content block types/lengths; never prompt or reasoning
@@ -2620,6 +3059,64 @@ class AgentLoopRunner:
                 "llm_called": bool(_llm_diag and _llm_diag.get("called")),
                 "detail": _llm_diag,
             }
+            if plan is None \
+                    and failure_code == "PLANNING_CLARIFICATION_NEEDED":
+                # R2.2.3 WP-2 Version B (S3): the Version A planner gate
+                # is RETIRED (Final Ruling 7) — no planner returns this
+                # code anymore. The HSG delivery decision now belongs to
+                # the per-target admission service invoked below (after
+                # plan adoption). This branch is retained ONLY as a
+                # bounded dead-code guard for any residual emitter; it
+                # keeps the same frozen terminal semantics.
+                state.goal_outcome = GoalOutcome.PARTIAL.value
+                _zh = _turn_lang(state) == "zh"
+                _clarify = (
+                    "本次请求包含交付生成（artifact）类目标；由于当前目标"
+                    "理解来自确定性启发式分类（单一目标候选，未经模型审查"
+                    "确认完整目标结构），系统未生成 artifact。请补充说明"
+                    "交付的具体范围（例如候选集、 finding 或时间范围），"
+                    "或将其作为独立请求分别提出。"
+                    if _zh else
+                    "This request includes a delivery-generation (artifact) "
+                    "goal; the current goal understanding comes from the "
+                    "deterministic heuristic classification (a single-goal "
+                    "candidate whose complete goal structure was not "
+                    "model-verified), so no artifact was generated. Please "
+                    "clarify the delivery scope (candidate set, finding, "
+                    "or time range) or submit it as a separate request.")
+                return self._terminate(
+                    state, task, AgentStatus.BLOCKED,
+                    StopReason.CLARIFICATION_NEEDED,
+                    _clarify,
+                    _now, plan=None)
+            if plan is None:
+                # F3 (2026-11-05 U00043-A): deterministic account-level
+                # withdrawal-records planning fallback — ONLY for
+                # LLM_OUTPUT_INVALID shape failures on an accepted pure
+                # account-level withdrawal_records contract. The failed
+                # LLM plan never entered execution, so there is no
+                # duplicate execution; the fallback plan is constructed
+                # once and flows through the SAME coverage admission /
+                # supplement / delivery gates as an LLM plan. Any other
+                # failure class keeps the honest planning_failure.
+                if failure_code == "LLM_OUTPUT_INVALID":
+                    plan = _deterministic_withdrawal_records_fallback_plan(
+                        failure_code, state, task, findings)
+                    if plan is not None:
+                        state.decisions.append({
+                            "iteration": state.iteration,
+                            "decision":
+                                "PLANNING_FALLBACK_DETERMINISTIC_RECORDS",
+                            "reason": ("F3: planner LLM_OUTPUT_INVALID on "
+                                       "an account-level "
+                                       "withdrawal_records contract — "
+                                       "deterministic records plan adopted "
+                                       "(finding-invariant stream anchor "
+                                       "resolved at execution; the "
+                                       "contract subject and delivery are "
+                                       "unchanged)"),
+                            "source": "heuristic",
+                        })
             if plan is None:
                 # per-code accurate feedback: an empty model response, a
                 # timeout, rate limiting, a misconfiguration, and a genuine
@@ -2760,6 +3257,128 @@ class AgentLoopRunner:
             self._persist(state, task)
             task.status = TaskStatusV2.EXECUTING
 
+        # R2.2.3 WP-2 Version B (S3): per-target delivery admission —
+        # runs on BOTH the initial and resume paths, AFTER all
+        # post-adoption transforms (the plan is final) and BEFORE any
+        # artifact execution (frozen placement, Final Ruling 8-adjacent).
+        # Replaces the retired Version A unconditional planner gate for
+        # the HSG class; None-C/UNKNOWN/criteria fallbacks and the
+        # Case Intake Option A behavior are untouched (the service
+        # passes non-ARTIFACT intents through).
+        if getattr(settings, "ENABLE_GOAL_SEMANTIC_CONTRACT", False):
+            from app.delivery_admission import admit_delivery_targets
+            _inv_tasks: set[str] = set()
+            if self.store is not None:
+                try:
+                    _inv_tasks = {t.task_id for t in
+                                  self.store.list_by_investigation(
+                                      state.investigation_id)}
+                except Exception:
+                    logger.exception("admission task listing failed")
+            admission = admit_delivery_targets(
+                goal_contract=state.goal_contract,
+                decision_outcome=(state.goal_contract_decision
+                                  or {}).get("outcome"),
+                request_text=goal,
+                plan_steps=[{"step_id": s.step_id, "type": s.type,
+                             "arguments": dict(s.arguments)}
+                            for s in plan.steps],
+                session_sets=self._session_candidate_sets(
+                    state.investigation_id),
+                investigation_task_ids=_inv_tasks,
+                case_id=state.case_id)
+            if admission.get("mode") == "admitted":
+                if admission["invalid"]:
+                    for rec in admission["invalid"]:
+                        state.decisions.append({
+                            "iteration": state.iteration,
+                            "decision": "ADMISSION_INVALID_TARGET",
+                            "reason": ("R2.2.3 WP-2 B admission: "
+                                       + rec["delivery_target_id"]
+                                       + " fail-closed ("
+                                       + rec["reason"] + ")"),
+                            "source": "heuristic",
+                        })
+                    # strip the rejected targets' steps BEFORE any
+                    # execution — zero side effects for failed targets —
+                    # and drop them from the persisted plan mirror (the
+                    # audit snapshot must reflect the plan that runs)
+                    _bad = {r["step_id"] for r in admission["invalid"]}
+                    plan.steps[:] = [s for s in plan.steps
+                                     if s.step_id not in _bad]
+                    state.plan_steps[:] = [
+                        s for s in state.plan_steps
+                        if s.get("step_id") not in _bad]
+                    for other in plan.steps:
+                        other.depends_on = [
+                            d for d in (other.depends_on or [])
+                            if d not in _bad]
+                    self._persist(state, task)
+                if admission["valid"]:
+                    for inj in admission["valid"]:
+                        for s in plan.steps:
+                            if s.step_id != inj["step_id"]:
+                                continue
+                            s.arguments.update({
+                                "source_kind": inj["source_kind"],
+                                "set_ref": inj["set_ref"],
+                                "candidate_records":
+                                    inj["candidate_records"],
+                                "bounded_data": inj["bounded_data"],
+                                "source_task_id": inj["source_task_id"],
+                                "expected_records_digest":
+                                    inj["expected_records_digest"],
+                                "expected_binding":
+                                    inj["expected_binding"],
+                                "delivery_target_id":
+                                    inj["delivery_target_id"],
+                                "source_step_id":
+                                    (inj["expected_binding"] or {})
+                                    .get("source_step_id"),
+                            })
+                            break
+                    self._persist(state, task)
+                # keep the persisted plan mirror in sync with the
+                # post-admission mutations (strips/injections) — the
+                # audit snapshot must reflect the plan that will execute
+                self._sync_plan_mirror(state, plan)
+                if not admission["valid"]:
+                    # ALL targets fail-closed (V1: single-target plans;
+                    # a mixed valid/invalid outcome is structurally
+                    # unreachable under V1 pairing — NOT PROVEN, carried
+                    # to S5). Frozen all-invalid terminal: the clarify
+                    # terminal with ZERO execution.
+                    state.goal_outcome = GoalOutcome.PARTIAL.value
+                    _zh = _turn_lang(state) == "zh"
+                    _reasons = "；".join(
+                        r["reason"] for r in admission["invalid"]) or \
+                        "no admissible delivery target"
+                    _clarify = (
+                        "本次请求包含交付生成（artifact）类目标；由于当前目标"
+                        "理解来自确定性启发式分类（单一目标候选，未经模型审查"
+                        "确认完整目标结构），系统未生成 artifact。请补充说明"
+                        "交付的具体范围（例如候选集、 finding 或时间范围），"
+                        "或将其作为独立请求分别提出。（准入原因：" + _reasons
+                        + "）"
+                        if _zh else
+                        "This request includes a delivery-generation (artifact) "
+                        "goal; the current goal understanding comes from the "
+                        "deterministic heuristic classification (a single-goal "
+                        "candidate whose complete goal structure was not "
+                        "model-verified), so no artifact was generated. Please "
+                        "clarify the delivery scope (candidate set, finding, "
+                        "or time range) or submit it as a separate request. "
+                        "(Admission reason: " + _reasons + ")")
+                    self._emit("delivery.blocked", state, task,
+                               summary=json.dumps(
+                                   {k: admission[k] for k in
+                                    ("mode", "targets", "invalid")},
+                                   ensure_ascii=False)[:300])
+                    return self._terminate(
+                        state, task, AgentStatus.BLOCKED,
+                        StopReason.CLARIFICATION_NEEDED,
+                        _clarify, _now, plan=plan)
+
         provenance_pool: list[ToolCallV2] = []
         # U00047 persistence fix: the API layer reads this reference from
         # the runner after termination to persist the session tool_calls.
@@ -2776,6 +3395,12 @@ class AgentLoopRunner:
         # steps all reproduced earlier results.
         self._obs_count_at_adoption = len(state.observations)
         while True:
+            # WP-2 U00033 Fix-1: deterministic Finding anchoring for
+            # finding-level steps lacking finding_id — runs at EVERY
+            # adoption point (initial / re-planned / resumed) BEFORE the
+            # mirror sync and Executor, and DROPS unresolvable steps
+            # (fail-closed, Fix-2) instead of executing them blind.
+            self._anchor_finding_level_steps(state, plan, goal, findings)
             # the snapshot mirrors the executor-mutated PlanSteps so step
             # selection always reflects reality
             self._sync_plan_mirror(state, plan)
@@ -2790,6 +3415,43 @@ class AgentLoopRunner:
                 step = None
 
             if step is not None:
+                # R2.2.3 G7'' — pre-generation delivery safety gate: a
+                # generate_artifact step is never executed when this
+                # request's goal coverage could not be reliably
+                # established (None-B/C) or was never recorded (UNKNOWN).
+                # Blocks BEFORE execution — the step stays pending and no
+                # artifact is produced; goal_outcome/stop_reason below are
+                # terminal for the run (the composer renders the
+                # clarification framing via the recorded BLOCK decision).
+                gate_block = _delivery_gate_block(state, step)
+                if gate_block is not None:
+                    self._emit("delivery.blocked", state, task,
+                               step_id=step.step_id, step_type=step.type,
+                               summary=json.dumps(gate_block,
+                                                  ensure_ascii=False))
+                    state.decisions.append({
+                        "iteration": state.iteration,
+                        "decision": LoopDecision.BLOCK.value,
+                        "reason": ("R2.2.3 G7'' delivery gate: "
+                                   + gate_block["reason"]),
+                        "source": "heuristic",
+                    })
+                    gate_outcome = (GoalOutcome.UNANSWERABLE
+                                    if gate_block["branch"] == "None-C"
+                                    else GoalOutcome.PARTIAL)
+                    state.goal_outcome = gate_outcome.value
+                    # set the terminal fields BEFORE composing: the
+                    # composer's G7'' clarification branch keys on
+                    # agent_status == BLOCKED and
+                    # stop_reason == CLARIFICATION_NEEDED
+                    state.agent_status = AgentStatus.BLOCKED.value
+                    state.stop_reason = StopReason.CLARIFICATION_NEEDED
+                    return self._terminate(
+                        state, task, AgentStatus.BLOCKED,
+                        StopReason.CLARIFICATION_NEEDED,
+                        compose_loop_response(state),
+                        _now, plan=plan,
+                        artifacts=produced_artifacts)
                 # AL-2: argument provenance — an argument value that matches
                 # an id surfaced by the PREVIOUS observation is sourced from
                 # prior_observation; otherwise from the governed context.
@@ -3128,6 +3790,16 @@ class AgentLoopRunner:
                         for o in state.observations)
                     reason = (StopReason.BOUNDED_DATA if prior_success
                               else StopReason.CONCLUSIVE_EMPTY_RESULT)
+                if any(isinstance(d, dict)
+                       and str(d.get("decision"))
+                       == "ADMISSION_INVALID_TARGET"
+                       for d in (state.decisions or [])):
+                    # WP-2 Version B (S3, defensive): a completed run whose
+                    # plan carried admission-rejected targets reports the
+                    # pending clarification, never a full-success label.
+                    # (Structurally unreachable under V1 pairing —
+                    # NOT PROVEN, carried to S5.)
+                    reason = StopReason.CLARIFICATION_NEEDED
                 self._mark_current_done(state)
                 self._emit("step.completed", state, task,
                            step_id=(state.current_step or {}).get("step_id"),
@@ -3137,11 +3809,42 @@ class AgentLoopRunner:
                                        "", _now, plan=plan,
                                        artifacts=produced_artifacts)
             if enforced.decision == LoopDecision.BLOCK:
+                # WP-2 U00033 Fix-4 (calibrated P1 decision table,
+                # goal-level semantics): the terminal family follows the
+                # user goal's ACTUAL satisfaction degree, judged by
+                # deterministic output classes (core explanation /
+                # policy support) — never the count of satisfied
+                # outputs. Rows 1/3 (the core ask answered) deliver the
+                # acquired evidence in the goal_satisfied family;
+                # goal_outcome derives PARTIAL/COMPLETE-capped from the
+                # satisfactions (表 D row 3 machinery). Row 2 (core ✗,
+                # something delivered) is NOT PARTIAL: the terminal
+                # stays BLOCK-family and the answer names the ungenerated
+                # core beside the delivered content. Row 4 (nothing
+                # satisfied) keeps the existing BLOCK terminal. The
+                # served response is the COMPOSED per-output answer
+                # (Fix-3) — the LLM decision reason is demoted to the
+                # audit trail and is never the served text.
+                _cls = _blocked_terminal_class(
+                    state.goal_contract.outputs
+                    if state.goal_contract else [])
+                if _cls == "goal_satisfied":
+                    self._mark_current_done(state)
+                    return self._terminate(
+                        state, task, AgentStatus.COMPLETED,
+                        StopReason.BOUNDED_DATA,
+                        compose_loop_response(state), _now, plan=plan,
+                        artifacts=produced_artifacts)
                 self._mark_current_done(state)
+                _resp = compose_loop_response(state)
+                if _cls == "core_missing_delivered":
+                    _stmt = _core_gap_statement(state)
+                    if _stmt:
+                        _resp = _resp + "\n" + _stmt
                 return self._terminate(
                     state, task, AgentStatus.BLOCKED,
                     self._block_reason(state, proposal),
-                    enforced.reason, _now, plan=plan,
+                    _resp, _now, plan=plan,
                     artifacts=produced_artifacts)
             if enforced.decision == LoopDecision.RE_PLAN:
                 # AL-2.13 suppression (U00047 fix A): a revision whose
@@ -4057,6 +4760,27 @@ class AgentLoopRunner:
             return result, None
         return None, getattr(result, "code", None) or "PLANNING_FAILURE"
 
+    def _anchor_gap_digest_lines(self) -> list[str]:
+        """WP-2 U00033 Fix-2: deterministic RE_PLAN digest lines for the
+        unresolved Finding-anchor gaps, sourced ONLY from the anchoring
+        drop records (never LLM-invented). The gap line names each
+        unresolved gap (step type, served outputs, missing parameter,
+        resolved identity, failed attempts); the constraint line presents
+        it to the planner as a BOUND — bind the parameter or omit/degrade
+        the step. A re-plan that repeats the same gap is dropped again at
+        adoption by the loop-top anchoring (the fail-closed backstop)."""
+        gaps = getattr(self, "_finding_anchor_gaps", None) or []
+        if not gaps:
+            return []
+        return [
+            "- unresolved_parameter_gaps: "
+            + json.dumps(gaps, ensure_ascii=False),
+            "- constraint: for each unresolved_parameter_gap, bind the "
+            "missing parameter from this case's findings or OMIT/degrade "
+            "that step — do not plan the same step again with the same "
+            "missing parameter.",
+        ]
+
     def _re_plan(self, planner, state, goal, ctx, eligible_ids, caps,
                  findings=None,
                  goal_contract=None) -> Plan | None:
@@ -4087,6 +4811,12 @@ class AgentLoopRunner:
         digest_lines = [
             f"- completed: {[s.get('type') for s in state.plan_steps if s.get('status') == 'success']}",
         ]
+        # WP-2 U00033 Fix-2: carry unresolved Finding-anchor gaps into
+        # the RE_PLAN so the next plan either binds the parameter or
+        # omits/degrades the step — never a blind identical retry
+        # (sourced from deterministic anchoring records, never
+        # LLM-invented).
+        digest_lines.extend(self._anchor_gap_digest_lines())
         for obs in state.observations[-2:]:
             digest_lines.append(f"- observation: {_observation_line(obs)}")
         for d in state.decisions[-1:]:
@@ -4316,6 +5046,93 @@ class AgentLoopRunner:
                 if ref["step_id"] == ps.step_id:
                     ref["status"] = ps.status.value
 
+    def _anchor_finding_level_steps(self, state: AgentLoopState,
+                                    plan: Plan, goal: str,
+                                    findings: list) -> None:
+        """WP-2 U00033 Fix-1: deterministic Finding anchoring for ADOPTED
+        finding-level steps that lack finding_id — the SAME resolver the
+        coverage-supplement path uses (_output_target_finding; no new
+        parser). Runs at EVERY plan adoption point (loop top: initial,
+        re-planned and resumed plans) so a finding-level step enters the
+        Executor only with its binding resolved.
+
+        exactly-one discipline: a step binds ONLY when its serving
+        output(s) resolve to ONE consistent Finding; ZERO or MULTIPLE
+        candidates → the step stays unanchored, is recorded as an
+        unresolved gap (Fix-2 digest/audit) and DROPPED before execution
+        (fail-closed — never executed blind, never a guessed id). Steps
+        already carrying finding_id are untouched (supplement-anchored
+        or planner-explicit). Contract-less runs skip (the resolver
+        needs contract outputs)."""
+        if state.goal_contract is None:
+            return
+        from app.planner_v2 import (_FINDING_LEVEL_STEP_TYPES,
+                                    _output_target_finding)
+        outputs = state.goal_contract.outputs
+        dropped: list[dict] = []
+        for step in list(plan.steps):
+            if step.type not in _FINDING_LEVEL_STEP_TYPES:
+                continue
+            if (step.arguments or {}).get("finding_id"):
+                continue
+            serving = state.step_output_map.get(step.step_id) or []
+            targets: list = []
+            for oid in serving:
+                out = next((o for o in outputs if o.output_id == oid),
+                           None)
+                if out is None:
+                    continue
+                f = _output_target_finding(out, goal, findings)
+                if f is not None and f.finding_id not in \
+                        {t.finding_id for t in targets}:
+                    targets.append(f)
+            if len(targets) == 1:
+                step.arguments["finding_id"] = targets[0].finding_id
+                continue
+            reason = ("ambiguous_finding_targets" if len(targets) > 1
+                      else "no_resolvable_finding")
+            # Fix-2 calibration: each gap record carries the fields the
+            # RE_PLAN constraint needs — the contract output(s) the step
+            # served, the resolved identity (null: a dropped step never
+            # resolved to one) and the failed-attempt count (repeats of
+            # the same step-type × missing-parameter gap within this run).
+            prior = [g for g in
+                     (getattr(self, "_finding_anchor_gaps", None) or [])
+                     + dropped
+                     if g.get("step_type") == step.type
+                     and g.get("missing") == "finding_id"]
+            dropped.append({"step_id": step.step_id,
+                            "step_type": step.type,
+                            "missing": "finding_id",
+                            "serving_outputs": list(serving),
+                            "resolved_finding": None,
+                            "failed_attempts": len(prior) + 1,
+                            "reason": reason})
+            plan.steps.remove(step)
+        if not dropped:
+            return
+        state.plan_steps[:] = [
+            s for s in state.plan_steps
+            if s.get("step_id") not in {d["step_id"] for d in dropped}]
+        gaps = getattr(self, "_finding_anchor_gaps", None)
+        if gaps is None:
+            gaps = self._finding_anchor_gaps = []
+        gaps.extend(dropped)
+        for d in dropped:
+            state.decisions.append({
+                "iteration": state.iteration,
+                "decision": "FINDING_ANCHOR_GAP_DROPPED",
+                "reason": ("R2.2.3 WP-2 U00033 Fix-1: "
+                           + d["step_type"] + " dropped — "
+                           + d["reason"]
+                           + " (finding_id unresolvable)"),
+                "source": "deterministic",
+            })
+        logger.warning(
+            "U00033 Fix-1: dropped %s unresolvable finding-level "
+            "step(s) (fail-closed): %s", len(dropped),
+            json.dumps(dropped, ensure_ascii=False))
+
     def _adopt_plan(self, state: AgentLoopState, plan: Plan) -> None:
         # U00010 B1 (Batch H): stamp each artifact's declared record
         # stream(s) so the bundle tool can verify content-vs-declaration
@@ -4431,10 +5248,11 @@ class AgentLoopRunner:
         # composer's later write is identical by construction.
         if state.goal_contract is not None and state.goal_outcome is None:
             from app.goal_postconditions import derive_goal_outcome
-            state.goal_outcome = derive_goal_outcome(
+            # R2.2.3 G6 (WP-1): completeness UNKNOWN — COMPLETE capped
+            state.goal_outcome = _cap_complete(derive_goal_outcome(
                 [o.satisfaction for o in state.goal_contract.outputs],
                 state.agent_status,
-                intent_source=state.goal_contract.intent_source).value
+                intent_source=state.goal_contract.intent_source).value)
         self._persist(state, task)
         return AgentLoopResult(state=state,
                                response=compose_loop_response(state),
@@ -5560,6 +6378,114 @@ def _match_rule_entries(summary: dict, output) -> list[dict]:
     return matched or entries
 
 
+def _render_case_summary_facts(summary: dict, lang: str = "zh") -> list[str]:
+    """U00008 case-overview follow-up: the confirmed case-facts block —
+    finding count, overall risk, and the RP finding list with the
+    shown/total disclosure. Shared by the SATISFIED path and the
+    UNRESOLVED branch (where it renders AFTER the unresolved declaration,
+    as confirmed case facts — never as an answer to the unresolved
+    claim). Returns [] when the summary carries no findings (the caller
+    owns the evidence-requirement gate)."""
+    if not summary.get("finding_count"):
+        return []
+    n = summary["finding_count"]
+    score = summary.get("risk_score")
+    level = summary.get("risk_level")
+    head = f"案例共识别 {n} 个风险发现"
+    if level or score is not None:
+        head += "（总体风险"
+        if level:
+            head += f"：{level}"
+        if score is not None:
+            head += f"{('，') if level else '：'}风险分 {score:g}"
+        head += "）"
+    head += "。"
+    lines: list[str] = []
+    lines.append(head if lang != "en" else
+                 f"The case carries {n} identified risk findings"
+                 + (f" (overall risk: {level}" if level else "")
+                 + (f", score {score:g})" if score is not None
+                    else (")" if level else "")))
+    findings = (summary.get("findings") or [])[:10]
+    if findings:
+        lines.append("" if lang != "en" else "Identified findings:")
+        for f in findings:
+            f_summary = (f.get("summary") or "").strip()
+            if f_summary:
+                lines.append(
+                    f"- {f.get('id')} {f.get('title', '')}: {f_summary}")
+            else:
+                lines.append(f"- {f.get('id')} {f.get('title', '')}")
+        shown = len(findings)
+        if shown < n:
+            lines.append(
+                f"（对话内列出前 {shown} 条；完整清单见证据包与"
+                "发现面板）" if lang != "en" else
+                f"(first {shown} of {n} listed; the complete set is "
+                "in the evidence bundle and the Findings panel)")
+    return lines
+
+
+def _file_export_brief_lines(output, summary: dict, reqs, lang: str,
+                             artifact_backed_families) -> list[str] | None:
+    """L1 file-export delivery (delivery-intent fix, 2026-11-04 final
+    acceptance TASK-9727f42e5aee): when the output's record-stream
+    artifact was successfully generated, the chat section is THE FILE
+    BRIEF — a generation confirmation with the record count. The artifact
+    itself carries the complete content (records, addresses, timestamps,
+    provenance); the chat must never re-expand evidence details for a
+    file_export output, regardless of which other evidence requirements
+    the goal understanding attached to it. Returns None when the output
+    is not a backed file_export (caller falls through to the legacy
+    detail rendering — a failed/missing artifact never claims success)."""
+    from app.goal_resolution import _RECORD_STREAM_FAMILIES
+    if getattr(output, "delivery", "detail_list") != "file_export":
+        return None
+    # Delivery-intent hardening: ONLY a retrieval-kind output renders the
+    # brief. An explanation-kind output with a file_export delivery (a
+    # pathological goal-understanding shape) must still render its
+    # explanation — the file channel may never swallow an explanation
+    # target.
+    if getattr(output, "claim_kind", None) != ClaimKind.RETRIEVAL:
+        return None
+    out_families = {
+        (r.value if hasattr(r, "value") else str(r))
+        for r in reqs} & set(_RECORD_STREAM_FAMILIES)
+    if not out_families \
+            or not out_families <= set(artifact_backed_families or set()):
+        return None
+    lines: list[str] = []
+    # Plan v2.1: a candidate-scoped export delivers the BOUND candidate
+    # set — the brief states the candidate file's own record count (the
+    # bound set), never the full-stream count (real failure: the chat
+    # claimed 85 records for a 12-record candidate file).
+    cs = summary.get("candidate_set_export") or {}
+    if isinstance(cs, dict) and cs.get("verification", {}).get("passed"):
+        v = cs.get("verification") or {}
+        n_c = v.get("candidates")
+        n_t = len(v.get("transaction_ids") or [])
+        lines.append(
+            f"已生成对冲候选明细文件（{n_c} 组候选、共 {n_t} 笔"
+            "交易，含账号/时间/方向/金额）。"
+            if lang != "en" else
+            f"The hedge-candidate detail file has been generated "
+            f"({n_c} candidate pairs, {n_t} transactions, with "
+            "account/time/direction/amount).")
+    else:
+        count = summary.get("record_count")
+        label = _record_stream_label(reqs, summary, lang=lang)
+        lines.append(
+            f"已生成{label}文件（完整记录 {count} 条，含地址字段）。"
+            if lang != "en" else
+            f"The {label.lower()} file has been generated "
+            f"(complete set of {count} records, with addresses).")
+    # A2 (timeline completeness): a compound timeline+records output must
+    # still deliver its timeline section — the file brief covers only the
+    # records family (L1 semantics kept).
+    lines.extend(_maybe_timeline_section(reqs, summary, lang))
+    return lines
+
+
 def _gsp_render_output_facts(output, summary: dict,
                              lang: str = "zh",
                              artifact_backed_families=None,
@@ -5577,6 +6503,22 @@ def _gsp_render_output_facts(output, summary: dict,
     lines: list[str] = []
     reqs = output.evidence_requirements
     subject = output.subject_ref
+
+    # Delivery-channel precedence (delivery-intent fix, 2026-11-04 final
+    # acceptance TASK-9727f42e5aee): a backed file_export output renders
+    # THE FILE BRIEF and nothing else — BEFORE any evidence-detail
+    # branch. The goal understanding may legitimately attach
+    # rule_explanation / timeline_events to a file output's requirements
+    # (「把所有…证据生成一份文件」); the previous branch order let the
+    # RULE_EXPLANATION renderer below expand the summary's rule entries —
+    # including rules of OTHER findings — into the file confirmation. The
+    # artifact carries the complete content; the chat section confirms
+    # delivery only. A failed/missing artifact keeps the legacy detail
+    # rendering (no false success claim).
+    _brief = _file_export_brief_lines(output, summary, reqs, lang,
+                                      artifact_backed_families)
+    if _brief is not None:
+        return _brief
 
     # Cross-domain consistency: rule-backed outputs render the
     # ACTUALLY-TRIGGERED rule entries first (detection-decision
@@ -5881,40 +6823,13 @@ def _gsp_render_output_facts(output, summary: dict,
         # complete content (Address column, timestamps). Failure or absence
         # of the artifact keeps the legacy full rendering (no false success
         # claim), per the approved delivery-channel semantics.
-        out_families = {
-            (r.value if hasattr(r, "value") else str(r))
-            for r in reqs} & set(_RECORD_STREAM_FAMILIES)
-        if (getattr(output, "delivery", "detail_list") == "file_export"
-                and out_families
-                and out_families <= artifact_backed_families):
-            # Plan v2.1: a candidate-scoped export delivers the BOUND
-            # candidate set — the brief states the candidate file's own
-            # record count (the bound set), never the full-stream count
-            # (real failure: the chat claimed 85 records for a 12-record
-            # candidate file).
-            cs = summary.get("candidate_set_export") or {}
-            if isinstance(cs, dict) and cs.get("verification", {}).get(
-                    "passed"):
-                v = cs.get("verification") or {}
-                n_c = v.get("candidates")
-                n_t = len(v.get("transaction_ids") or [])
-                lines.append(
-                    f"已生成对冲候选明细文件（{n_c} 组候选、共 {n_t} 笔"
-                    "交易，含账号/时间/方向/金额）。"
-                    if lang != "en" else
-                    f"The hedge-candidate detail file has been generated "
-                    f"({n_c} candidate pairs, {n_t} transactions, with "
-                    "account/time/direction/amount).")
-                return lines + _maybe_timeline_section(reqs, summary, lang)
-            lines.append(
-                f"已生成{label}文件（完整记录 {count} 条，含地址字段）。"
-                if lang != "en" else
-                f"The {label.lower()} file has been generated "
-                f"(complete set of {count} records, with addresses).")
-            # A2 (timeline completeness): a compound timeline+records
-            # output must still deliver its timeline section — the file
-            # brief covers only the records family (L1 semantics kept).
-            return lines + _maybe_timeline_section(reqs, summary, lang)
+        # The file-export brief is now rendered at the TOP of this
+        # function (delivery-channel precedence) via
+        # _file_export_brief_lines — reachable from every branch order.
+        _brief = _file_export_brief_lines(output, summary, reqs, lang,
+                                          artifact_backed_families)
+        if _brief is not None:
+            return _brief
         if count:
             lines.append(f"完整{label}共 {count} 条:"
                          if lang != "en" else
@@ -6136,6 +7051,19 @@ def _gsp_render_output_facts(output, summary: dict,
             lines.append(f"阈值: {summary['threshold']}"
                          if lang != "en" else
                          f"Threshold: {summary['threshold']}")
+        # 2026-11-03 final-acceptance DoD (TASK-bf7fdbf887a1): the rule +
+        # threshold answer must carry the OBSERVED trigger values ("本次
+        # 观测值") — the signal_explain payload already holds them
+        # (authoritative RP trigger snapshot); without this line the
+        # answer stated the rule abstractly and the user's "本次观测值：
+        # 6 天、69 笔" requirement went unmet.
+        trig = summary.get("trigger_values")
+        if isinstance(trig, dict) and trig:
+            obs = ", ".join(f"{_feature_label(k)} = {v}"
+                            for k, v in trig.items())
+            lines.append(f"观测值: {obs}"
+                         if lang != "en" else
+                         f"Observed: {obs}")
         return lines
     if EvidenceType.RULE_EXPLANATION in reqs and summary.get(
             "feature_facts"):
@@ -6428,40 +7356,7 @@ def _gsp_render_output_facts(output, summary: dict,
             "No directly applicable policy references were retrieved.")
         return lines
     if EvidenceType.CASE_SUMMARY in reqs and summary.get("finding_count"):
-        n = summary["finding_count"]
-        score = summary.get("risk_score")
-        level = summary.get("risk_level")
-        head = f"案例共识别 {n} 个风险发现"
-        if level or score is not None:
-            head += "（总体风险"
-            if level:
-                head += f"：{level}"
-            if score is not None:
-                head += f"{('，') if level else '：'}风险分 {score:g}"
-            head += "）"
-        head += "。"
-        lines.append(head if lang != "en" else
-                     f"The case carries {n} identified risk findings"
-                     + (f" (overall risk: {level}" if level else "")
-                     + (f", score {score:g})" if score is not None
-                        else (")" if level else "")))
-        findings = (summary.get("findings") or [])[:10]
-        if findings:
-            lines.append("" if lang != "en" else "Identified findings:")
-            for f in findings:
-                f_summary = (f.get("summary") or "").strip()
-                if f_summary:
-                    lines.append(
-                        f"- {f.get('id')} {f.get('title', '')}: {f_summary}")
-                else:
-                    lines.append(f"- {f.get('id')} {f.get('title', '')}")
-            shown = len(findings)
-            if shown < n:
-                lines.append(
-                    f"（对话内列出前 {shown} 条；完整清单见证据包与"
-                    "发现面板）" if lang != "en" else
-                    f"(first {shown} of {n} listed; the complete set is "
-                    "in the evidence bundle and the Findings panel)")
+        lines.extend(_render_case_summary_facts(summary, lang))
         return lines
     lines.append(
         "已取得相关证据，但当前未能从中呈现具体的解释性事实"
@@ -6963,6 +7858,15 @@ def _gsp_render_output_section(output, summary: dict,
                 "cannot be determined; relation existence alone never "
                 "establishes a violation. Any policy citations already "
                 "retrieved are still provided in the policy section below.")
+        # U00008 case-overview follow-up: an UNRESOLVED output whose OWN
+        # combined summary carries the fetched case facts still shows
+        # them — AFTER the unresolved declaration, as confirmed case
+        # facts (RP echo: finding ids/titles/summaries, overall risk),
+        # never as an answer to the unresolved claim. Same data gate and
+        # rendering as the SATISFIED path; the satisfaction state and
+        # the unresolved wording above are untouched.
+        if EvidenceType.CASE_SUMMARY in output.evidence_requirements:
+            lines.extend(_render_case_summary_facts(summary, lang))
     elif sat == OutputSatisfaction.UNSUPPORTED:
         lines.append("当前系统不具备回答该项所需的核查能力。" if not en
                      else "The current system does not have the "
@@ -7096,6 +8000,111 @@ def _is_owner_duplicated_line(ln: str) -> bool:
     return False
 
 
+def _is_duplicated_signal_line(ln: str) -> bool:
+    """Signal-answer dedup (U00033): line SHAPES of BOTH ML explanation
+    renderings — the requirement-keyed compact form (score / context
+    features / boundary, emitted when ML_SIGNAL_EXPLANATION is among the
+    output's requirements) and the generic _signal_answer_lines long form
+    (meaning / score semantics / feature values / attribution boundary /
+    attribution-gap / evidence_missing fallback) — plus the attribution-
+    gap lines only the generic branch emits. Applied ONLY to sections
+    that share a signal_explain observation with an EARLIER output: the
+    stripped lines all derive from the SHARED observation's combined
+    values, so nothing output-unique is removed (an own observation's
+    disagreeing values are omitted by the combine semantics and never
+    render; agreeing values render byte-identically)."""
+    for _pre in (
+            # compact form (requirement-keyed branch)
+            "ML 信号分数 ",
+            "模型上下文特征（Risk Platform 权威值）: ",
+            "边界: Risk Platform 未提供逐特征贡献归因",
+            "ML signal score ",
+            "Model context features (Risk Platform authoritative "
+            "values): ",
+            "Boundary: the Risk Platform provides no per-feature",
+            # long form (_signal_answer_lines ML branch + gap lines)
+            "ML Pattern Detection 的含义:",
+            "本账号的 ML 信号分数为 ",
+            "该账号的实际特征值(",
+            "归因边界:",
+            "要回答“模型具体依据哪些特征给出这个分数”",
+            "案件中的其他发现(交易活动",
+            "信号解释:Risk Platform 未提供",
+            "ML Pattern Detection means",
+            "This account's ML signal score is ",
+            "This account's actual feature values (",
+            "Attribution boundary:",
+            'To answer "which features the model relied on',
+            "The case's other findings (trading activity",
+            "Signal explanation: the Risk Platform provides no"):
+        if ln.startswith(_pre):
+            return True
+    return False
+
+
+def _unassociated_analysis_lines(state: AgentLoopState,
+                                 lang: str) -> list[str]:
+    """WP-2 U00033 Fix-3 (calibration): a related-account analysis that
+    EXECUTED and was WRITTEN to observations but is associated to NO
+    output (its graph evidence types do not intersect the explanation
+    output's requirements) still carries case-observed facts the user
+    asked about. This renders a bounded CASE-OBSERVED section from that
+    observation's summary — deterministic fields only, explicitly labeled
+    as a DETECTED NETWORK SIGNAL: never a confirmed violation, never a
+    per-account verdict. cluster_risk_score stays cluster-level (never
+    merged with case-level risk). Empty when no such observation exists —
+    the evidence-absent branch stays the honest pending rendering."""
+    for o in state.observations or []:
+        if o.get("step_type") != "analyze_related_accounts":
+            continue
+        if o.get("outcome") != ToolResultOutcome.SUCCESS.value:
+            continue
+        if o.get("for_outputs"):
+            continue  # an associated observation is rendered by its owner
+        s = o.get("summary") or {}
+        if not isinstance(s, dict):
+            continue
+        lines: list[str] = []
+        if "zh" == lang:
+            lines.append(
+                "以下为本次调查中检测到的网络信号（DETECTED NETWORK "
+                "SIGNAL）——并非已确认的违规认定，也不构成对任何单个账号"
+                "的风险结论：")
+        else:
+            lines.append(
+                "The following is a DETECTED NETWORK SIGNAL from this "
+                "investigation — not a confirmed violation and not a "
+                "per-account risk verdict:")
+        count = s.get("related_accounts_count")
+        if count is not None:
+            lines.append(
+                f"- 检测到 {count} 个关联账号（case-observed）。"
+                if "zh" == lang else
+                f"- {count} linked accounts detected (case-observed).")
+        cluster_name = s.get("cluster_name")
+        if cluster_name:
+            lines.append(
+                f"- 关联网络簇：{cluster_name}。"
+                if "zh" == lang else
+                f"- Linked network cluster: {cluster_name}.")
+        shared = [d for d in (s.get("shared_devices") or []) if d]
+        if shared:
+            lines.append(
+                "- 共享设备：" + "、".join(str(d) for d in shared) + "。"
+                if "zh" == lang else
+                "- Shared devices: " + ", ".join(str(d) for d in shared)
+                + ".")
+        score = s.get("cluster_risk_score")
+        if score is not None:
+            lines.append(
+                f"- 簇风险分 {score}（簇级指标，非案件级风险分）。"
+                if "zh" == lang else
+                f"- Cluster risk score {score} (a cluster-level metric, "
+                "not the case-level risk score).")
+        return lines
+    return []
+
+
 def _compose_gsp_response(state: AgentLoopState) -> str:
     """GSP WP-GSP-5 — per-output response composition.
 
@@ -7141,21 +8150,98 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
     # entries and gains an explicit reference to the owning section.
     _order = [o.output_id for o in contract.outputs]
     _by_id = {o.output_id: o for o in contract.outputs}
+    # U00033 answer dedup (follow-up, real incident TASK-9d167dfe8185 /
+    # TASK-e46b98581a06): the goal-understanding LLM may propose TWIN
+    # explanation outputs — the SAME explain intent on the SAME finding,
+    # worded with trivial variance ("...被标记为风险项" vs
+    # "...被标记为风险") — and the per-output composer then renders the
+    # same explanation twice (cluster, shared device, account network and
+    # risk meaning duplicated across two sections). Deterministic merge:
+    # explanation-kind outputs sharing a subject whose normalized claims
+    # are near-identical (difflib ratio ≥ 0.85 — catches trivial
+    # paraphrase, never the compound-why decomposition pairs like
+    # 「高频提现判定条件」/「新账号高频活动判定条件」 ≈ 0.63) form ONE
+    # twin group; the group's section is rendered ONCE (preferring a
+    # SATISFIED twin for the honest verdict) and consumes every
+    # observation serving ANY twin — complementary evidence integrated,
+    # each fact presented once. Policy/retrieval outputs and distinct
+    # claims are never merged; satisfaction/terminal semantics are
+    # state-level and untouched.
+    import difflib as _difflib
+    _twin_groups: dict[str, list[str]] = {}
+    _render_twin: dict[str, str] = {}
+    _twin_key_groups: dict[tuple, list[str]] = {}
+    for o in contract.outputs:
+        if o.claim_kind != ClaimKind.EXPLANATION:
+            continue
+        _twin_key_groups.setdefault(
+            ((o.subject_ref or "").strip(),), []).append(o.output_id)
+    for _ids in _twin_key_groups.values():
+        if len(_ids) < 2:
+            continue
+        _groups: list[list[str]] = []
+        for _oid in _ids:
+            _norm = " ".join((_by_id[_oid].claim or "").split()).lower()
+            for _g in _groups:
+                _rep = " ".join((_by_id[_g[0]].claim or "").split()).lower()
+                if _norm and _rep and _difflib.SequenceMatcher(
+                        None, _norm, _rep).ratio() >= 0.85:
+                    _g.append(_oid)
+                    break
+            else:
+                _groups.append([_oid])
+        for _g in _groups:
+            if len(_g) < 2:
+                continue
+            _sat = [i for i in _g if _by_id[i].satisfaction
+                    == OutputSatisfaction.SATISFIED]
+            # prefer a SATISFIED twin (honest verdict); among equals the
+            # RICHER evidence set renders (its section integrates the
+            # group's union of observations through the wider branch)
+            _render = (max(_sat, key=lambda i: (
+                len(_by_id[i].evidence_requirements or []),
+                -_order.index(i)))
+                if _sat else _g[0])
+            _twin_groups[_render] = list(_g)
+            for _oid in _g:
+                _render_twin[_oid] = _render
     _owner_of = {}
     _summary_holder = {}
+    _signal_owner_of = {}
     for _i, _obs in enumerate(state.observations):
         _served = [x for x in _order
                    if x in (_obs.get("for_outputs") or [])]
+        # twin-normalize the served ids: owners/references must point at
+        # sections that actually render (a merged-away twin owns nothing)
+        _served = list(dict.fromkeys(
+            _render_twin.get(x, x) for x in _served))
         if len(_served) > 1:
             _detail = [x for x in _served
                        if _by_id[x].claim_kind == ClaimKind.RETRIEVAL]
-            _owner_of[_i] = _detail[-1] if _detail else _served[0]
+            # Delivery-intent fix: the shared detail payload belongs to
+            # the DETAIL-delivery output — a file_export output renders
+            # only the file brief, so it can never own the shared record
+            # detail (ownership here would drop the rows from the detail
+            # section and lose them from the answer entirely).
+            _detail_list = [x for x in _detail
+                            if getattr(_by_id[x], "delivery",
+                                       "detail_list") != "file_export"]
+            _owner_of[_i] = (_detail_list[-1] if _detail_list
+                             else (_detail[-1] if _detail else _served[0]))
             # U00047 (ART-85d6d23849): with THREE+ serving outputs, the
             # owner/non-owner dichotomy alone lets EVERY non-owner keep
             # the verdict summary and budget note — adjacent duplicated
             # sections. Exactly ONE section holds them: the FIRST served
             # output in contract order (the existence check).
             _summary_holder[_i] = _served[0]
+            # ML signal-answer dedup (U00033 INV-12d412c79044): a
+            # signal_explain observation serving MULTIPLE outputs renders
+            # its full WHY block in EVERY serving section. The FIRST
+            # serving output in contract order owns the complete block;
+            # later servings keep output-unique lines and reference the
+            # owning section.
+            if _obs.get("tool_name") == "signal_explain":
+                _signal_owner_of[_i] = _served[0]
     _referenced: set = set()
     # Run-level policy evidence (explanation delivery): the citations the
     # policy retrieval actually produced + whether RP attached them to the
@@ -7180,8 +8266,15 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
     _run_policy = (_run_citations, _policy_finding_attached,
                    _has_policy_section) if _run_citations else None
     for out in contract.outputs:
+        _rid = _render_twin.get(out.output_id)
+        if _rid is not None and _rid != out.output_id:
+            # a merged-away twin: its evidence renders ONCE in the twin
+            # group's integrated section — never a duplicate explanation
+            continue
+        _twin_ids = _twin_groups.get(out.output_id) or [out.output_id]
         assoc = [o for o in state.observations
-                 if out.output_id in (o.get("for_outputs") or [])]
+                 if any(t in (o.get("for_outputs") or [])
+                        for t in _twin_ids)]
         excluded += len(state.observations) - len(assoc)
         combined, _ = _combine_summaries(assoc)
         if assoc:
@@ -7192,14 +8285,48 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
             (t.value if hasattr(t, "value") else str(t))
             for o in assoc
             for t in (o.get("actual_evidence_types") or [])})
-        combined["_finding_title"] = state.focused_finding_title or ""
+        _title = state.focused_finding_title or ""
+        if not _title:
+            # Finding-title deterministic fallback (delivery-intent scoping
+            # fix, 2026-11-04 acceptance TASK-ceba057be489): when the loop
+            # has no focused-finding title and ALL contract outputs share
+            # ONE finding subject, resolve the title from the GU's own
+            # claim_description, which quotes the canonical platform title
+            # as 「<title>」 right after the subject id
+            # (F3「High withdrawal frequency」). Without this,
+            # _match_rule_entries falls back to "all entries" and OTHER
+            # findings' rules leak into a finding-scoped answer (real
+            # acceptance case: F2/F4 rules rendered inside the F3
+            # explanation section). Multi-subject contracts and
+            # descriptions without the quoted title stay on the legacy
+            # behavior (documented boundary, pinned by tests).
+            _subjects = {(o.subject_ref or "").strip()
+                         for o in contract.outputs
+                         if (o.subject_ref or "").strip()}
+            if len(_subjects) == 1:
+                _subject = next(iter(_subjects))
+                for o in contract.outputs:
+                    m = re.search(re.escape(_subject) + r"「([^」]+)」",
+                                  o.claim_description or "")
+                    if m:
+                        _title = m.group(1)
+                        break
+        combined["_finding_title"] = _title
         sec_start = len(lines)
         lines.extend(_gsp_render_output_section(
             out, combined, goal_text=state.goal, lang=lang,
             artifact_backed_families=artifact_backed_families,
             run_policy=_run_policy))
+        # WP-2 U00033 Fix-3 (calibration): an EXPLANATION-kind output with
+        # NO associated observation still consumes a successfully executed
+        # but UNASSOCIATED analysis observation — the bounded case-observed
+        # network facts appear in the served answer (layer 3→4 of the
+        # evidence path), instead of only in observations/Activity.
+        if not assoc and out.claim_kind == ClaimKind.EXPLANATION:
+            lines.extend(_unassociated_analysis_lines(state, lang))
         _my = [i for i, o in enumerate(state.observations)
-               if out.output_id in (o.get("for_outputs") or [])]
+               if any(t in (o.get("for_outputs") or [])
+                      for t in _twin_ids)]
         _ref_targets = sorted({
             _owner_of[i] for i in _my
             if _owner_of.get(i) not in (None, out.output_id)})
@@ -7250,6 +8377,46 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
             _kept = [ln for ln in _sec
                      if not _is_owner_duplicated_line(ln)]
             lines[sec_start:] = _kept
+        # ML signal-answer dedup: a section that shares a signal_explain
+        # observation with an EARLIER output drops the signal-block lines
+        # (either rendering shape) derived from the SHARED observation —
+        # the owning (first-served) section renders the complete block.
+        # Output-unique evidence (its own policy citations, its own
+        # records, its own rule entries) never matches a signal-line
+        # shape and survives; the combine semantics already omit values
+        # that this output's own observations would contradict.
+        _sig_owners_here = sorted({
+            _signal_owner_of[i] for i in _my
+            if _signal_owner_of.get(i) not in (None, out.output_id)},
+            key=lambda t: _order.index(t))
+        if _sig_owners_here:
+            _sec = lines[sec_start:]
+            _kept = [ln for ln in _sec
+                     if not _is_duplicated_signal_line(ln)]
+            if len(_kept) != len(_sec):
+                lines[sec_start:] = _kept
+                # one reference per non-owner SECTION (never per-target
+                # deduplicated: a later sharing section would otherwise
+                # be stripped bare and collapse, dropping the output's
+                # own answer from the composed response)
+                _own_pos = _order.index(out.output_id)
+                _sig_ref_pos = min(_order.index(t)
+                                   for t in _sig_owners_here)
+                _sig_direction = \
+                    ("上方" if _sig_ref_pos < _own_pos else "下方") \
+                    if "zh" == lang else \
+                    ("above" if _sig_ref_pos < _own_pos else "below")
+                _sig_ref_header = " / ".join(
+                    (_output_header(_by_id[t], lang=lang) or t)
+                    for t in _sig_owners_here)
+                lines.append(
+                    f"（ML 信号解释完整版见{_sig_direction}"
+                    f"「{_sig_ref_header}」部分，本项结论不受影响。）"
+                    if "zh" == lang else
+                    f"(The full ML signal explanation is in the "
+                    f"\"{_sig_ref_header}\" section "
+                    f"{_sig_direction}; this verdict is "
+                    "unaffected.)")
         # U00047 presentation: after the R3 strips a SHARING section may
         # hold nothing but its header (its payload is fully presented by
         # the summary-holder / detail-owner sections) — drop the bare
@@ -7270,6 +8437,12 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
     outcome = derive_goal_outcome(
         [o.satisfaction for o in contract.outputs], state.agent_status,
         intent_source=contract.intent_source)
+    # R2.2.3 G6 (WP-1): request completeness is UNKNOWN on every path —
+    # a derived COMPLETE is capped at PARTIAL with the reviewed-scope
+    # disclosure (frozen matrix; COMPLETE stays unreachable until a
+    # completeness-proof mechanism exists).
+    if outcome == GoalOutcome.COMPLETE:
+        outcome = GoalOutcome.PARTIAL
     state.goal_outcome = outcome.value
     # WP-GS-C (design §7.3): with an uncovered comparison intent the
     # covered deliverables' result is real work, but the outcome line is
@@ -7291,6 +8464,19 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
             lines.append(
                 f"Overall result: "
                 f"{_OUTCOME_EN.get(outcome.value, outcome.value)}")
+            # R2.2.3 G6 (WP-1): reviewed coverage — identified goals done,
+            # request completeness never independently proven
+            if (outcome == GoalOutcome.PARTIAL
+                    and contract.intent_source != "heuristic"
+                    and contract.outputs
+                    and all(o.satisfaction == OutputSatisfaction.SATISFIED
+                            for o in contract.outputs)
+                    and _goal_coverage_of(state) in ("reviewed",
+                                                     "candidate")):
+                lines[-1] = (
+                    "Overall result: all identified goals were completed "
+                    "(the request's completeness has not been "
+                    "independently verified).")
     elif (dec.get("coverage") == "comparison_intent_uncovered"
             and state.agent_status == AgentStatus.COMPLETED.value
             and outcome in (GoalOutcome.COMPLETE, GoalOutcome.PARTIAL)):
@@ -7312,6 +8498,19 @@ def _compose_gsp_response(state: AgentLoopState) -> str:
             lines[-1] = (
                 "整体结果: 已识别的交付项均已回答；由于本次目标理解未能"
                 "由模型完成验证，无法确认是否还有未识别的请求内容。")
+        # R2.2.3 G6 (WP-1): reviewed coverage — all identified goals were
+        # completed, but the request's completeness is UNKNOWN (never
+        # independently proven), so the closure never claims whole-
+        # request completion.
+        if (outcome == GoalOutcome.PARTIAL
+                and contract.intent_source != "heuristic"
+                and contract.outputs
+                and all(o.satisfaction == OutputSatisfaction.SATISFIED
+                        for o in contract.outputs)
+                and _goal_coverage_of(state) in ("reviewed", "candidate")):
+            lines[-1] = (
+                "整体结果: 已完成所有已识别目标（请求完整性未经独立验证；"
+                "如还有其他需求请补充说明）。")
     # Completion-state protection (P0/B closure): a degraded contract
     # (deterministic fallback — the model never reviewed the request)
     # must not read as a full answer even when its outputs are all
@@ -7371,11 +8570,118 @@ def _completion_closure_policy() -> str:
     return "GUARD"
 
 
+def _goal_output_classes(outputs):
+    """WP-2 U00033 Fix-4 (calibration): the P1 decision-table classes,
+    determined deterministically from the contract — never O1/O2
+    hardcoded. CORE-explanation outputs carry claim_kind=explanation
+    (the "why is this a risk" ask); POLICY-support outputs carry
+    policy_references in their evidence requirements."""
+    core = [o for o in outputs
+            if o.claim_kind == ClaimKind.EXPLANATION]
+    policy = [o for o in outputs
+              if any((t.value if hasattr(t, "value") else str(t))
+                     == "policy_references"
+                     for t in (o.evidence_requirements or []))]
+    return core, policy
+
+
+def _blocked_terminal_class(outputs) -> str:
+    """WP-2 U00033 Fix-4 — the calibrated P1 decision table at the BLOCK
+    terminal, judged by the user goal's ACTUAL satisfaction degree:
+    - "goal_satisfied": the CORE-explanation class answered (rows 1/3 —
+      both halves delivered, or the core answered with the policy
+      support missing). The goal_satisfied family stands; goal_outcome
+      derives PARTIAL/COMPLETE-capped from the output satisfactions
+      (表 D row 3 machinery).
+    - "core_missing_delivered": core ✗ while something else delivered
+      (row 2 — NOT PARTIAL: the user's core question got no meaningful
+      answer; the terminal stays BLOCK-family and the answer names the
+      ungenerated core beside the delivered content).
+    - "nothing": zero satisfied — the existing BLOCK terminal unchanged
+      (row 4).
+    A contract with NO core-explanation class (e.g. a pure records
+    delivery) is OUTSIDE the calibrated table: the existing
+    satisfaction machinery stands — any satisfied output keeps the
+    goal_satisfied family (never a fabricated "core missing" block)."""
+    core, _policy = _goal_output_classes(outputs)
+    if not core:
+        return ("goal_satisfied"
+                if any(o.satisfaction == OutputSatisfaction.SATISFIED
+                       for o in outputs) else "nothing")
+    if any(o.satisfaction == OutputSatisfaction.SATISFIED for o in core):
+        return "goal_satisfied"
+    if any(o.satisfaction == OutputSatisfaction.SATISFIED
+           for o in outputs):
+        return "core_missing_delivered"
+    return "nothing"
+
+
+def _core_gap_statement(state) -> str:
+    """Row-2 user-visible statement: the delivered evidence/policy
+    content stands, but the core explanation was NOT generated — the
+    core ask is never presented as (partially) answered."""
+    outputs = state.goal_contract.outputs if state.goal_contract else []
+    core, _ = _goal_output_classes(outputs)
+    if not core:
+        return ""
+    _en = _turn_lang(state) == "en"
+    headers = [h for h in (_output_header(o, lang="en" if _en else "zh")
+                           for o in core) if h]
+    if not headers:
+        return ""
+    if _turn_lang(state) == "en":
+        return ("Note: the core explanation (" + ", ".join(headers)
+                + ") was NOT generated — the answer presents only the "
+                "evidence and policy content actually retrieved; the "
+                "core question itself remains unanswered.")
+    return ("注意：核心解释（" + "、".join(headers) + "）未能生成——"
+            "以下仅呈现本次实际取得的证据与政策内容；核心问题本身未被"
+            "回答。")
+
+
 def compose_loop_response(state: AgentLoopState) -> str:
     # GSP WP-GSP-5: with the flag ON and an accepted contract, the answer
     # is composed PER REQUIRED OUTPUT from the postcondition verdicts and
     # associated evidence only. Flag OFF / legacy (no contract) → the
     # pre-GSP composer below, byte-compatible.
+    # R2.2.3 G7'' — pre-generation delivery-safety clarification terminal:
+    # the run stopped BEFORE any delivery generation because the request's
+    # goal coverage could not be reliably established (None-B/C) or was
+    # never recorded (UNKNOWN). Render the already-obtained read-only
+    # facts plus the clarification framing; never a whole-request
+    # completion claim. Identified via the recorded BLOCK decision so the
+    # pre-existing AMBIGUOUS clarification terminal is unaffected.
+    if (state.stop_reason == StopReason.CLARIFICATION_NEEDED
+            and state.agent_status == AgentStatus.BLOCKED.value
+            and any(d.get("decision") == LoopDecision.BLOCK.value
+                    and str(d.get("reason", "")).startswith(
+                        "R2.2.3 G7'' delivery gate")
+                    for d in (state.decisions or []))):
+        return _gate_clarification_response(state)
+    # R2.2.3 WP-2 — planning-time clarification terminal (HSG delivery
+    # admission): the run stopped BEFORE plan adoption because the goal
+    # understanding was a heuristic_single_goal classification — render
+    # the clarification message; never a completion claim and never a
+    # collapsed-goal artifact. Distinct from the AMBIGUOUS terminal
+    # (ambiguous_not_executed) and from the G7'' gate terminal (loop-level
+    # BLOCK decisions).
+    if (state.goal_contract is None
+            and state.stop_reason == StopReason.CLARIFICATION_NEEDED
+            and state.agent_status == AgentStatus.BLOCKED.value
+            and (state.goal_contract_decision or {}).get("outcome")
+                == "heuristic_single_goal"):
+        facts = _case_level_answer_lines(state) or \
+            _finding_answer_lines(state)
+        head = state.response or (
+            "本次请求包含交付生成（artifact）类目标；由于当前目标理解来自"
+            "确定性启发式分类（单一目标候选，未经模型审查确认完整目标结"
+            "构），系统未生成 artifact。请补充说明交付的具体范围，或将其"
+            "作为独立请求分别提出。")
+        lines = [head]
+        if facts:
+            lines.append("")
+            lines.extend(facts)
+        return "\n".join(lines)
     from app.config import settings as _cfg
     if getattr(_cfg, "ENABLE_GOAL_SEMANTIC_CONTRACT", False) \
             and state.goal_contract is not None:
@@ -7478,6 +8784,27 @@ def compose_loop_response(state: AgentLoopState) -> str:
     elif state.stop_reason and state.agent_status in (
             AgentStatus.BLOCKED.value, AgentStatus.FAILED.value):
         lines.append(f"Stop reason: {state.stop_reason}.")
+    # WP-2 Version B (S3, defensive mixed branch): a completed run with
+    # admission-rejected delivery targets renders the pending
+    # clarification alongside the delivered answer. (Structurally
+    # unreachable under V1 pairing — NOT PROVEN, carried to S5.)
+    if (state.agent_status == AgentStatus.COMPLETED.value
+            and state.stop_reason == StopReason.CLARIFICATION_NEEDED
+            and any(isinstance(d, dict)
+                    and str(d.get("decision")) == "ADMISSION_INVALID_TARGET"
+                    for d in (state.decisions or []))):
+        _en2 = _turn_lang(state) == "en"
+        lines.append(
+            "整体结果: 已交付目标见上；以下交付目标未通过确定性准入，"
+            "等待澄清：" if not _en2 else
+            "Overall result: delivered targets above; the following "
+            "delivery targets failed deterministic admission and await "
+            "clarification:")
+        for d in (state.decisions or []):
+            if (isinstance(d, dict)
+                    and str(d.get("decision"))
+                    == "ADMISSION_INVALID_TARGET"):
+                lines.append(f"- {d.get('reason')}")
     return "\n".join(lines)
 
 
@@ -7712,10 +9039,10 @@ def project_task_activity(state: AgentLoopState) -> dict[str, Any]:
         # document cannot carry it — derive from contract + status instead.
         "goal_outcome": (
             state.goal_outcome
-            or (derive_goal_outcome(
+            or (_cap_complete(derive_goal_outcome(
                 [o.satisfaction for o in state.goal_contract.outputs],
                 state.agent_status,
-                intent_source=state.goal_contract.intent_source).value
+                intent_source=state.goal_contract.intent_source).value)
                 if state.goal_contract else None)),
         # GSP WP-GSP-3: per-observation output associations (bounded to
         # the kept observations; additive key the frontend does not

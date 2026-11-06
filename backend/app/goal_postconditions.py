@@ -957,6 +957,26 @@ def evaluate_output(output: RequiredOutput, case_id: str | None,
         return _result(OutputSatisfaction.PENDING,
                        reason="no_evaluable_observation")
 
+    # U00004 (PMO Option 1) file-delivery completion gate: a file_export
+    # output is DELIVERED only when a generated artifact backs it — the
+    # evidence intersection (analysis + records observations) never
+    # satisfies the file channel by itself. No artifact_id in the
+    # associated facts (generation failed / never ran) → honest
+    # PARTIALLY_SUPPORTED, never SATISFIED (real failure TASK-ae1a634a4f1b
+    # follow-up: the completion gate must not report a file the user
+    # asked for as delivered when no file exists).
+    if getattr(output, "delivery", "detail_list") == "file_export":
+        backed = any(
+            isinstance(o.get("summary") or {}, dict)
+            and (o.get("summary") or {}).get("artifact_id")
+            for o in evaluable)
+        if not backed:
+            return _result(
+                OutputSatisfaction.PARTIALLY_SUPPORTED, None,
+                "file_export_delivery_unverified", "partial",
+                "文件交付未完成：本次运行没有成功生成的文件实体，"
+                "证据检索结果不等于文件交付。")
+
     # Plan v2.1: a candidate-scoped export output (anaphoric "以上检测到
     # 的对冲交易" + bound candidate set) is satisfiable ONLY by the
     # verified candidate-detail delivery — never by existence evidence,

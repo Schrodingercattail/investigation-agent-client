@@ -325,7 +325,13 @@ export function InvestigationPage() {
         }
         const timelineResult = payload.results.find((r) => r.timeline_events)
         const events = timelineResult?.timeline_events ?? []
-        if (events.length > 0) {
+        // Contract-owned gate (2026-11-03, incident TASK-66d942582954):
+        // attach the card's Timeline section ONLY when the user's goal
+        // actually required timeline delivery. Tools may return events
+        // as internal evidence (re-plan probes, drilldowns) without the
+        // answer card rendering them — the events stay available in the
+        // workspace timeline panel and Activity either way.
+        if (payload.timeline_delivery_required && events.length > 0) {
           setState((s) => ({
             ...s,
             turns: s.turns.map((t, i) =>

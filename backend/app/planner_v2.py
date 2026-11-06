@@ -576,6 +576,12 @@ class PlannerV2:
 
         if request_intent in (
                 RequestIntent.ARTIFACT_CASE, RequestIntent.ARTIFACT_FINDING):
+            # R2.2.3 WP-2 Version B (S3): the Version A unconditional HSG
+            # planning gate is RETIRED (Final Ruling 7). HSG artifact
+            # delivery is admitted per delivery target by the shared
+            # deterministic admission service (app.delivery_admission),
+            # invoked by the loop after plan adoption — the planner plans
+            # normally; admission decides.
             # R2a: when the request names CONCRETE record streams (提现明细/
             # 交易明细), plan per-stream anchored record retrieval + one
             # scoped artifact per stream — reusing the SAME stream step
@@ -1370,6 +1376,28 @@ def _output_target_finding(output, user_words, case_findings):
                  and _title_text(f.title) in _t]
         if len(named) == 1:
             return named[0]
+    # U00010 ML detection score follow-up: an output demanding
+    # ml_signal_explanation evidence resolves to THE case's unique
+    # ML-pattern finding — the detector whose score the ask references.
+    # Deterministic identity: the RP-owned finding type
+    # (detector_signal, classified by _classify_finding_type from the
+    # RP finding name — the same convention _finding_uses_signal and
+    # the ml _EXPLAIN_DOMAINS title element already key on) AND the
+    # normalized title carrying the ml-pattern marker. Exactly one →
+    # return it; zero or multiple → None (fail-closed unchanged — the
+    # anchoring caller drops the step rather than guessing). Runs AFTER
+    # every existing tier, so all existing resolution paths keep their
+    # priority, and it cannot fire without the ml evidence requirement.
+    if any((e.value if hasattr(e, "value") else str(e))
+           == "ml_signal_explanation"
+           for e in (output.evidence_requirements or [])):
+        ml_findings = [
+            f for f in case_findings
+            if str(getattr(f, "type", "") or "") == "detector_signal"
+            and "ml pattern" in _title_text(getattr(f, "title", "") or "")]
+        if len(ml_findings) == 1 and getattr(
+                ml_findings[0], "finding_id", "").strip():
+            return ml_findings[0]
     return None
 
 
