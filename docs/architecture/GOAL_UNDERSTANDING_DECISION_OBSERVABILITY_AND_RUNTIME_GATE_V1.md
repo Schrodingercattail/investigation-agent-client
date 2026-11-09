@@ -31,7 +31,10 @@ Two field incidents motivated this design:
    `goal_contract_decision` happened to be persisted.
 2. **2026-10-24 runtime configuration loss**: the backend restart at
    14:08 inherited only secret-bearing env vars; the
-   `ENABLE_GOAL_SEMANTIC_CONTRACT` flag (config.py:102, default False)
+   `ENABLE_GOAL_SEMANTIC_CONTRACT` flag (config.py:102, default False
+   **as of 2026-10-24** — current code has it at config.py:115 with
+   default True since the 2026-11-02 calibration; see
+   `FEATURE_FLAG_INVENTORY.md` §1)
    was enabled in the previous process by an ephemeral shell export.
    Three browser journeys executed afterwards ran with the contract
    system silently disabled; `goal_contract_decision` was `null` and the
@@ -388,6 +391,12 @@ must combine (a) a behavioral rule for agent-driven flows and (b)
 deterministic gate invocation inside reused harnesses.
 
 ## 12. CLAUDE.md mandatory rule — PROPOSED TEXT (not applied)
+
+> **[APPLIED — 2026-10-24]** The rule below was subsequently applied and
+> now lives in `CLAUDE.md` as the "Runtime Verification Gate (mandatory
+> for acceptance runs)" subsection (see §21 item (f)). The heading above
+> and the wording note below are preserved as the historical
+> proposal-time record.
 
 To be added as a new subsection under the existing "Runtime/code
 consistency preflight" section (wording proposed; application requires

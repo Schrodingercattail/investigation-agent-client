@@ -1,6 +1,14 @@
 # HTTP API Contract V1 — V2 Investigation Runtime
 
-**Status**: ACTIVE — Week 1 HTTP boundary over the Agent runtime
+**Status**: HISTORICAL — Week 1 HTTP contract **snapshot** (2026-08-28).
+Endpoint currency is NOT maintained in this file: the current endpoint
+list of record is `AGENT_CLIENT_ARCHITECTURE_V2.md` §13a, and the current
+unified user-submission entry is
+`POST /api/v2/investigations/{investigation_id}/submit` (§9a-1 there);
+`/turn` is retained as a backward-compatible API entry, not the current
+frontend submission path. The request/response semantics, error envelope,
+case-reference rules, and intake semantics documented below remain the
+contract of record for the endpoints they describe.
 **Date**: 2026-08-28
 **Parent**: `AGENT_CLIENT_ARCHITECTURE_V2.md`
 
@@ -13,11 +21,18 @@
 
 ## 1. Endpoints
 
+> **Snapshot note (read the table with the Status header above)**: this is
+> the Week 1 endpoint table. Later additions — `/submit` (the unified
+> submission entry), `/goal`, `/resume`, `/tasks/{id}/activity`,
+> `/investigations/{id}/followups`, `/runtime/identity` — are listed in
+> `AGENT_CLIENT_ARCHITECTURE_V2.md` §13a and `backend/README.md`, and are
+> not duplicated here.
+
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/v2/investigations` | Create an investigation session for a case |
 | GET | `/api/v2/investigations` | Investigation history (most recently updated first) |
-| POST | `/api/v2/investigations/{investigation_id}/turn` | Run one investigation turn (primary Agent endpoint) |
+| POST | `/api/v2/investigations/{investigation_id}/turn` | Run one investigation turn (primary Agent endpoint **at Week 1**; now backward-compatible — the unified entry is `/submit`) |
 | GET | `/api/v2/investigations/{investigation_id}` | Current investigation state (context + tasks) |
 | DELETE | `/api/v2/investigations/{investigation_id}` | Explicitly delete an investigation and its stored history |
 | GET | `/api/v2/tasks/{task_id}` | Task Center view (task + plan + tool calls + artifacts) |
@@ -352,6 +367,11 @@ preserved, not collapsed.
   executed tool-call records live in an **in-process session map**
   (reset on restart). The natural follow-up is persisting these to the same
   store; the HTTP contract above does not change when that happens.
+  **[RESOLVED after Week 1]** — persistent investigation sessions shipped
+  (context, per-task plans, executed tool calls, and artifacts now persist
+  in TaskStoreV2; see `AGENT_CLIENT_ARCHITECTURE_V2.md` §13a "Persistent
+  investigation sessions"). This paragraph is preserved as the historical
+  record of the Week 1 state.
 - Investigation→turn provenance: each turn receives the pool of prior
   executed ToolCalls for artifact sourcing (never re-executed, never
   attributed to the new task).

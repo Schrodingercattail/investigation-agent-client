@@ -187,6 +187,11 @@ class Investigation(BaseModel):
     case_id: str
     status: InvestigationStatus = InvestigationStatus.ACTIVE
 
+    # Data-source provenance for cross-mode isolation: "demo" (synthetic
+    # fixture via AGENT_SYNTHETIC_RP_FIXTURE) or "external" (real Risk
+    # Platform). None = legacy record created before this field existed.
+    data_source: str | None = None
+
     created_at: str | None = None   # ISO-8601 UTC
     updated_at: str | None = None
 

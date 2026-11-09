@@ -392,6 +392,20 @@ Two scenario sets are distinguished:
 
 ---
 
+## 14a. Post-Week-1 Evolution (pointer only)
+
+The evaluation framework in `backend/eval/` grew after the Week 1
+baseline recorded in this document. Later additions — the AL-3 evaluation
+harness (`evaluator.py`, `ground_truth.py`, `result_model.py`,
+`report_al3.py`) and `llm_judge.py` — are documented in
+`docs/plans/2026-10-03-al3-evaluation-design-v2.md`, with their runs
+recorded under `docs/evaluations/` and `docs/qa/`. The three-layer model
+in this document still describes the evaluation philosophy; the Week 1
+numbers (§12) do **not** apply to later versions — each post-Week-1
+acceptance is reported on its own evidence.
+
+---
+
 ## 15. What This Evaluation Does NOT Measure
 
 The current evaluation does **not** measure:

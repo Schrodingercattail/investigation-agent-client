@@ -1,14 +1,100 @@
-# Agent Client Architecture V2 — Final Week 1 Design
+# Agent Client Architecture
 
-**Status**: ACTIVE — single source of truth for the current design
-**Date**: 2026-08-26 (updated for final Week 1 architecture)
+**Status**: ACTIVE — single source of truth for the current architecture
+**Date**: 2026-08-26 (originated as the Week 1 design; restructured
+2026-11-08 to describe the current system — Week 1 design record moved
+to Appendix A)
 **Supersedes**: All documents in `docs/archive/` and any earlier Phase 1 / agent-loop design notes
 
 > If any other document contradicts this one, this document wins.
+> Chapter numbering of migrated subsections (§4.0–§4.9 components,
+> §6.1–§6.7 tools, §9a/§9a-1 execution model) is preserved verbatim for
+> link stability — historical references to those anchors keep working.
+
 
 ---
 
-## 1. Product Definition
+## 1. System Overview
+
+```mermaid
+flowchart TB
+    USER(["User · Browser"])
+
+    subgraph EXT["External — NOT part of Docker Compose"]
+        direction LR
+        LLM["BigModel LLM<br/>open.bigmodel.cn · glm-5.3<br/>(Anthropic-compatible API)"]
+        RP["Risk Platform :8000<br/>authoritative: findings · evidence ·<br/>policy citations · explanations"]
+    end
+
+    subgraph DC["Docker Compose — exactly 2 services"]
+        direction TB
+        subgraph FE["agent-frontend (nginx :3001)"]
+            UI["Investigation Workspace<br/>React 18 + TypeScript<br/>unified submit · Activity · Findings ·<br/>Artifacts · History"]
+            NGX["nginx: /api/ → backend:8001<br/>/health passthrough"]
+        end
+        subgraph BE["agent-backend (FastAPI :8001)"]
+            API["Investigation API /api/v2<br/>(14 routes; submit = unified entry)"]
+            ISVC["InvestigationService<br/>(execution boundary)"]
+            subgraph RUN["Agent Runtime (internal orchestration —<br/>see Execution Flow in §2)"]
+                direction LR
+                GU["Goal Understanding +<br/>GSP Contract"]
+                LOOP["Bounded Agent Loop<br/>LoopPolicy · G1 gate"]
+                PLAN["Planner + Plan Validator<br/>+ Delivery Admission"]
+                EXEC["Executor + Composer"]
+            end
+            CAP["Capability Access — Provider boundary<br/>Function Calling (default) | MCP (explicit mode)"]
+            TOOLS["Domain Tools (7) · Skill Registry (6 skills / 12 steps)"]
+            ADP["RP Adapter<br/>demo fixture ⇄ external switch<br/>(AGENT_SYNTHETIC_RP_FIXTURE)"]
+        end
+        DB[("SQLite — single DB, volume ./data<br/>7 tables: investigations · tasks_v2 ·<br/>investigation_sessions · agent_states ·<br/>candidate_metadata · clarify_ledger · semantic_concepts")]
+    end
+
+    subgraph DEV["Dev-host MCP access (LOCAL processes —<br/>mcp_server/ is NOT in the backend Docker image)"]
+        direction LR
+        MCPS1["MCP Server subprocess #1<br/>(spawned by Agent Backend via<br/>McpCapabilityClient · stdio)"]
+        MCPS2["MCP Server subprocess #2<br/>(spawned by External MCP Host<br/>per .mcp.json · stdio)"]
+        MCPH["External MCP Host<br/>(e.g. Claude Code)"]
+    end
+
+    USER -->|https :3001| NGX
+    NGX -->|"/api proxy"| API
+    API --> ISVC
+    ISVC --- RUN
+    RUN --- CAP
+    CAP --> TOOLS
+    TOOLS --> ADP
+    ADP -->|HTTP host.docker.internal:8000| RP
+    GU -.->|LLM calls| LLM
+    PLAN -.->|LLM planning branch| LLM
+    ISVC -->|persist: tasks · sessions · agent state| DB
+    CAP ==>|"explicit mode — dev-host only,<br/>no silent fallback"| MCPS1
+    MCPH ==>|"tools/call (stdio, own subprocess)"| MCPS2
+    MCPS1 -.->|"reuses (same capability code)"| TOOLS
+    MCPS2 -.->|"reuses (same capability code)"| TOOLS
+```
+
+**Layer responsibilities and deployment boundaries**:
+
+| Layer | Components | Responsibility | In Docker Compose? |
+|---|---|---|---|
+| User | Browser | product surface | — |
+| Frontend | nginx :3001 (static build + `/api` proxy) | workspace UI | **yes** (`agent-frontend`) |
+| Backend API | FastAPI :8001 (`/api/v2`, 14 routes) | HTTP boundary | **yes** (`agent-backend`) |
+| Agent Runtime | InvestigationService, GU/GSP, bounded loop, planner+validator+admission, executor+composer | investigation execution | inside the backend container |
+| Capability Access | Provider boundary — Function Calling (default) / MCP (explicit) | tool invocation | FC yes; MCP mode dev-host only |
+| External services | BigModel LLM, Risk Platform :8000 | LLM reasoning; authoritative risk data | **no** (both external) |
+| Persistence | SQLite single DB (TaskStoreV2, 7 tables), volume `./data` | durable state | yes (bind mount) |
+| MCP | `mcp_server/server.py` stdio subprocesses | capability access adapter | **no** — local dev-host processes |
+
+Connections (direction · payload): Browser → nginx `/api`; nginx →
+FastAPI (submit, investigations/tasks/findings/artifacts/activity
+queries); FastAPI → InvestigationService (create/continue
+investigations); Runtime → LLM (goal understanding, planning branch);
+Domain tools → RP adapter → Risk Platform HTTP (evidence/explain);
+InvestigationService → SQLite (persistent state). MCP paths are
+optional and described in §5.
+
+### 1.1 Product Definition
 
 The Agent Client is a **case-centric investigation assistant** built on top of
 the Risk Platform. Its UX arc:
@@ -37,57 +123,211 @@ Design rule: **the Agent may compose, order, and present — it must never compu
 or re-derive risk-domain facts.** Every claim in a response must trace back to a
 Risk Platform response obtained through a logged tool call.
 
----
-
-## 2. System Context
-
-```
-+---------------------------+        +------------------------------+
-| Frontend (port 3001)      |        | Risk Platform (port 8000)    |
-| - Case Intake             |        | - detection & scoring        |
-| - Focus Mode dialog       |        | - evidence APIs              |
-| - Context/Memory panel    |        | - explanation API            |
-| - Task Center             |        | - policy / citation services |
-+-------------+-------------+        +---------------+--------------+
-              | HTTP                                 | HTTP
-+-------------v--------------------------------------v--------------+
-| Agent Client Backend (port 8001)                                  |
-| Planner · Validator · Executor · Tool Registry · Risk Platform    |
-| Adapter · Context/Memory · Artifact Service · Task Store          |
-+-------------------------------------------------------------------+
-```
-
-The Risk Platform is an external authoritative service accessed over HTTP only.
-No shared code, no shared filesystem dependencies.
 
 ---
 
-## 3. Core Execution Loop (Week 1)
+## 2. Investigation Execution Flow
 
+```mermaid
+flowchart TD
+    U["User request<br/>POST /submit (the only send path)"] --> CR["Case Reference Resolution<br/>regex only — no LLM"]
+    CR --> GUN["Goal Understanding<br/>(understand_goal — mixed component)"]
+    GUN --> P1["Deterministic contract proposal<br/>(candidate — GSP flag ON)"]
+    P1 --> P2{"LLM attempted? (always, when available)"}
+    P2 -->|"LLM reviews ORIGINAL request<br/>vs candidate"| P3["LLM goal representation"]
+    P2 -.->|"unavailable / empty / retries exhausted:<br/>2 generate() calls, 2nd with doubled budget<br/>(worst case 4 physical calls)"| P4["Heuristic fallback<br/>source='heuristic' — recorded degradation"]
+    P3 --> CT{"build_goal_contract<br/>(the only acceptance gate)"}
+    P4 --> CT
+    CT -->|"accepted → decision=contract_accepted"| G1{"G1 Target Validity Gate<br/>(loop-top choke point)"}
+    CT -->|"invalid → decision=invalid_proposal:code"| NEX["Bounded non-execution"]
+    CT -->|"no usable proposal → no_proposal /<br/>llm_empty / heuristic_single_goal"| NEX
+    CT -->|"genuine ambiguity →<br/>ambiguous_not_executed"| NEX
+    G1 -->|"TARGET_VALID"| CXT["Context Resolution<br/>deterministic-first; LLM assist only"]
+    G1 -->|"TARGET_AMBIGUOUS / TARGET_UNGROUNDED"| CLR["terminal: clarify<br/>(UNGROUNDED: no finding-level tools)"]
+    G1 -->|"TARGET_INVALID"| CLR
+    CXT --> SK["Skill eligibility<br/>(capability-gated, registry)"]
+    SK --> PL{"Planner (mixed component)"}
+    PL -->|"deterministic contract-proposal:<br/>stream anchor · artifact 2-step ·<br/>related-account · coverage"| PLAN["Structured Plan<br/>{skill_id, goal, steps}"]
+    PL -->|"LLM planning within skill vocabulary"| PLAN
+    PLAN --> CHK{"Plan Validator — check_plan<br/>FINAL AUTHORITY · 6 rules"}
+    CHK -->|"violations"| PFAIL["terminal: planning_failure<br/>nothing unvalidated executes"]
+    CHK -->|"validated (plan final)"| ADM{"Delivery Admission<br/>per-target — BEFORE any step executes"}
+    ADM -->|"valid targets: inject delivery bindings<br/>invalid targets: strip their steps"| EX["ExecutorV2<br/>system-controlled · parameter-locked"]
+    ADM -->|"ALL targets invalid"| AIS["terminal: blocked + clarification<br/>ZERO execution"]
+    EX --> PROV{"Provider boundary"}
+    PROV -->|"Function Calling (default)"| TOOL["Domain tool → ToolResult<br/>success / empty / unsupported /<br/>integration_error / validation_error"]
+    PROV ==>|"MCP explicit mode (dev-host)<br/>no silent fallback"| TOOL
+    TOOL --> ARTQ{"plan includes generate_artifact<br/>AND that step executed successfully?"}
+    ARTQ -->|"yes"| ART["Artifact (ArtifactV2)<br/>provenance-closed · scope-controlled"]
+    ARTQ -->|"no"| OBS["Observation → agent state"]
+    ART --> OBS
+    OBS --> POL{"LoopPolicy — system-enforced<br/>LLM proposes CONTINUE/RE_PLAN only;<br/>STOP/BLOCK are terminal rules"}
+    POL -->|"outputs uncovered, budget left"| RP2["RE_PLAN — adjust plan"]
+    RP2 --> PL
+    POL -->|"goal satisfied"| S1["terminal: goal_satisfied"]
+    POL -->|"answered within disclosed boundary"| S2["terminal: bounded_data"]
+    POL -->|"no viable action · conclusive empty ·<br/>capability missing · data/dependency down"| S3["terminal: no_viable_action ·<br/>conclusive_empty_result · capability_missing ·<br/>data_unavailable · dependency_unavailable"]
+    POL -->|"iteration 8 · invalid proposals ·<br/>persistent error"| S4["terminal: iteration_bound_reached ·<br/>invalid_decision_proposals · persistent_error"]
+    POL -->|"unresolved target / clarify"| S5["terminal: context_unresolved ·<br/>clarification_needed"]
+    NEX --> CMP["Composer — compose_loop_response<br/>EVERY terminal produces a bounded honest answer<br/>(inline terminal message rides as context;<br/>partial never renders as success)"]
+    PFAIL --> CMP
+    CLR --> CMP
+    AIS --> CMP
+    S1 --> CMP
+    S2 --> CMP
+    S3 --> CMP
+    S4 --> CMP
+    S5 --> CMP
+    CMP --> PERS["Persistence (incremental + terminal)<br/>TaskStoreV2: task · plan · tool_calls ·<br/>artifacts · session · agent_states"]
+    ART --> PERS
+    PERS --> FE["Frontend: Activity block → final answer ·<br/>Findings · Artifacts · History<br/>(refresh & reopen restore — E2E 2026-11-08)"]
+
+    classDef llm fill:#fef3c7,stroke:#b45309
+    classDef det fill:#dbeafe,stroke:#1d4ed8
+    classDef sys fill:#dcfce7,stroke:#166534
+    class P3 llm
+    class P1,P4,CR,CXT,SK,EX,TOOL,OBS,ART det
+    class CT,G1,CHK,ADM,POL,PROV sys
 ```
-User Request
-  → Context Resolution             ("What does this request refer to?")
-  → Investigation Context          (resolved focus state for this turn)
-  → Skill Selection                ("What kind of investigation work is appropriate?")
-  → LLM Planner                    ("What steps should be performed, in what order?"
-                                    — inside the selected skill's vocabulary only)
-  → Structured Plan
-  → Plan Validation                ("Is every step allowed and well-formed?")
-  → Executor                       (runs tool calls, not the LLM)
-  → Tool Calls
-  → Grounding / Citation Validation
-  → Response + Artifact
-  → Suggested Follow-ups           ("What are useful next investigation actions?"
-                                    — only at continuation points; see FOLLOW_UP_MODEL_V1)
-  → Context Update                 ("What becomes the new focus after this turn?")
-  → Task Log → Next Turn
-```
 
-A selected follow-up is simply the next turn's **User Request** — it re-enters
-the loop at Context Resolution like any other request; there is no separate
-execution path.
+**Legend — colors express responsibility type only (never test status)**:
+yellow = LLM participates · blue = deterministic logic · green =
+system-authoritative gate/control · **uncolored = mixed component or
+flow hub** (Goal Understanding, Planner, Structured Plan, terminals,
+Composer, Persistence). Evidence levels are carried by the table below,
+not by colors.
 
-### 3.1 Stage questions (what each stage answers)
+| Flow segment | Evidence level | Basis |
+|---|---|---|
+| GU real-LLM path | E2E | BigModel D3 round; 2026-11-08 run `INV-cd791b211660` |
+| GU heuristic fallback | RT | no-key mode + mock suites |
+| GSP contract (flag ON, default) | E2E | flag inventory §1; accepted journeys |
+| G1 TARGET_VALID pass-through + safety criteria | E2E | 2026-11-03 ON verification round |
+| G1 UNGROUNDED / INVALID / AMBIGUOUS branches | IMPL + unit (field evidence NOT PROVEN) | flag inventory §6 |
+| Planner deterministic branches | E2E | B-chain / GSP acceptance rounds |
+| Planner LLM-planning branch | IMPL + RT | `planner_v2.py`; Week 1 planner eval (27/30) is HIST |
+| check_plan / Function-Calling tool chain / Composer | RT + E2E | acceptance rounds; 2026-11-08 |
+| MCP explicit mode | E2E (3 levels) | `MCP_ARCHITECTURE_V1.md` |
+| Delivery Admission | E2E | G7 Phase 1 round |
+| Persistence + refresh / History-reopen restore | E2E | 2026-11-08 |
+| resume endpoint | RT + API-E2E | P4 resume round |
+
+No flow element in the diagram is UNKNOWN — every node and edge cites an
+implementation location in this chapter or in §3.
+
+### 2.1 Goal-Understanding contract decisions (complete code enumeration)
+
+`state.goal_contract_decision.outcome` takes exactly these values
+(`backend/app/agent_loop.py` decision construction; diagnostics schema
+`gu-decision/1`):
+
+| Outcome | Meaning | Follow-on path |
+|---|---|---|
+| `contract_accepted` | a goal contract was accepted | proceeds to the G1 gate |
+| `no_proposal` | goal resolution failed / no representation / no usable proposal | bounded non-execution |
+| `invalid_proposal:<code>` | proposal rejected by the deterministic contract builder | bounded non-execution |
+| `llm_empty` | LLM attempted but unusable; heuristic fallback carried the turn | bounded non-execution (recorded degradation) |
+| `heuristic_single_goal` | deterministic heuristic classification (not a full contract proposal) | bounded non-execution unless a contract was accepted |
+| `ambiguous_not_executed` | genuine goal ambiguity | clarification before investigation |
+| `flag_off` | `ENABLE_GOAL_SEMANTIC_CONTRACT` disabled the contract path | legacy routing |
+
+The diagram groups the five non-accepted outcomes into the "Bounded
+non-execution" node for readability — **that grouping is presentational,
+not a code enumeration**; the table above is the complete enumeration.
+There is **no** `rejected` outcome.
+
+Goal Understanding itself is a **mixed component** (uncolored in the
+diagram): with the GSP flag on, a deterministic contract proposal runs
+first as a *candidate* (`deterministic_contract_proposal`,
+`goal_resolution.py`), the LLM — when available — always attempts one
+pass reviewing the ORIGINAL request against the candidate (a non-empty
+candidate no longer short-circuits the LLM), and bounded degradation
+falls back to the deterministic heuristic proposer. GU-level structured
+output retry: 2 `generate()` calls, the second with a doubled budget
+(max_tokens empty-response case); each call additionally carries the
+provider-level empty-response retry — worst case 4 physical calls.
+
+### 2.2 G1 target-validity states (complete code enumeration)
+
+`backend/app/target_validity.py` defines exactly four states:
+
+| State | Meaning | Handling |
+|---|---|---|
+| `TARGET_VALID` | a system evidence kind holds | execute |
+| `TARGET_AMBIGUOUS` | ≥2 candidates co-supported | clarify |
+| `TARGET_UNGROUNDED` | a resolved binding with no system evidence kind | clarify — **no finding-specific investigation tool may run** |
+| `TARGET_INVALID` | positive contradiction only | log + clarify |
+
+The gate runs at one loop-top choke point (`agent_loop.py`, before
+planning and tool calls, covering resume). Evidence levels follow the
+table above: the VALID path and safety criteria are E2E-verified; the
+other three branches are unit-verified with field evidence NOT PROVEN.
+
+### 2.3 StopReason (complete code enumeration, 15 values)
+
+`backend/app/agent_loop.py` `StopReason`:
+
+`goal_satisfied` · `no_viable_action` · `conclusive_empty_result` ·
+`iteration_bound_reached` · `invalid_decision_proposals` ·
+`planning_failure` · `replan_failure` · `capability_missing` ·
+`data_unavailable` · `persistent_error` · `context_unresolved` ·
+`clarification_needed` · `bounded_data` ·
+`semantic_resolution_unavailable` · `dependency_unavailable`
+
+The diagram's terminal boxes (S1–S5, PFAIL, CLR, AIS) are
+**presentational groupings** of these fifteen values for readability —
+the grouping names are not themselves StopReason values, and no value is
+omitted: S3/S4/S5 boxes enumerate their members, `replan_failure` and
+`semantic_resolution_unavailable` belong to the S4/S5 families
+(re-plan exhaustion / semantic-resolution dependency outage
+respectively), and `planning_failure` is the PFAIL node.
+
+### 2.4 Delivery Admission — exact position and behavior
+
+Runs on **both the initial and resume paths, AFTER the plan is final
+(all post-adoption transforms complete, check_plan passed) and BEFORE
+any step executes** (`agent_loop.py`, `admit_delivery_targets`). Per
+delivery target:
+
+- **valid** → delivery-binding arguments are injected into the bound
+  plan steps (source kind, set ref, candidate records, digests);
+- **invalid** → the target's steps are **stripped from the plan before
+  execution** (zero side effects) and an `ADMISSION_INVALID_TARGET`
+  decision is recorded;
+- **ALL targets invalid** → frozen terminal: `AgentStatus.BLOCKED` +
+  `StopReason.CLARIFICATION_NEEDED` with an inline clarification
+  message and **zero execution**.
+
+### 2.5 Composer coverage and Artifact conditionality
+
+**Every terminal goes through the Composer.** `_terminate` returns
+`response=compose_loop_response(state)` unconditionally — normal
+terminals, `planning_failure`, clarification, blocked, and the
+all-invalid admission terminal all produce their user-visible answer
+through the same composer; terminal-specific inline messages ride as
+context under a canonical status phrase. Partial and bounded outcomes
+never render as success.
+
+**Artifacts are conditional, never terminal-implied.** An `ArtifactV2`
+is produced only when the (post-admission) plan includes a
+`generate_artifact` step **and that step executes successfully**
+(`artifact_bundle` → `TaskV2.artifact_ids`). Runs without such a step —
+including fully successful detail-only investigations — complete with
+zero artifacts; that path is represented in the diagram by the
+`ARTQ → no` branch.
+
+### 2.6 Loop bounds, re-planning, and persistence timing
+
+`AGENT_LOOP_MAX_ITERATIONS=8`, `MAX_RETRIES_PER_STEP=1`
+(`backend/app/config.py`). `LoopPolicy` accepts exactly four decisions —
+CONTINUE / RE_PLAN / STOP / BLOCK; the LLM proposes CONTINUE/RE_PLAN
+class decisions, while completion semantics, corrective re-plan
+coercion, and the iteration bound are **system-enforced**; the RE_PLAN
+back-edge re-enters planning. Persistence is **incremental**
+(`_persist` at plan adoption, execution progress, post-admission) plus
+a terminal write; resume reloads a persisted non-terminal state.
+
+### 2.7 Stage questions (original §3.1) (what each stage answers)
 
 | Stage | Question |
 |---|---|
@@ -129,11 +369,18 @@ Key properties:
    turn establishes/changes focus — context changes are always visible, never
    implicit drift.
 
+
 ---
 
-## 4. Components
+## 3. Runtime Components
 
-The architecture distinguishes eleven responsibilities:
+> Original component chapters §4.0–§4.9 are preserved below with their
+> historical numbering (stable anchors). The unified-submission execution
+> model (§9a/§9a-1) is in §8.
+
+### 4. Components (original §4; subsections §4.0–§4.9 preserved verbatim)
+
+The architecture distinguishes twelve responsibilities:
 
 ### 4.0 Context Resolution (agent runtime responsibility)
 
@@ -214,15 +461,26 @@ Hard rules:
   skill (§4.1a).
 - Produces a **structured plan**: an ordered list of steps drawn from the
   **selected skill's** `planning_steps` vocabulary, itself drawn from the
-  predefined step registry (current executable step types include
-  `fetch_case`, `inspect_timeline`, `inspect_evidence`,
-  `inspect_withdrawals`, `inspect_transactions`, `inspect_opposite_trades`
-  (capability-gated, non-executable without the `opposite_trades`
-  capability), `explain_signal`, `retrieve_policy`, `generate_artifact`).
+  predefined step registry (current executable step types — the 12 keys of
+  `STEP_TOOL_MAP` in `backend/app/skills.py` — are `fetch_case`,
+  `generate_artifact`, `inspect_timeline`, `inspect_evidence`,
+  `inspect_withdrawals`, `inspect_transactions`,
+  `inspect_self_opposite_trades` (the canonical self-opposite step,
+  locked to `finding_drilldown(view=self_opposite_trades)`;
+  finding-level capability gates can still return UNSUPPORTED),
+  `analyze_cross_account_trades`, `analyze_related_account_set_trades`,
+  `analyze_related_accounts` (the three case-level analytical steps,
+  bound to `cross_account_trade_analysis` / `related_account_analysis`
+  with registry-locked `analysis_type`), `explain_signal`,
+  `retrieve_policy`).
   Evidence requests naming a specific stream are specialized
   deterministically to the scoped step (`inspect_withdrawals` /
   `inspect_transactions`), so the requested stream governs tool behavior
   and is never silently replaced via the finding-title heuristic.
+  In addition to LLM planning, the Planner contains deterministic
+  proposal branches (e.g. stream anchoring, artifact two-step,
+  related-account planning, deterministic coverage supplements) — the
+  registry of record is `backend/app/skills.py`.
 - Uses constrained prompting; the allowed step vocabulary comes from the
   selected skill and the registries, never invented by the LLM.
 
@@ -325,8 +583,14 @@ Hard rules:
 
 ### 4.4a Skill Registry
 - Data-driven, static registry of Skill definitions (`SKILL_MODEL_V1.md`).
-- Week 1 entries exactly: `case_intake`, `timeline_investigation`,
-  `trade_investigation`.
+- Current entries (registry of record: `backend/app/skills.py`): the
+  Week 1 trio `case_intake`, `timeline_investigation`,
+  `trade_investigation`, plus the case-level analytical skills
+  `case_trade_analysis` (candidate cross-account opposite-trade
+  relationships across the case's transaction universe) and
+  `case_related_accounts` (Risk Platform network attribution: related
+  accounts, shared devices, cluster facts) — both case-level with no
+  finding-capability requirement.
 - Provides each skill's `required_capabilities`, `allowed_tools`,
   `planning_steps`, and `constraints` for selection, plan validation,
   runtime enforcement, and UI action surfacing.
@@ -439,89 +703,21 @@ plan** — the planner stays authoritative for what actually runs next turn.
   ranking/analytics, personalization (future extensions documented in
   FOLLOW_UP_MODEL_V1 §10).
 
----
-
-## 5. Focus Mode & Investigation Context
-
-**Focus Mode is a contextual investigation state, not a prerequisite for
-conversation.** The user may:
-
-1. start with case-level questions (no focus needed),
-2. select a finding/event explicitly in the UI,
-3. or ask a conversational question that causes the Agent to resolve and
-   establish a focus via Context Resolution (§4.0).
-
-The system must support all three interaction patterns. **UI selection is a
-shortcut for establishing explicit context — not a requirement for chat
-interaction.**
-
-Focus Mode means the Agent holds a **current investigation context**:
-
-```jsonc
-{
-  "case_id":            "U00299",   // always present in Focus Mode
-  "focused_finding_id": "F3",       // finding under focus
-  "focused_event_id":   null,       // optional; narrows to one event
-  "focus_source":       "user_selected",
-                                    // how the current focus was established:
-                                    // user_selected | agent_resolved |
-                                    // system_default; null when no focus
-  "time_window":        null,       // optional; e.g. last 24h
-  "policy_ids":         [],         // optional; policies pinned relevant
-  "preferences": {                  // see Section 7
-    "citation_required": true,
-    "response_length":   "standard",
-    "output_format":     "md"
-  }
-}
-```
-
-`focus_source` semantics (normative details in `DOMAIN_MODELS_V1.md §2.2`):
-
-| Value | Meaning |
-|---|---|
-| `user_selected` | The user explicitly selected the finding/event in the UI or explicitly instructed the Agent to focus on it |
-| `agent_resolved` | The Agent resolved the focus from conversational context/reference |
-| `system_default` | The system established a default focus without explicit user selection (e.g. an initial case-level default) |
-
-An `agent_resolved` focus is a working hypothesis, not authority: if
-ambiguity existed at resolution time, the request stops at clarification
-instead of setting an agent_resolved focus.
-
-Focus Mode does **NOT** imply all findings support all tools, views, or
-skills. Each finding exposes its **supported investigation capabilities**,
-derived from what the Risk Platform actually provides as evidence for that
-finding. Both the UI and the agent respect those capabilities:
-
-- Skill selection (§4.1a) receives the capability hints for the focused
-  finding: capability-gated skills are offered only when supported.
-- Planner receives the selected skill's vocabulary plus capability hints.
-- Executor validates requested view/type against finding capability — and
-  skill parameter locks — returning explicit bounded responses for
-  unsupported combinations.
-- UI presents only capable actions per focused finding (see §6a for the
-  skill-driven action surface).
-
-**UI implication**: the UI may display the current case, current finding,
-current event, and focus source. UI selection is a convenience shortcut, not
-a chat prerequisite. Resolver internals (matching algorithms, LLM-assisted
-resolution steps) are implementation details and must not be exposed in the
-UI — only the resulting focus state (`focus_source` included).
-
-**Follow-ups in Focus Mode**: at valid continuation points (§4.9), the UI
-renders up to 3 follow-up chips below the response and/or in the focus
-workspace. Chips are contextual actions — selecting one issues a new
-structured investigation request through the normal pipeline; it does not
-execute anything directly and does not mutate context by being displayed.
-Capability/scope filtering happens server-side (same sources of truth as
-Skills); the frontend only renders the already-filtered payload.
 
 ---
 
-## 6. Tool Surface (Week 1)
+## 4. Skills & Domain Tools
 
-Five tools. Smallest useful set; every tool exposes a genuine investigation
-capability.
+> Tool chapters §6.1–§6.7 and the skill-registry rules are preserved with
+> their historical numbering. Registry of record: `backend/app/skills.py`
+> (6 skills / 12 steps / 7 domain tools; see §4.4a Skill Registry).
+
+### 6. Tool Surface (original §6; subsections §6.1–§6.7 preserved verbatim)
+
+Seven tools. Every tool exposes a genuine investigation capability. The
+Week 1 core is the five tools below (§6.1–§6.5); the two case-level
+analytical tools (§6.6–§6.7) were added post-Week-1 for the B-chain
+case-level analysis skills.
 
 ### 6.1 `risk_case_fetch(case_id)`
 - **Solves**: "What is the authoritative picture of this case?"
@@ -712,7 +908,33 @@ executable. Implementation notes:
   parameters (by design), the executor derives scope deterministically from
   context — focused finding ⇒ `finding` scope, else `case`; format locked
   to `md`. The LLM never chooses formats or free-form artifact instructions.
-### Cross-cutting capabilities (system-level, not tools)
+
+### 6.6 `cross_account_trade_analysis(analysis_type, analysis_scope=None)`
+- **Solves**: "Are there candidate cross-account opposite-trade
+  relationships in this case's transaction universe?"
+- Case-level analytical tool; `analysis_type` is registry-locked to
+  `cross_account_opposite_trade` (the planner can never emit another
+  value); the optional `analysis_scope=related_account_set` form serves
+  set-internal analysis where the user named a related-account population
+  (candidate pairs may involve the case account or only two related
+  members; the analysis scope is system-selected, never LLM-chosen).
+- Bound to the `analyze_cross_account_trades` /
+  `analyze_related_account_set_trades` steps
+  (`backend/app/domain_tools/` — implementation of record).
+- Emits candidate opposite-trade relations plus the analyzed account
+  scope; candidates are candidates — confirmation is a separate
+  investigative act, never auto-asserted.
+
+### 6.7 `related_account_analysis(analysis_type)`
+- **Solves**: "What does the Risk Platform's network attribution say
+  about this case's subject account?"
+- Case-level; `analysis_type` locked to `related_account_analysis`; bound
+  to the `analyze_related_accounts` step. Returns the RP network
+  attribution echo (related accounts, shared devices, cluster facts).
+  Shared-IP evidence is deliberately NOT a declared answer-contract
+  output yet (data pass-through only; no nearest-capability substitution:
+  shared_device ≠ shared_ip).
+#### Cross-cutting capabilities (system-level, not tools)
 
 - LLM planning (Section 4.1–4.2)
 - Skill selection (Section 4.1a; definitions in `SKILL_MODEL_V1.md`)
@@ -723,9 +945,7 @@ executable. Implementation notes:
 - Deterministic fallback/error handling (Section 10)
 - Suggested Follow-ups (Section 4.9; contract in `FOLLOW_UP_MODEL_V1.md`)
 
----
-
-## 6a. Skills (Week 1)
+### 4.8 Skill Concept and Registry Rules (was §6a)
 
 Skills are **reusable investigation workflow definitions** — a lightweight,
 first-class Agent concept between user intent and the tool layer.
@@ -741,19 +961,14 @@ primitive. Capability = runtime eligibility gate. Planning = per-request /
 per-turn decision making.**
 
 The full schema (`skill_id`, `name`, `description`,
-`required_capabilities`, `allowed_tools`, `planning_steps`, `constraints`),
-the three Week 1 skill definitions, and registry rules are normative in
-`SKILL_MODEL_V1.md`. Summary:
-
-| Skill | Required capability | Allowed tools (locked) |
-|---|---|---|
-| `case_intake` | none (case-level) | `risk_case_fetch`, `artifact_bundle` |
-| `timeline_investigation` | `timeline` | `finding_drilldown(view=timeline)`, `signal_explain`, `policy_lookup`, `artifact_bundle` |
-| `trade_investigation` | `opposite_trades` | `finding_drilldown(view=opposite_trades)`, `signal_explain`, `policy_lookup`, `artifact_bundle` |
-
+`required_capabilities`, `allowed_tools`, `planning_steps`, `constraints`)
+and the current registry definitions (6 skills) are normative in
+`SKILL_MODEL_V1.md` §5; the registry of record is `backend/app/skills.py`
+(see §4.4a Skill Registry above). The former three-skill Week 1 summary
+table was removed — it contradicted the current six-skill registry.
 Rules this introduces at the architecture level:
 
-1. **Skill selection precedes planning** (§3, §4.1a): the LLM selects a
+1. **Skill selection precedes planning** (§4.1a): the LLM selects a
    skill from the registry under capability constraints, then plans only
    within that skill's step vocabulary.
 2. **Capability gating**: a skill is *applicable* by intent but *executable*
@@ -774,9 +989,172 @@ supports (unavailable actions hidden or disabled with reason). The available-
 actions list must be computed from the same sources of truth as planning
 (skill registry × FindingCapability), not duplicated by hand in the frontend.
 
+
 ---
 
-## 7. Context / Memory Specification
+## 5. Capability Access: Function Calling & MCP
+
+The Executor consumes every domain capability through a **Provider
+boundary** (`backend/app/mcp_provider.py`) with two access paths:
+
+- **Function Calling (default)** — the in-process tool provider; the
+  production execution mode for every accepted journey.
+- **MCP (explicit execution mode)** — the *same* capabilities reached
+  through `McpToolProvider → McpCapabilityClient → MCP Server`. There is
+  **no silent fallback**: an MCP-path failure surfaces as a bounded
+  `integration_error` ToolResult, never as a quiet switch to Function
+  Calling. Planner output is identical in both modes — the Planner has
+  no MCP vocabulary.
+
+**Two independent MCP Server processes, one server implementation.**
+Both paths run `mcp_server/server.py` — a thin stdio adapter over the
+same domain capability (`backend/app/domain_tools/risk_case_fetch.py`;
+the capability exists exactly once):
+
+| Path | Who spawns the server | Connection | Validated |
+|---|---|---|---|
+| A. Agent Runtime MCP mode | the Agent Backend process, via `McpCapabilityClient.launch()` (`stdio_client`, `_DEFAULT_SERVER_PATH = <repo>/mcp_server/server.py`, inherited env) | stdio, per-session subprocess lifecycle | Level 2 (E2E; backend regression 774-passed round) |
+| B. External MCP Host | the external host (e.g. Claude Code) per the project-level `.mcp.json` | its own stdio subprocess — a **separate process and connection** from path A | Level 3 (E2E, Claude Code 2.1.208) |
+
+**Deployment boundary**: the runtime MCP path (A) is **dev-host only**.
+The backend Docker image copies `app/` and `seed/` only — `mcp_server/`
+is not in the image, so the path cannot be exercised inside Docker
+Compose (the Docker operations guide records MCP as
+"implemented, not specifically verified" for the Compose stack).
+Currently exactly one capability, `risk_case_fetch`, is MCP-exposed.
+Full server/client/provider contracts and the three-level validation
+record: `MCP_ARCHITECTURE_V1.md`.
+
+
+---
+
+## 6. External Services
+
+Two services sit **outside** this repository and outside its Docker
+Compose stack; the Agent Client communicates with each over HTTP and
+shares no code or filesystem with either.
+
+### Risk Platform Adapter (authoritative, external)
+
+Thin HTTP adapter (`backend/app/adapters/risk_platform.py`, §4.5 of this
+document for the full normalization contract): typed error translation
+(timeout/network → unavailable; 401/403 → auth; other 4xx/5xx → request
+failure), RP empty-case semantics normalized to `outcome=empty`,
+transport/auth failures to `outcome=integration_error` — never masked as
+"no findings". Used endpoints: `GET /api/risk/cases/{user_id}/evidence`,
+`POST /api/risk/explain`.
+
+**Demo / External data-source switch** lives in this adapter layer:
+`AGENT_SYNTHETIC_RP_FIXTURE` unset (or a fixture path) serves the
+bundled synthetic case `U99001`; set **explicitly empty** it routes to
+the real Risk Platform via `RISK_PLATFORM_BASE_URL`. Every investigation
+persists the `data_source` that created it (`demo` | `external`);
+continuing an investigation under the other mode returns HTTP 409
+(`DATA_SOURCE_MISMATCH`) before any RP read — viewing history is always
+allowed. **No writes back into the Risk Platform from the agent loop**
+(§10).
+
+### LLM Provider — BigModel (Anthropic-compatible API)
+
+`backend/app/llm_provider.py` (`ClaudeProvider`) targets the configured
+Anthropic-compatible endpoint — by default Zhipu BigModel
+(`open.bigmodel.cn`, model `glm-5.3`) via `ANTHROPIC_BASE_URL` /
+`ANTHROPIC_MODEL`. Boundaries:
+
+- **Where the LLM participates**: Goal Understanding (one bounded pass
+  with structured-output retry and doubled-budget second attempt),
+  GSP proposal review, context-resolution assist (candidate-bounded),
+  and the Planner's free-form branch — always inside registry
+  vocabularies. It never selects tools, emits parameters, decides
+  termination, or writes risk-domain facts.
+- **Deterministic fallback**: with no key or an unusable provider, the
+  deterministic heuristic proposer keeps the entry functional (bounded,
+  honest outputs — not LLM reasoning).
+- Bounded connection-retry classification (retryable transport errors
+  vs local defects) and GU/loop-level retry budgets are system-owned;
+  empty responses are retried within budget, never fabricated.
+
+
+---
+
+## 7. Data Models & Persistence
+
+### 5. Focus Mode & Investigation Context (original §5)
+
+**Focus Mode is a contextual investigation state, not a prerequisite for
+conversation.** The user may:
+
+1. start with case-level questions (no focus needed),
+2. select a finding/event explicitly in the UI,
+3. or ask a conversational question that causes the Agent to resolve and
+   establish a focus via Context Resolution (§4.0).
+
+The system must support all three interaction patterns. **UI selection is a
+shortcut for establishing explicit context — not a requirement for chat
+interaction.**
+
+Focus Mode means the Agent holds a **current investigation context**:
+
+```jsonc
+{
+  "case_id":            "U00299",   // always present in Focus Mode
+  "focused_finding_id": "F3",       // finding under focus
+  "focused_event_id":   null,       // optional; narrows to one event
+  "focus_source":       "user_selected",
+                                    // how the current focus was established:
+                                    // user_selected | agent_resolved |
+                                    // system_default; null when no focus
+  "time_window":        null,       // optional; e.g. last 24h
+  "policy_ids":         [],         // optional; policies pinned relevant
+  "preferences": {                  // see Section 7
+    "citation_required": true,
+    "response_length":   "standard",
+    "output_format":     "md"
+  }
+}
+```
+
+`focus_source` semantics (normative details in `DOMAIN_MODELS_V1.md §2.2`):
+
+| Value | Meaning |
+|---|---|
+| `user_selected` | The user explicitly selected the finding/event in the UI or explicitly instructed the Agent to focus on it |
+| `agent_resolved` | The Agent resolved the focus from conversational context/reference |
+| `system_default` | The system established a default focus without explicit user selection (e.g. an initial case-level default) |
+
+An `agent_resolved` focus is a working hypothesis, not authority: if
+ambiguity existed at resolution time, the request stops at clarification
+instead of setting an agent_resolved focus.
+
+Focus Mode does **NOT** imply all findings support all tools, views, or
+skills. Each finding exposes its **supported investigation capabilities**,
+derived from what the Risk Platform actually provides as evidence for that
+finding. Both the UI and the agent respect those capabilities:
+
+- Skill selection (§4.1a) receives the capability hints for the focused
+  finding: capability-gated skills are offered only when supported.
+- Planner receives the selected skill's vocabulary plus capability hints.
+- Executor validates requested view/type against finding capability — and
+  skill parameter locks — returning explicit bounded responses for
+  unsupported combinations.
+- UI presents only capable actions per focused finding (see §6a for the
+  skill-driven action surface).
+
+**UI implication**: the UI may display the current case, current finding,
+current event, and focus source. UI selection is a convenience shortcut, not
+a chat prerequisite. Resolver internals (matching algorithms, LLM-assisted
+resolution steps) are implementation details and must not be exposed in the
+UI — only the resulting focus state (`focus_source` included).
+
+**Follow-ups in Focus Mode**: at valid continuation points (§4.9), the UI
+renders up to 3 follow-up chips below the response and/or in the focus
+workspace. Chips are contextual actions — selecting one issues a new
+structured investigation request through the normal pipeline; it does not
+execute anything directly and does not mutate context by being displayed.
+Capability/scope filtering happens server-side (same sources of truth as
+Skills); the frontend only renders the already-filtered payload.
+
+### 7.2 Context / Memory Specification (original §7)
 
 **Week 1 does NOT include long-term memory or vector memory.**
 
@@ -802,9 +1180,7 @@ All of the above is rendered in the UI as a **Context/Memory panel** so the
 investigator can see (and correct) exactly what the Agent believes the current
 investigation context is.
 
----
-
-## 8. Artifacts
+### 7.3 Artifacts (original §8)
 
 Week 1 artifact output format: **Markdown only**. The internal artifact model
 remains **structured** (type + structured payload + rendering template) so new
@@ -824,9 +1200,7 @@ Standard Week 1 artifact examples:
 Provenance rule stands: artifacts contain only data sourced from tool outputs
 in the logged task trail.
 
----
-
-## 9. Task Logging & Task Center
+### 7.4 Task Logging & Task Center (original §9)
 
 Every investigation records, as part of the product experience (visible in the
 Task Center):
@@ -851,32 +1225,25 @@ own Task / Plan / ToolCall / Artifact records. There is no special logging
 path for follow-up-originated turns — they are indistinguishable in the log
 from free-form requests, which is what keeps follow-ups auditable.
 
-### 9.1 Telemetry Extension Point (thin, optional, non-authoritative)
+### 7.5 Persistence summary
 
-`backend/app/telemetry.py` defines a minimal **observational** telemetry
-contract: a typed `AgentTelemetryEvent` (event_type, timestamp,
-request/investigation/case/focus identifiers, agent/planner/prompt/model
-versions, planner status/step-types/arguments/latency, execution
-status/step-types/tool-names/latency, semantic_success/failure_category
-for evaluation runs) and a pluggable `TelemetrySink` protocol with a
-**no-op default** (plus an in-memory sink for tests).
+Single SQLite database (TaskStoreV2) with seven tables —
+`investigations`, `tasks_v2`, `investigation_sessions`,
+`agent_states`, `candidate_metadata`, `clarify_ledger`,
+`semantic_concepts` — volume-mounted at `./data/`. Persistence is
+incremental (plan adoption, execution progress, post-admission) plus a
+terminal write; the HTTP boundary's "Persistent investigation sessions" contract
+(in §8) governs refresh/reopen restore. Conversation reconstruction is a
+read-model projection — nothing is re-executed.
 
-- PlannerV2 and ExecutorV2 emit `planner.started/completed/failed`,
-  `execution.started/completed/failed` events through a thin envelope;
-  they return exactly what they returned before, and telemetry can never
-  alter their results. A sink failure is isolated at the telemetry
-  boundary and logged — it can never break investigation execution.
-- Only structured plan OUTPUT and execution metadata are captured
-  (step types, arguments, tool names, status, latency). **No
-  chain-of-thought, no hidden reasoning, no raw prompts/model output** is
-  persisted.
-- Telemetry is **not authoritative**: it never becomes part of finding
-  truth, risk score, evidence truth, policy truth, capability truth, or
-  any execution decision. The same event contract supports
-  `semantic.evaluated` events from the offline evaluation runners
-  (semantic_success / failure_category / scenario_id), so future
-  production-derived evaluation cases can reuse it without coupling
-  production execution to evaluation infrastructure.
+
+---
+
+## 8. HTTP API Boundary & Execution Model
+
+> The unified-submission model (§9a/§9a-1, headings preserved) precedes
+> the endpoint list (original §13a). Endpoint list of record: §8.2 below;
+>`API_CONTRACT_V1.md` is a Week 1 contract snapshot.
 
 ### 9a. Agent Activity in the Conversation (implemented & E2E-verified, 2026-10-19)
 
@@ -1041,10 +1408,141 @@ mouse and keyboard, artifact entry, reload+reopen restore consistency,
 console-error capture) and the blocked-run probe (`context_unresolved` →
 blocked presentation). API contract: `tests/test_agent_activity_api_v1.py`.
 
+### 8.2 HTTP API Boundary (implementation, original §13a)
+
+**Implemented** (`backend/app/api/investigations.py` + `schemas.py`;
+contract: `API_CONTRACT_V1.md`). Product-oriented HTTP boundary over the
+runtime — mounted from `main.py` via `include_router` under `/api/v2`;
+legacy `/api/tasks` endpoints remain untouched.
+
+- **Endpoints** (current full list — this section is the endpoint list of
+  record; `API_CONTRACT_V1.md` is a Week 1 contract snapshot):
+  - `POST /api/v2/investigations` (UI: investigation creation)
+  - `GET /api/v2/investigations` (UI: history list)
+  - `GET /api/v2/investigations/{id}` (UI: reopen/restore)
+  - `DELETE /api/v2/investigations/{id}` (UI: explicit delete)
+  - `POST /api/v2/investigations/{id}/submit` — **the unified user
+    submission entry** (§9a-1): the UI's only send path; every request
+    kind executes on the bounded Agent Loop
+  - `POST /api/v2/investigations/{id}/turn` — backward-compatible
+    single-turn entry (no current UI caller)
+  - `POST /api/v2/investigations/{id}/goal` — goal-run entry (API/E2E
+    consumers; no current UI caller)
+  - `GET /api/v2/investigations/{id}/followups` (UI: read-only
+    follow-ups preview)
+  - `GET /api/v2/tasks/{task_id}` (UI: task detail / conversation
+    restore)
+  - `GET /api/v2/tasks/{task_id}/artifacts` (API consumers; the UI
+    renders artifact content via task detail/results)
+  - `GET /api/v2/tasks/{task_id}/results` (UI: read-only normalized
+    results)
+  - `GET /api/v2/tasks/{task_id}/activity` (UI: Activity projection
+    polled by the inline block, §9a)
+  - `POST /api/v2/tasks/{task_id}/resume` (API/E2E consumers; no
+    current UI caller)
+  - `GET /api/v2/runtime/identity` (QA/preflight probe; fingerprints
+    are computed from disk at request time and do not prove what a
+    long-running process has loaded)
+- **InvestigationService is the execution boundary**: the API never calls
+  tools, PlannerV2, or ExecutorV2 directly.
+- **Multi-turn continuity**: server-generated stable `INV-…`
+  investigation_ids; the Investigation record and tasks persist in
+  TaskStoreV2 (`investigations` table added to the same SQLite store — no
+  second database). *(Historical note: in Week 1 the evolved context and
+  per-task plans/executions lived in a restart-lossy in-process session
+  map — that gap was later resolved by persistent investigation sessions;
+  see the "Persistent investigation sessions" bullet below.)*
+- **Context handling**: the only client-writable surface is an explicit
+  `context_action` (`focus_finding` / `focus_event` / `clear_focus`) which
+  sets `focus_source=user_selected`; clients cannot mutate capabilities,
+  findings, plans, tool calls, or task status, and cannot submit a raw
+  context object.
+- **Follow-up semantics**: `follow_up_id` is validated against the
+  server-side registry and reconstructed into the canonical intent — the
+  client never supplies tool/skill/argument names, and no direct
+  follow-up-execution endpoint exists.
+- **Bounded exposure**: task/turn responses carry plan step statuses and
+  outcome-level tool-call summaries — no internal class names, no stack
+  traces, no raw Risk Platform payloads. Errors use
+  `{"detail": {"code", "message"}}` envelopes (404 not-found, 422 invalid
+  input/follow-up, turn-level bounded failures in-body).
+- **DI/testability**: `InvestigationAPI` instances own their
+  service/store/findings-provider; tests inject fakes and reset the session
+  map — no order-dependent global state.
+- **Persistent investigation sessions** (Session persistence is a
+  session-management feature, not long-term semantic memory):
+  Browser UI → V2 API → TaskStoreV2 / SQLite → persistent investigation
+  state. The Investigation record, current InvestigationContext, per-task
+  plans, executed ToolCall records, and artifacts all persist in TaskStoreV2
+  (one DB file; tables: `investigations`, `tasks_v2`,
+  `investigation_sessions`, plus the later-added document stores
+  `agent_states` (goal representation / contract decisions / loop state
+  projections), `candidate_metadata`, `clarify_ledger`, and
+  `semantic_concepts`). The Week 1 process-local session map is gone. Conversation
+  reconstruction is a read-model projection: reopening an investigation
+  replays persisted tasks (task user_request as the user side, per-task
+  plan/tool-calls as the agent side) — nothing is re-executed.
+  **Refresh ≠ new investigation** (the client persists only the current
+  `investigation_id` as navigation state and reloads from the API);
+  **New Investigation is an explicit user action** that resets the
+  workspace without deleting the previous session; history list and
+  explicit confirmed deletion (`DELETE`) are provided. No search/ranking,
+  summarization, accounts, or sync — that is future scope.
+- **Frontend as API client** (`frontend/src/api/` + `components/investigation/` +
+  `pages/InvestigationPage.tsx`): the V2 Investigation Workspace renders
+  only the structured state returned by `/api/v2` — it never duplicates
+  backend intelligence (skill selection, capability derivation, planning,
+  tool selection, parameter locks, context resolution, follow-up
+  eligibility, citation validation, provenance are all backend-owned).
+  Findings/event selection submits supported `context_action`s; follow-up
+  chips submit `follow_up_id`s; both re-enter the normal pipeline. UI built
+  with the existing shadcn/ui + Tailwind setup (Card/Badge/Button/Tabs/
+  ScrollArea/Sheet/Accordion/Skeleton composition — no new component
+  library, no custom primitives).
+- **Case Reference Resolution** (`app/case_resolution.py`) — the
+  initial-request counterpart of Context Resolution, and deliberately
+  distinct from it:
+
+    INITIAL REQUEST → Case Reference Resolution → Investigation creation
+    → Investigation Context → Context Resolution → Skill Selection
+    → Planner → Executor
+
+  It resolves the canonical `case_id` for a *new* investigation from raw
+  input (`"00299"`, `"investigate case 00299"` → `"U00299"`) before the
+  investigation exists; Context Resolution resolves finding/event
+  references *after* investigation context exists. Deterministic regex
+  only (no LLM, no fuzzy matching); bounded outcomes
+  resolved/missing/ambiguous/invalid surfaced as 200/422/409 with
+  clarification messages. Subsequent turns remain
+  ContextResolver's responsibility — case parsing never enters it.
+
+
 ---
 
-## 10. Governance, Grounding & Error Handling
+## 9. Governance & Verification
 
+### 9.1 Runtime verification gates and feature flags (pointers)
+
+- **Runtime/code consistency preflight + Runtime Verification Gate** —
+  `qa/preflight_runtime.py`; verdicts FRESH/STALE/UNVERIFIED and gate
+  PASS/FAIL/BLOCKED; feature-evidence two-stage contract. Specification
+  and acceptance: `GOAL_UNDERSTANDING_DECISION_OBSERVABILITY_AND_RUNTIME_GATE_V1.md`;
+  mandatory rules in `CLAUDE.md`.
+- **Feature flags** — 7 `ENABLE_*` switches + `DEBUG`; defaults,
+  governance history, and per-flag acceptance status are recorded in
+  `docs/architecture/FEATURE_FLAG_INVENTORY.md` (the ledger of record;
+  status changes must land there, not in chat or task reports).
+  Notable: `ENABLE_GOAL_SEMANTIC_CONTRACT=True` (GSP core, ON),
+  `ENABLE_TARGET_VALIDITY_GUARD=True` (G1, ON since 2026-11-03),
+  `ENABLE_TARGET_GOAL_REFINEMENT=False` (PMO-gated design, not
+  implemented), `ENABLE_CANDIDATE_METADATA_COVERAGE=False` (frozen OFF).
+- **Evidence discipline** — acceptance distinguishes
+  IMPLEMENTED / RUNTIME_REACHABLE / E2E / HIST / DESIGN_ONLY /
+  NOT_PROVEN; a passing unit suite is never acceptance. Known
+  NOT-PROVEN residuals (e.g. the G1 non-VALID branches' field evidence)
+  stay labeled as such in the flag inventory, never silently upgraded.
+
+### 9.2 Bounded response catalog (original §10 content)
 **Citation / grounding validation** (post-execution, pre-response):
 - Every factual claim in the response must trace to a tool output in the
   current task.
@@ -1065,9 +1563,24 @@ blocked presentation). API contract: `tests/test_agent_activity_api_v1.py`.
 returned only when the Risk Platform returns a valid, successful, empty
 response.
 
+
 ---
 
-## 11. Future Scope — Week 2 and Beyond (documented, DO NOT implement now)
+## 10. Non-Goals & Future Scope
+
+### 10.1 Non-Goals (standing, original §12)
+
+- No second detection engine; no local finding reconstruction
+- No local policy corpus or RAG implementation
+- No client-side semantic citation re-validation overriding Risk Platform
+- No writes back into the Risk Platform from the agent loop
+- No free-form autonomous planner
+- No long-horizon planning in Week 1
+- Skills: no multi-agent skills, skill marketplace, skill installation,
+  dynamic code loading, long-term skill memory, complex skill inheritance,
+  or autonomous skill creation (see `SKILL_MODEL_V1.md §7`)
+
+### 10.2 Future Scope (documented, DO NOT implement now; original §11)
 
 - `network_drilldown` tool
 - `explanation_regenerate` tool
@@ -1075,15 +1588,50 @@ response.
 - Richer artifact formats (PDF/HTML export paths on the structured model)
 - Long-term memory (beyond the three preference keys)
 - Multi-agent orchestration
-- MCP integration
+- ~~MCP integration~~ — **implemented and validated (2026-09-13)** as an
+  additional capability-access path around the existing domain
+  capabilities: local-stdio MCP Server, `McpToolProvider` /
+  `McpCapabilityClient` execution mode, external-host validation. See
+  `MCP_ARCHITECTURE_V1.md` (Function Calling remains the default).
 
 These are explicitly out of Week 1 scope; the Week 1 contracts above are shaped
 so these extensions attach without breaking changes (registry growth, render
 templates, memory backends).
 
+
 ---
 
-## 11a. InvestigationService — One-Turn Orchestration (implementation)
+## Appendix A. Week 1 Design Record
+
+> Historical design record — preserved verbatim; does not describe the
+> current execution model (see §2 and §8 §9a-1 for that).
+
+### A.1 Core Execution Loop — the original Week 1 single-turn pipeline (historical)
+
+```
+User Request
+  → Context Resolution             ("What does this request refer to?")
+  → Investigation Context          (resolved focus state for this turn)
+  → Skill Selection                ("What kind of investigation work is appropriate?")
+  → LLM Planner                    ("What steps should be performed, in what order?"
+                                    — inside the selected skill's vocabulary only)
+  → Structured Plan
+  → Plan Validation                ("Is every step allowed and well-formed?")
+  → Executor                       (runs tool calls, not the LLM)
+  → Tool Calls
+  → Grounding / Citation Validation
+  → Response + Artifact
+  → Suggested Follow-ups           ("What are useful next investigation actions?"
+                                    — only at continuation points; see FOLLOW_UP_MODEL_V1)
+  → Context Update                 ("What becomes the new focus after this turn?")
+  → Task Log → Next Turn
+```
+
+A selected follow-up is simply the next turn's **User Request** — it re-enters
+the loop at Context Resolution like any other request; there is no separate
+execution path.
+
+### A.2 InvestigationService — One-Turn Orchestration (historical execution model)
 
 `backend/app/investigation_service.py` is the **orchestration glue** that
 drives one investigation turn through the pipeline of §3:
@@ -1123,23 +1671,39 @@ Implementation properties:
 - All collaborators (resolver / planner / executor / follow-up selector /
   task store) are injectable, enabling fully fake-driven tests.
 
----
-
-## 12. Non-Goals (standing)
-
-- No second detection engine; no local finding reconstruction
-- No local policy corpus or RAG implementation
-- No client-side semantic citation re-validation overriding Risk Platform
-- No writes back into the Risk Platform from the agent loop
-- No free-form autonomous planner
-- No long-horizon planning in Week 1
-- Skills: no multi-agent skills, skill marketplace, skill installation,
-  dynamic code loading, long-term skill memory, complex skill inheritance,
-  or autonomous skill creation (see `SKILL_MODEL_V1.md §7`)
 
 ---
 
-## 13. Testing & Validation
+## Appendix B. Evaluation & Telemetry
+
+### B.1 Telemetry Extension Point (thin, optional, non-authoritative; original §9.1)
+
+`backend/app/telemetry.py` defines a minimal **observational** telemetry
+contract: a typed `AgentTelemetryEvent` (event_type, timestamp,
+request/investigation/case/focus identifiers, agent/planner/prompt/model
+versions, planner status/step-types/arguments/latency, execution
+status/step-types/tool-names/latency, semantic_success/failure_category
+for evaluation runs) and a pluggable `TelemetrySink` protocol with a
+**no-op default** (plus an in-memory sink for tests).
+
+- PlannerV2 and ExecutorV2 emit `planner.started/completed/failed`,
+  `execution.started/completed/failed` events through a thin envelope;
+  they return exactly what they returned before, and telemetry can never
+  alter their results. A sink failure is isolated at the telemetry
+  boundary and logged — it can never break investigation execution.
+- Only structured plan OUTPUT and execution metadata are captured
+  (step types, arguments, tool names, status, latency). **No
+  chain-of-thought, no hidden reasoning, no raw prompts/model output** is
+  persisted.
+- Telemetry is **not authoritative**: it never becomes part of finding
+  truth, risk score, evidence truth, policy truth, capability truth, or
+  any execution decision. The same event contract supports
+  `semantic.evaluated` events from the offline evaluation runners
+  (semantic_success / failure_category / scenario_id), so future
+  production-derived evaluation cases can reuse it without coupling
+  production execution to evaluation infrastructure.
+
+### B.2 Week 1 E2E acceptance (historical; original §13)
 
 **Week 1 E2E acceptance** (`backend/tests/test_investigation_e2e_v1.py`)
 covers continuous multi-turn investigation — case intake → timeline → event
@@ -1152,91 +1716,17 @@ faked; Context Resolution, Skill Registry, Contract Checker, Planner,
 Executor, InvestigationService, follow-up selection, and TaskStoreV2 run for
 real.
 
----
+### B.3 Evaluation pointers
 
-## 13a. HTTP API Boundary (implementation)
+Evaluation methodology, the Week 1 baseline figures, and the post-Week-1
+evolution pointers (AL-3 harness, LLM judge): `AGENT_EVALUATION_V1.md`.
+Per-feature acceptance reports live in `docs/qa/` (most recent:
+2026-11-08 External RP browser E2E).
 
-**Implemented** (`backend/app/api/investigations.py` + `schemas.py`;
-contract: `API_CONTRACT_V1.md`). Product-oriented HTTP boundary over the
-runtime — mounted from `main.py` via `include_router` under `/api/v2`;
-legacy `/api/tasks` endpoints remain untouched.
-
-- **Endpoints**: `POST /api/v2/investigations`,
-  `POST /api/v2/investigations/{id}/turn`,
-  `GET /api/v2/investigations/{id}`, `GET /api/v2/tasks/{task_id}`,
-  `GET /api/v2/tasks/{task_id}/artifacts`.
-- **InvestigationService is the execution boundary**: the API never calls
-  tools, PlannerV2, or ExecutorV2 directly.
-- **Multi-turn continuity**: server-generated stable `INV-…`
-  investigation_ids; the Investigation record and tasks persist in
-  TaskStoreV2 (`investigations` table added to the same SQLite store — no
-  second database); the evolved context and per-task plans/executions live
-  in a documented in-process session map (Week 1 gap, restart-lossy; the
-  HTTP contract is unaffected by later persistence).
-- **Context handling**: the only client-writable surface is an explicit
-  `context_action` (`focus_finding` / `focus_event` / `clear_focus`) which
-  sets `focus_source=user_selected`; clients cannot mutate capabilities,
-  findings, plans, tool calls, or task status, and cannot submit a raw
-  context object.
-- **Follow-up semantics**: `follow_up_id` is validated against the
-  server-side registry and reconstructed into the canonical intent — the
-  client never supplies tool/skill/argument names, and no direct
-  follow-up-execution endpoint exists.
-- **Bounded exposure**: task/turn responses carry plan step statuses and
-  outcome-level tool-call summaries — no internal class names, no stack
-  traces, no raw Risk Platform payloads. Errors use
-  `{"detail": {"code", "message"}}` envelopes (404 not-found, 422 invalid
-  input/follow-up, turn-level bounded failures in-body).
-- **DI/testability**: `InvestigationAPI` instances own their
-  service/store/findings-provider; tests inject fakes and reset the session
-  map — no order-dependent global state.
-- **Persistent investigation sessions** (Session persistence is a
-  session-management feature, not long-term semantic memory):
-  Browser UI → V2 API → TaskStoreV2 / SQLite → persistent investigation
-  state. The Investigation record, current InvestigationContext, per-task
-  plans, executed ToolCall records, and artifacts all persist in TaskStoreV2
-  (`investigations` / `tasks_v2` / `investigation_sessions` tables, one DB
-  file). The Week 1 process-local session map is gone. Conversation
-  reconstruction is a read-model projection: reopening an investigation
-  replays persisted tasks (task user_request as the user side, per-task
-  plan/tool-calls as the agent side) — nothing is re-executed.
-  **Refresh ≠ new investigation** (the client persists only the current
-  `investigation_id` as navigation state and reloads from the API);
-  **New Investigation is an explicit user action** that resets the
-  workspace without deleting the previous session; history list and
-  explicit confirmed deletion (`DELETE`) are provided. No search/ranking,
-  summarization, accounts, or sync — that is future scope.
-- **Frontend as API client** (`frontend/src/api/` + `components/investigation/` +
-  `pages/InvestigationPage.tsx`): the V2 Investigation Workspace renders
-  only the structured state returned by `/api/v2` — it never duplicates
-  backend intelligence (skill selection, capability derivation, planning,
-  tool selection, parameter locks, context resolution, follow-up
-  eligibility, citation validation, provenance are all backend-owned).
-  Findings/event selection submits supported `context_action`s; follow-up
-  chips submit `follow_up_id`s; both re-enter the normal pipeline. UI built
-  with the existing shadcn/ui + Tailwind setup (Card/Badge/Button/Tabs/
-  ScrollArea/Sheet/Accordion/Skeleton composition — no new component
-  library, no custom primitives).
-- **Case Reference Resolution** (`app/case_resolution.py`) — the
-  initial-request counterpart of Context Resolution, and deliberately
-  distinct from it:
-
-    INITIAL REQUEST → Case Reference Resolution → Investigation creation
-    → Investigation Context → Context Resolution → Skill Selection
-    → Planner → Executor
-
-  It resolves the canonical `case_id` for a *new* investigation from raw
-  input (`"00299"`, `"investigate case 00299"` → `"U00299"`) before the
-  investigation exists; Context Resolution resolves finding/event
-  references *after* investigation context exists. Deterministic regex
-  only (no LLM, no fuzzy matching); bounded outcomes
-  resolved/missing/ambiguous/invalid surfaced as 200/422/409 with
-  clarification messages. Subsequent turns remain
-  ContextResolver's responsibility — case parsing never enters it.
 
 ---
 
-## 14. Related Documents
+## 11. Related Documents
 
 - **Skills contract (normative companion)**: `docs/architecture/SKILL_MODEL_V1.md`
 - **Domain model contract**: `docs/architecture/DOMAIN_MODELS_V1.md`
@@ -1244,3 +1734,7 @@ legacy `/api/tasks` endpoints remain untouched.
 - **HTTP API contract**: `docs/architecture/API_CONTRACT_V1.md`
 - Archived historical design material (non-authoritative): `docs/archive/README.md`
 - Operational run instructions: `backend/README.md`
+- **Docker deployment & operations**: `docs/operations/DOCKER_DEPLOYMENT_AND_OPERATIONS.md`
+- **Feature flag ledger**: `docs/architecture/FEATURE_FLAG_INVENTORY.md`
+- **MCP architecture**: `docs/architecture/MCP_ARCHITECTURE_V1.md`
+- **GU observability & runtime gate**: `docs/architecture/GOAL_UNDERSTANDING_DECISION_OBSERVABILITY_AND_RUNTIME_GATE_V1.md`

@@ -7,6 +7,12 @@
 > This document defines Skills as a lightweight, first-class Agent concept.
 > It is documentation only: no Skill Registry implementation, no planner
 > changes, and no model changes happen in this step.
+>
+> **[Post-Week-1 note]** The registry shipped (in `backend/app/skills.py`)
+> and has since grown beyond the three Week 1 skills to **six entries**,
+> and the step vocabulary to **12 keys**. The registry of record is
+> `backend/app/skills.py` (`SKILLS` + `STEP_TOOL_MAP`); the tables in §5
+> below carry the current-state annotations.
 
 ---
 
@@ -157,6 +163,11 @@ production skills in Week 1.
     "Executable only if the focused finding declares capability 'opposite_trades'.",
     "finding_drilldown is locked to view='opposite_trades'; requesting any "
     "other view inside this skill is invalid."
+    // [Post-Week-1] design-time shorthand above (`opposite_trades`, `artifact`,
+    // …): the IMPLEMENTED planning_steps use the canonical registry names —
+    // see the current §5 registry table (`inspect_self_opposite_trades`,
+    // `explain_signal`, `retrieve_policy`, `generate_artifact`) and
+    // backend/app/skills.py.
   ]
 }
 ```
@@ -256,17 +267,28 @@ never fabricate data.
 
 ## 5. Skill Registry (Week 1, Logical)
 
-A simple, **data-driven, static registry** with exactly three entries.
+A simple, **data-driven, static registry**. At Week 1 it had exactly three
+entries; the current registry (`backend/app/skills.py`) has **six** — the
+Week 1 trio plus two case-level analytical skills added post-Week-1.
 Step names below reflect the implemented registry (`backend/app/skills.py`);
-the canonical planning vocabulary is: `fetch_case`, `generate_artifact`,
-`inspect_timeline`, `inspect_opposite_trades`, `explain_signal`,
-`retrieve_policy`.
+the current canonical planning vocabulary is the 12-key `STEP_TOOL_MAP`:
+`fetch_case`, `generate_artifact`, `inspect_timeline`, `inspect_evidence`,
+`inspect_withdrawals`, `inspect_transactions`,
+`inspect_self_opposite_trades`, `analyze_cross_account_trades`,
+`analyze_related_account_set_trades`, `analyze_related_accounts`,
+`explain_signal`, `retrieve_policy`.
 
 | skill_id | required_capabilities | allowed_tools | planning_steps |
 |---|---|---|---|
 | `case_intake` | — | risk_case_fetch, artifact_bundle, policy_lookup | fetch_case, retrieve_policy, generate_artifact |
 | `timeline_investigation` | timeline | finding_drilldown(view=timeline / view=evidence / view=evidence,stream=withdrawals / view=evidence,stream=transactions), signal_explain, policy_lookup, artifact_bundle | inspect_timeline, inspect_evidence, inspect_withdrawals, inspect_transactions, explain_signal, retrieve_policy, generate_artifact |
-| `trade_investigation` | opposite_trades | finding_drilldown(view=opposite_trades), signal_explain, policy_lookup, artifact_bundle | inspect_opposite_trades, explain_signal, retrieve_policy, generate_artifact |
+| `trade_investigation` | opposite_trades | finding_drilldown(view=opposite_trades), signal_explain, policy_lookup, artifact_bundle | inspect_self_opposite_trades (renamed from the Week 1 `inspect_opposite_trades`), explain_signal, retrieve_policy, generate_artifact |
+| `case_trade_analysis` *(post-Week-1)* | — (case-level) | cross_account_trade_analysis, related_account_analysis, artifact_bundle | analyze_cross_account_trades, analyze_related_account_set_trades, analyze_related_accounts, generate_artifact |
+| `case_related_accounts` *(post-Week-1)* | — (case-level) | related_account_analysis | analyze_related_accounts |
+
+(The post-Week-1 rows summarize the registry entries; `SKILLS` in
+`backend/app/skills.py` is the registry of record for
+`allowed_tools`/`planning_steps` details.)
 
 `retrieve_policy` (→ `policy_lookup`) is a **case-wide policy continuation**:
 policy retrieval requires no finding capability, so it is plannable for every
@@ -297,20 +319,28 @@ above landed in code. Conceptual architecture unchanged.
 `retrieve_policy → policy_lookup` ✅,
 `generate_artifact → artifact_bundle` ✅ (all Week 1 bindings executable).
 
-**Static registry** — `SKILLS: dict[str, SkillDefinition]`, exactly the three
-Week 1 skills. `SkillDefinition` is a Pydantic record with
+**Static registry** — `SKILLS: dict[str, SkillDefinition]`, currently the
+three Week 1 skills plus `case_trade_analysis` and
+`case_related_accounts`. `SkillDefinition` is a Pydantic record with
 `skill_id / name / description / required_capabilities / allowed_tools /
 planning_steps / constraints` — data, not a class hierarchy.
 
 **Step → tool mapping** — `STEP_TOOL_MAP: dict[str, StepToolBinding]` is the
-single source of truth; arbitrary step→tool pairs cannot be expressed:
+single source of truth; arbitrary step→tool pairs cannot be expressed.
+Current bindings (12 keys, from `backend/app/skills.py`):
 
 | step type | tool | parameter locks |
 |---|---|---|
 | `fetch_case` | `risk_case_fetch` | — |
 | `generate_artifact` | `artifact_bundle` | — |
 | `inspect_timeline` | `finding_drilldown` | **view="timeline"** |
-| `inspect_opposite_trades` | `finding_drilldown` | **view="opposite_trades"** |
+| `inspect_evidence` | `finding_drilldown` | **view="evidence"** |
+| `inspect_withdrawals` | `finding_drilldown` | **view="evidence" + stream="withdrawals"** |
+| `inspect_transactions` | `finding_drilldown` | **view="evidence" + stream="transactions"** |
+| `inspect_self_opposite_trades` | `finding_drilldown` | **view="self_opposite_trades"** |
+| `analyze_cross_account_trades` | `cross_account_trade_analysis` | **analysis_type="cross_account_opposite_trade"** |
+| `analyze_related_account_set_trades` | `cross_account_trade_analysis` | **analysis_type="cross_account_opposite_trade" + analysis_scope="related_account_set"** |
+| `analyze_related_accounts` | `related_account_analysis` | **analysis_type="related_account_analysis"** |
 | `explain_signal` | `signal_explain` | — |
 | `retrieve_policy` | `policy_lookup` | — |
 

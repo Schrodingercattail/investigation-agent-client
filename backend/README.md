@@ -47,15 +47,33 @@ uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
 
 ## API (V2 — investigations)
 
+Current endpoint list of record: `docs/architecture/AGENT_CLIENT_ARCHITECTURE_V2.md` §13a.
+
+**Unified user submission (the UI's only send path):**
+
+- `POST /api/v2/investigations/{id}/submit` — EVERY user request (simple, compound, follow-up click, first Case Intake) executes on the bounded Agent Loop through this endpoint
+
+**Other endpoints used by the UI workspace:**
+
 - `POST /api/v2/investigations` — create an investigation (canonical case_id or raw reference, resolved server-side)
-- `GET /api/v2/investigations/{id}` — investigation + context + tasks
 - `GET /api/v2/investigations` — history list
+- `GET /api/v2/investigations/{id}` — investigation + context + tasks (reopen/restore)
 - `DELETE /api/v2/investigations/{id}` — delete
-- `POST /api/v2/investigations/{id}/turn` — run one investigation turn
 - `GET /api/v2/investigations/{id}/followups` — read-only Suggested Follow-ups preview
 - `GET /api/v2/tasks/{task_id}` — task detail (+ composed response / follow-ups for conversation restore)
-- `GET /api/v2/tasks/{task_id}/artifacts` — task artifacts
 - `GET /api/v2/tasks/{task_id}/results` — read-only normalized tool results
+- `GET /api/v2/tasks/{task_id}/activity` — bounded UI-safe Activity projection (polled by the inline Agent Activity block)
+
+**Programmatic / API-consumer endpoints (implemented; no current UI caller):**
+
+- `POST /api/v2/investigations/{id}/turn` — backward-compatible single-turn entry (superseded by `/submit` as the user-facing path)
+- `POST /api/v2/investigations/{id}/goal` — goal-run entry (API/E2E consumers)
+- `GET /api/v2/tasks/{task_id}/artifacts` — task artifacts (API consumers; the UI renders artifact content via task detail/results)
+- `POST /api/v2/tasks/{task_id}/resume` — resume a bounded run (API/E2E consumers)
+
+**QA / preflight:**
+
+- `GET /api/v2/runtime/identity` — runtime/code consistency probe (consumed by `qa/preflight_runtime.py`; its fingerprints are computed from disk at request time)
 
 ## Skills and Tools
 

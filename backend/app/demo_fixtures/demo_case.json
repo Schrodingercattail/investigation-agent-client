@@ -1,0 +1,136 @@
+{
+  "synthetic": true,
+  "case_id": "U99001",
+  "description": "DEMO ONLY — fully synthetic financial-risk investigation case. All ids, accounts, addresses, amounts and devices are fabricated for the Demo experience and correspond to no real person, account or transaction.",
+  "risk_summary": {
+    "ml_score": 87.4,
+    "graph_score": 61.2,
+    "detected_at": "2026-01-15T09:30:00+00:00"
+  },
+  "key_findings": [
+    "1. High withdrawal frequency — 8 withdrawals in 24 hours across BTC, ETH and stablecoins",
+    "2. First withdrawal to new address [1]",
+    "3. ML Pattern Detection — 87.4/100; a system signal, not a calibrated risk score"
+  ],
+  "rule_evidence": [
+    {
+      "rule_name": "High withdrawal frequency",
+      "severity": "high",
+      "description": "Demo rule: 8 withdrawals recorded within a 24-hour window"
+    },
+    {
+      "rule_name": "First withdrawal to new address",
+      "severity": "medium",
+      "description": "Demo rule: the account's first outbound withdrawal targeted a newly observed address"
+    }
+  ],
+  "withdrawal_evidence": [
+    {
+      "withdrawal_id": "W900001",
+      "amount": 1.85,
+      "asset": "BTC",
+      "address": "demo-addr-alpha-7f3k91",
+      "is_new_address": true,
+      "timestamp": "2026-01-14T10:05:00+00:00",
+      "risk_reason": "demo: part of the synthetic high-frequency withdrawal pattern"
+    },
+    {
+      "withdrawal_id": "W900002",
+      "amount": 0.9,
+      "asset": "ETH",
+      "address": "demo-addr-alpha-2m8x44",
+      "is_new_address": true,
+      "timestamp": "2026-01-14T11:20:00+00:00",
+      "risk_reason": "demo: part of the synthetic high-frequency withdrawal pattern"
+    },
+    {
+      "withdrawal_id": "W900003",
+      "amount": 5200.0,
+      "asset": "USDT",
+      "address": "demo-addr-beta-5q1w77",
+      "is_new_address": false,
+      "timestamp": "2026-01-14T12:44:00+00:00",
+      "risk_reason": "demo: part of the synthetic high-frequency withdrawal pattern"
+    },
+    {
+      "withdrawal_id": "W900004",
+      "amount": 2.4,
+      "asset": "BTC",
+      "address": "demo-addr-gamma-8z5r12",
+      "is_new_address": true,
+      "timestamp": "2026-01-14T14:02:00+00:00",
+      "risk_reason": "demo: part of the synthetic high-frequency withdrawal pattern"
+    },
+    {
+      "withdrawal_id": "W900005",
+      "amount": 1.1,
+      "asset": "ETH",
+      "address": "demo-addr-alpha-7f3k91",
+      "is_new_address": false,
+      "timestamp": "2026-01-14T16:30:00+00:00",
+      "risk_reason": "demo: repeat destination within the synthetic pattern"
+    },
+    {
+      "withdrawal_id": "W900006",
+      "amount": 3100.0,
+      "asset": "USDC",
+      "address": "demo-addr-beta-5q1w77",
+      "is_new_address": false,
+      "timestamp": "2026-01-14T18:12:00+00:00",
+      "risk_reason": "demo: part of the synthetic high-frequency withdrawal pattern"
+    },
+    {
+      "withdrawal_id": "W900007",
+      "amount": 0.75,
+      "asset": "ETH",
+      "address": "demo-addr-gamma-8z5r12",
+      "is_new_address": true,
+      "timestamp": "2026-01-14T20:01:00+00:00",
+      "risk_reason": "demo: newly observed destination inside the synthetic pattern"
+    },
+    {
+      "withdrawal_id": "W900008",
+      "amount": 2.1,
+      "asset": "BTC",
+      "address": "demo-addr-delta-3n9v65",
+      "is_new_address": true,
+      "timestamp": "2026-01-14T21:47:00+00:00",
+      "risk_reason": "demo: newly observed destination closing the synthetic pattern"
+    }
+  ],
+  "transaction_evidence": [],
+  "connected_accounts": [
+    "DEMOACCT0001",
+    "DEMOACCT0002"
+  ],
+  "shared_devices": [
+    "DEMO-DEVICE-A1"
+  ],
+  "cluster": {
+    "cluster_name": "DEMO Cluster Alpha",
+    "detection_type": "device_sharing",
+    "member_count": 3,
+    "cluster_risk_score": 61.2
+  },
+  "feature_evidence": {},
+  "policy_refs": [
+    {
+      "citation_id": 1,
+      "chunk_id": "DEMO_AML_Indicators#1.1#001",
+      "doc": "DEMO_AML_Indicators.md",
+      "title": "Demo AML indicator: high-frequency withdrawals",
+      "quote": "Demo citation — multiple withdrawals within a 24-hour window may indicate layering behavior. (synthetic demo citation)"
+    }
+  ],
+  "complete": true,
+  "citations": [
+    {
+      "id": 1,
+      "chunk_id": "DEMO_AML_Indicators#1.1#001",
+      "doc": "DEMO_AML_Indicators.md",
+      "section": "1.1 High-frequency withdrawals",
+      "title": "Demo AML indicator: high-frequency withdrawals",
+      "quote": "Demo citation — multiple withdrawals within a 24-hour window may indicate layering behavior. (synthetic demo citation)"
+    }
+  ]
+}

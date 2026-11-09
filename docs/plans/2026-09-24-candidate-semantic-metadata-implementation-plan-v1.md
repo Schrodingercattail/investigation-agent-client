@@ -52,7 +52,7 @@ Consequences enacted throughout this plan:
 
 Coverage (A) is mandatory and universal; eligibility (B) is earned per candidate. A ⊄ B and B ⊆ A.
 
-**Scope directive (job-search/portfolio optimization):** demonstrate the full agent chain — Context → Planning → Tool Calling → Bounded Loop → State → Deterministic Safety Boundary — at minimal reasonable complexity. No governance UI, no elaborate approval workflow, no general-purpose auto-approval, no second database, no MCP. V1 seeds/verifies the known candidates (F5/F6/F8) so the complete Safe-Select path is demonstrable; a future candidate (F12) demonstrates discovery → automatic registration → INCOMPLETE → UNKNOWN → bounded clarification → explicit designation OR terminal outcome. V1 does NOT need to turn F12 into COMPLETE automatically.
+**Scope directive (minimal-complexity demonstration scope):** demonstrate the full agent chain — Context → Planning → Tool Calling → Bounded Loop → State → Deterministic Safety Boundary — at minimal reasonable complexity. No governance UI, no elaborate approval workflow, no general-purpose auto-approval, no second database, no MCP. V1 seeds/verifies the known candidates (F5/F6/F8) so the complete Safe-Select path is demonstrable; a future candidate (F12) demonstrates discovery → automatic registration → INCOMPLETE → UNKNOWN → bounded clarification → explicit designation OR terminal outcome. V1 does NOT need to turn F12 into COMPLETE automatically.
 
 ## 1. Executive Summary
 

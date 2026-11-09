@@ -7,6 +7,12 @@
 > This document defines the domain model contract. It does NOT change any code.
 > `backend/app/models.py` remains untouched until the implementation step that
 > consumes this contract.
+>
+> **[Post-Week-1 note]** The contract below shipped in Week 1. The object
+> definitions, invariants, and migration history remain the contract of
+> record; the **step registry has since grown** — the registry of record is
+> `backend/app/skills.py` (`STEP_TOOL_MAP`, currently 12 keys; see the
+> note at the Week 1 registry in §2.7).
 
 ---
 
@@ -345,6 +351,23 @@ evidence-stream scope — `view=evidence` + `stream=withdrawals|transactions`
 replaced via the finding-title heuristic. `inspect_opposite_trades` is
 capability-gated and non-executable without the `opposite_trades`
 capability.)
+
+**[Post-Week-1 registry changes — registry of record:
+`backend/app/skills.py` `STEP_TOOL_MAP`]**
+
+- `inspect_opposite_trades` was renamed to **`inspect_self_opposite_trades`**
+  (canonical self-opposite step: opposite-side trading by the SAME account;
+  locked to `finding_drilldown(view=self_opposite_trades)`, verified live
+  in WP-GSP-3; finding-level capability gates can still return UNSUPPORTED).
+- Five case-level analytical steps were added:
+  `analyze_cross_account_trades`,
+  `analyze_related_account_set_trades` (both locked to
+  `cross_account_trade_analysis` with registry-locked `analysis_type`,
+  the latter additionally `analysis_scope=related_account_set`), and
+  `analyze_related_accounts` (locked to
+  `related_account_analysis(analysis_type=related_account_analysis)`).
+- `inspect_evidence` / `inspect_withdrawals` / `inspect_transactions` are
+  now explicitly bound in `STEP_TOOL_MAP` (previously vocabulary-only).
 
 (The registry maps step types to tools and expected arguments; it lives next to
 the tool definitions and is the planner's allowed vocabulary.)

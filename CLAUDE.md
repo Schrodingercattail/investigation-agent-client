@@ -32,6 +32,15 @@ documentation — see `README.md` for the project overview.
 - The Risk Platform remains authoritative for findings, evidence,
   policy citations, and explanations.
 
+### Shared Evidence and Answer Synthesis
+
+When multiple output goals are supported by the same observation or evidence,
+render shared explanatory content only once and reference it from subsequent
+sections. Preserve each goal's distinct informational requirements and answer
+every requested question substantively. Do not deduplicate distinct evidence
+or goal-specific content based solely on textual similarity. Completion
+requires both non-redundant presentation and complete goal coverage.
+
 ## MCP
 
 - `risk_case_fetch` is currently the **only** MCP-exposed capability.
@@ -434,3 +443,137 @@ are never counted as passing.
 
 If an applicable answer is "no", do not report the feature as fully
 validated.
+
+## Feature Flag / 验收治理三原则(2026-11-02,项目级最终验收轮固化)
+
+1. **不能因为缺少 E2E 证据就永久关闭重要护栏。** 缺 E2E 证据的安全护栏/正常能力
+   必须登记为验收缺口(见 docs/architecture/FEATURE_FLAG_INVENTORY.md),并安排
+   ON 验证轮(单测 → 真实 API E2E → Browser E2E + 已验收旅程回归);全绿后翻 ON。
+   单测不能替代真实 E2E;E2E 通过前不得盲目开启影响运行的护栏。
+2. **不能因为 ON 造成一个已知回归就直接接受 OFF。** 必须调查 OFF 的功能损失、
+   核对是否破坏其他已实现能力或安全保证;ON/OFF 各有场景问题时寻找两全修复;
+   关闭 Flag 只能是有记录的临时止损,不能自动成为最终产品设计。
+3. **不能用一个场景的通过换取另一个场景的退化。** 相关正向与反向场景必须同时
+   纳入验收;一个通过另一个失败,整体不得 PASS;Flag 组合与依赖必须做影响分析;
+   不得通过减少功能覆盖制造绿色结果。
+
+Feature Flag 的完整台账、默认值依据与翻转条件见
+docs/architecture/FEATURE_FLAG_INVENTORY.md(变更默认值须先更新该文件并获批)。
+Feature Flag 的**状态、决策和验收进展必须同步更新到该文件**——不得只在对话、
+任务报告或临时文档中更新状态;每次状态变化记录:日期/Flag/原状态/新状态/
+决策依据/证据/审批来源/验收状态。
+
+## Secret 安全规范
+
+本章节是项目开发过程中必须遵守的长期安全约束，适用于 Claude Code 及其他
+AI 编程工具在本项目中的所有工作。本规范是 AI 行为约束，不是操作系统级强
+制访问控制——它能约束 AI 助手的行为建议，但不能从操作系统层面阻止所有
+Secret 访问。
+
+### 永久禁止事项
+
+1. 永远不得将任何真实 API Key、Token、密码、私钥、Cookie、Authorization
+   Header 或其他凭证原值输出到对话内容、终端展示、日志文件、报告文档、
+   截图或其他任何非必要载体。
+
+2. 永远不得执行会完整输出真实环境变量的命令，包括但不限于：
+   `env`、`printenv`、未指定变量名的环境变量全量转储，以及其他具有
+   相同效果的命令或脚本。
+
+3. 永远不得执行未经脱敏的 `docker compose config`、`docker inspect`
+   全量配置或 Env 输出，以及其他可能展开或展示 Secret 的配置检查命令。
+
+4. 不得使用 `cat`、`grep`、`sed`、`awk`、Python、Node 或其他工具，以
+   任何形式直接展示 `.env`、认证配置文件或 Secret 文件中的凭证值。
+   此规则禁止的是展示真实凭证原值，不是禁止一切安全状态检查——允许使用
+   经过设计的安全检查方式，只返回状态或脱敏结果。
+
+5. 不得将 Secret 写入临时文件、调试文件、日志文件、测试报告、Git 文件、
+   对话消息、命令输出或其他任何非必要的存储位置。
+
+6. 不得为了调试、排障、验证配置或证明变量存在而输出真实 Secret。
+
+### Secret 状态检查规范
+
+任何 Secret 存在性检查，只允许返回以下三个固定状态之一：
+
+- **ABSENT**：变量不存在。
+- **EMPTY**：变量存在，但值为空字符串。
+- **PRESENT**：变量存在，且值非空。
+
+严禁输出原值、前缀、后缀、长度、哈希、Base64 或其他编码结果、或任何
+可用于识别或还原凭证的派生信息。
+
+可以输出：变量名、ABSENT / EMPTY / PRESENT 状态、脱敏后的 endpoint
+（仅包含 scheme、hostname、port，不含用户名、密码、path、query、fragment）。
+
+检查 endpoint 时，只报告 scheme、hostname、port，不得输出 URL 中的认证
+信息、查询参数或其他敏感内容。
+
+### 安全检查替代方式
+
+优先使用安全的状态检查，而不是直接展示配置内容：
+
+- 检查环境变量：只输出变量名和 ABSENT / EMPTY / PRESENT 状态。
+- 检查 Compose 注入：只输出服务名、变量名和状态，不输出完整解析配置。
+- 检查 Docker 容器环境：只查询指定变量的存在状态，不输出完整 Env 数组。
+- 检查 Git：区分当前工作区、当前提交和历史提交；不得以 `.gitignore` 排除
+  状态证明历史提交中没有 Secret。
+- 检查应用日志：只报告是否存在匹配结果及必要的文件位置，不展示命中内容。
+- 检查 endpoint：只输出脱敏后的 hostname。
+
+如果现有工具无法在不暴露 Secret 的前提下完成检查，应停止该检查，说明
+限制，并请求用户批准安全替代方案。不得为了完成检查而临时创建包含真实
+Secret 的文件。
+
+安全检查必须在数据源内部完成状态判断，只将允许输出的状态或脱敏字段
+返回给调用者；不得先输出完整配置，再依赖人工或后续步骤脱敏。
+
+### docker compose config 特别约束
+
+本项目曾发生过 `docker compose config` 展开 `.env` 后，将真实 API Key
+输出到终端的安全事件。因此：
+
+- 禁止未经脱敏直接执行 `docker compose config`。
+- 禁止将完整配置输出到对话或日志。
+- 禁止通过重定向、`tee` 或其他方式将未脱敏输出保存到文件。
+- 不得将"命令本身合法"理解为"其输出可以安全展示"。
+- 需要检查 Compose 配置时，应使用只提取必要非敏感字段的安全方式。
+- 如果无法保证输出脱敏，则不执行该检查。
+- 安全的容器状态查询、服务状态查询和非敏感配置检查仍然允许——本条不是
+  禁止一切 Docker Compose 检查。
+
+### 发现 Secret 输出时的处置
+
+如果在任何命令输出、日志、文件或对话中发现真实 Secret：
+
+1. 立即停止继续展示、复制、传播或分析该 Secret 原值。
+2. 不得在后续消息中复述 Secret。
+3. 只报告凭证变量名、发现位置和暴露类型。
+4. 根据实际发现的载体和传播范围，标记该凭证为可能已暴露；不得将仅存在
+   于受控环境中的 PRESENT 状态直接判定为泄露。
+5. 告知用户需要评估凭证轮换。
+6. 未经用户授权，不得自行轮换、删除或修改凭证。
+7. 不得声称已经完成轮换或泄露处置，除非有实际证据。
+
+### Secret 与项目配置的区分
+
+必须区分以下不同凭证，不得因为变量名称相似或 endpoint 属于同一供应商
+就将其混为一谈：
+
+- Claude Code 自身访问模型服务的认证 Token（`ANTHROPIC_AUTH_TOKEN`）。
+- Investigation Agent 项目后端访问 BigModel 的 API Key
+  （`ANTHROPIC_API_KEY`）。
+- 其他第三方服务凭证。
+
+环境变量 PRESENT 不等于已经泄露。容器中 ABSENT 不等于历史泄露已经解决。
+`.gitignore` 排除文件不等于 Git 历史中从未出现过 Secret。
+
+### 违规即停
+
+当某项操作可能违反本规范时：
+
+- 不得为了完成任务而冒险执行。
+- 先寻找安全替代方案。
+- 无法找到安全替代方案时，暂停该操作并向用户说明。
+- 不得自行降低安全标准或扩大授权。

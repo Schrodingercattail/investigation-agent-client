@@ -15,12 +15,24 @@ services:
       # From the host's perspective Docker Desktop provides host.docker.internal.
       - RISK_PLATFORM_BASE_URL=${RISK_PLATFORM_BASE_URL:-http://host.docker.internal:8000}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      # Default endpoint matches the default model (glm-5.3 = Zhipu GLM,
+      # Anthropic-compatible API); override via shell env or root .env.
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://open.bigmodel.cn/api/anthropic}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-glm-5.3}
+      # Demo mode (default ON): the backend serves a bundled synthetic case
+      # (U99001) so the stack runs WITHOUT a Risk Platform. To connect a real
+      # Risk Platform instead, set this variable to an EMPTY string in .env:
+      #   AGENT_SYNTHETIC_RP_FIXTURE=
+      # (dash form, NOT ":-" — an explicit empty string must disable Demo).
+      - AGENT_SYNTHETIC_RP_FIXTURE=${AGENT_SYNTHETIC_RP_FIXTURE-/app/app/demo_fixtures/demo_case.json}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "8001:8001"
+    volumes:
+      # SQLite (TaskStoreV2) — survives container recreation; the DB lives
+      # at /app/data/investigation_agent_v2.db inside the container.
+      - ./data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]

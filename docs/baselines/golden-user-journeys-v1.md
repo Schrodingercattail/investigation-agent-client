@@ -280,3 +280,88 @@ not in scope of the planning-anchoring fix. **Browser E2E: see below.**
   `frontend/src/components/investigation/__tests__/`,
   `qa/journey_activity_inline_browser_u00047.py`,
   `qa/journey_trailing_plan_dedup_browser_u00033.py`.
+- ML signal-explanation dedup journey (U00033, real incident
+  INV-12d412c79044 / TASK-2f53a85b0c4b, ask: "what did ML detected?
+  please explain how to get the score") — contract O1 "What ML
+  detected" + O2 "How the ML score is obtained" share ONE
+  signal_explain observation; the ML score / context features /
+  attribution boundary render EXACTLY once, the later section carries
+  the explicit reference, the long form is suppressed; independent
+  observations and single-output answers are untouched. Regressions:
+  `backend/tests/test_ml_signal_dedup_v1.py` (composer, 6 cases),
+  `qa/ml_signal_dedup_api_u00033.py` + `qa/ml_signal_dedup_browser_u00033.py`
+  (real-stack replays; 2026-10-29 PASS, evidence
+  `docs/evaluations/ml-signal-dedup-browser-u00033-20261029T123643Z.json`).
+  Known variance: planner-LLM may emit a non-sharing contract — the
+  journeys then assert the no-reference boundary and report the dedup
+  as not exercised.
+
+- U00033 finding-bound explain + partial-result journey (real incident
+  TASK-e21f49969484 / INV-c672f7a8a4ca, ask:
+  「关联账号为什么是风险项？相关政策原文发我」) — the explain step for a
+  finding-level output enters the Executor WITH its Finding binding:
+  ADOPTED steps (LLM-planned AND supplement-inserted) lacking
+  finding_id resolve via the SAME deterministic `_output_target_finding`
+  (vocabulary + title + exactly-one tiers); zero/ambiguous → dropped
+  fail-closed with an audited gap (RE_PLAN digest carries the gap; a
+  repeated gap is dropped again). Terminal semantics follow the
+  calibrated goal-level table: core-explanation ✗ + policy ✓ = BLOCK
+  family + the delivered citation + an explicit "core explanation not
+  generated" statement (NOT partial); core answered = goal_satisfied
+  family. Regressions: `backend/tests/test_wp2_u00033_findbind_v1.py`
+  (31, unit/component), `backend/tests/test_wp2_u00033_findbind_api_v1.py`
+  (N1 real-ask anchoring + identity consistency; N2 incident-shape
+  degradation, real HTTP face), `qa/u00033_findbind_browser_u00033.py`
+  (live journey; 2026-11-01 PASS 9/9 on the canonical stack, evidence
+  `docs/evaluations/u00033-findbind-browser-live.json`, gate record
+  `backend/docs/evaluations/u00033-findbind-preflight-20261101.json`
+  FRESH + feature-evidence verified). Known variance: the real GU may
+  order policy before explanation or propose a different output count —
+  journeys assert class-derived truth, never O1/O2 ids.
+
+- U00004 file-delivery journey (real incident TASK-ae1a634a4f1b /
+  INV-9129595a5878, ask: 「列出所有关联账号。查询其中是否存在对冲交易
+  情况。如果有，把对冲交易明细列给我，并且生成一份文件」) — an explicit
+  file clause in the user's own words guarantees the contract carries a
+  file_export deliverable (deterministic closure over the final GU set —
+  never LLM-variance-dependent); the file composes the set-internal
+  hedge candidates + records + the related-account list, and a file_export
+  output is never satisfied without a generated artifact (completion
+  gate). Regressions: `backend/tests/test_u00004_file_delivery_intent_v1.py`
+  (12), `backend/tests/test_u00004_file_delivery_api_v1.py` (N-A..N-D),
+  `qa/u00004_file_delivery_browser_u00004.py` (live journey; 2026-11-01
+  PASS 11/11 on the canonical stack, gate FRESH + feature-evidence
+  verified, evidence
+  `docs/evaluations/u00004-filedelivery-browser-final.json`). Known
+  variance: the live candidate count/groups follow the real RP data —
+  assertions are data-driven, never fixture-shaped.
+
+## GJ-OPPOSITE-TRADE-RATIO-001/002/003 — metric-question vs finding-why goal discrimination (U00004-adjacent, real incident TASK-6ed61aee47a0 / INV-771604543bbf)
+
+- **GJ-001 (the incident ask)**: "please explain how to calculate the
+  opposite-trade ratio of 34.29%. Is it the opposite-trade ratio of
+  34.29% within the linked accounts?" — the "explain" verb serves a
+  METRIC-calculation question: the contract must contain ONLY the
+  reverse_trade_metric_semantics goal; **no** F5 finding-explanation
+  output (the deterministic explain-compound decomposition is
+  suppressed by the WHY_ASK_RE guard — real defect: O2
+  为什么「Linked Account Network」被标记为风险 was auto-generated and
+  rendered). The served answer explains the 34.29% own-account
+  computation (min(BUY,SELL)/total) and states it is NOT a
+  cross-account match rate.
+- **GJ-002**: "Explain why the Linked Account Network finding was
+  flagged as a risk." — a genuine finding-why ask keeps the finding
+  explanation goal and it is answered.
+- **GJ-003**: "Explain how opposite-trade ratio is calculated, and also
+  explain why the Linked Account Network is risky." — compound: BOTH
+  goals generated and answered.
+- Known variance: the live GU proposal shape varies; the deterministic
+  guard (WHY_ASK_RE — why-vocabulary vs the bare "explain" verb) is
+  shape-stable.
+- Regressions: `backend/tests/test_gj_opposite_trade_ratio_v1.py`
+  (GU deterministic, 6 cases: incident/short-metric/F5-why/compound/
+  U00010-compound-why-inert/metric-why-preserved),
+  `backend/tests/test_gj_opposite_trade_ratio_api_v1.py` (real HTTP
+  face, 3 scenarios with contract + served-answer assertions).
+- 2026-11-02: unit + API E2E PASS on the fixed tree; Browser E2E for
+  GJ-001 pending the backend restart onto the fixed tree.

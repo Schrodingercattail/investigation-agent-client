@@ -21,6 +21,7 @@ calls — those are server-controlled.
 """
 
 import logging
+import os
 import re
 import pathlib
 import threading
@@ -129,6 +130,43 @@ def _case_intake_representation(case_id: str, request_text: str):
     )
 
 
+def _demo_data_source_active() -> bool:
+    """Mirror RiskPlatformAdapter.__init__ exactly: a non-empty
+    AGENT_SYNTHETIC_RP_FIXTURE switches the data source to the bundled
+    synthetic Demo fixture; empty or unset = External RP."""
+    return bool(os.environ.get("AGENT_SYNTHETIC_RP_FIXTURE"))
+
+
+def _assert_data_source(investigation) -> None:
+    """Fail-closed historical-investigation data-source isolation.
+
+    A historical investigation may only continue against the data source
+    it was created with — otherwise Demo fixture rows and real Risk
+    Platform records would silently blend inside one investigation.
+    Read-only history views never call this check.
+    """
+    recorded = getattr(investigation, "data_source", None)
+    current = "demo" if _demo_data_source_active() else "external"
+    if recorded is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "UNKNOWN_DATA_SOURCE",
+                    "message": (
+                        "该历史调查尚未记录数据来源，系统无法确认其原始数据来源。"
+                        "为避免混合不同数据源的调查证据，已禁止继续执行。"
+                        "历史记录仍可查看。")},
+        )
+    if recorded != current:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "DATA_SOURCE_MISMATCH",
+                    "message": (
+                        f"该调查创建于 {recorded} 数据源，当前运行于 {current} 数据源。"
+                        "为避免混合不同数据源的调查证据，"
+                        "请切换回创建该调查时使用的模式后继续。")},
+        )
+
+
 class InvestigationAPI:
     """Dependency container for the V2 router. Instances own their stores
     and service, so tests can inject fakes without global state."""
@@ -189,6 +227,7 @@ class InvestigationAPI:
                 detail={"code": "INVESTIGATION_NOT_FOUND",
                         "message": f"Unknown investigation: {investigation_id}"},
             )
+        _assert_data_source(investigation)
         context = self._load_context(investigation_id)
         findings = self._findings(investigation.case_id)
 
@@ -299,6 +338,7 @@ class InvestigationAPI:
             investigation_id=f"INV-{uuid.uuid4().hex[:12]}",
             case_id=case_id,
             status=InvestigationStatus.ACTIVE,
+            data_source="demo" if _demo_data_source_active() else "external",
             created_at=_now(),
             updated_at=_now(),
         )
@@ -499,6 +539,7 @@ class InvestigationAPI:
                 detail={"code": "INVESTIGATION_NOT_FOUND",
                         "message": f"Unknown investigation: {investigation_id}"},
             )
+        _assert_data_source(investigation)
         goal = (request.goal or "").strip()
         if not goal:
             raise HTTPException(
@@ -602,6 +643,7 @@ class InvestigationAPI:
                 detail={"code": "INVESTIGATION_NOT_FOUND",
                         "message": f"Unknown investigation: {investigation_id}"},
             )
+        _assert_data_source(investigation)
         # follow-up clicks carry the canonical intent via the server-side
         # registry; free-form messages are the intent themselves
         intent = self._resolve_followup(TurnRequest(
@@ -907,6 +949,11 @@ class InvestigationAPI:
         # to a false dependency-unavailable BLOCKED.
         recovered_state = self.store.get_agent_state(task_id)
         recovered_case = recovered_state.case_id if recovered_state else ""
+        if recovered_state is not None:
+            recovered_inv = self.store.get_investigation(
+                recovered_state.investigation_id)
+            if recovered_inv is not None:
+                _assert_data_source(recovered_inv)
         runner.findings_provider = lambda: self._findings_strict(
             recovered_case)
         result = runner.resume(task_id,

@@ -459,3 +459,116 @@ Definition of Done (AL-3.5.1 implementation cycle):
 (requests: S11 ×1 completing, S04/S05/S06/S07/S12 shapes; findings via
 `risk_case_fetch('U00010')`; catalog via `TaskStoreCatalogProvider`);
 baseline evidence: `al3-ca2ec15c` responses/activities attachments.*
+
+---
+
+## G1 ON Verification Plan(2026-11-02 追加;方案已准备,尚未执行)
+
+**前提**: ENABLE_TARGET_VALIDITY_GUARD 保持 OFF;本节定义独立、隔离的
+Flag-ON 正反场景验证轮。验证全绿后另行审批翻转默认值。方案完成 ≠ E2E
+通过 ≠ 默认值翻转。
+
+### V. 隔离环境设计
+
+| 维度 | 方案 |
+|---|---|
+| 后端端口 | **:8011**(独立 uvicorn 进程,cwd=backend 共享代码) |
+| 前端端口 | **:3011**(独立 vite 实例,proxy→:8011;或仅 API E2E+只读浏览器核验) |
+| TaskStore/SQLite | **独立 tmp 目录 DB**(隔离 TaskStore,零污染人工验收数据) |
+| 测试数据 | 独立 investigation/task(前置 API 创建,不复用验收会话) |
+| RP 依赖 | 复用 :8000(只读 fetch/analyze,不写 RP;如需隔离,可 mock adapter) |
+| G1=True 注入 | **隔离进程启动命令内联** `ENABLE_TARGET_VALIDITY_GUARD=true` |
+| runtime flag evidence | 三重锚定:① ps -E 进程环境直证;② preflight --expect-flag;③ 行为探针(UNGROUNDED 澄清在 ON 进程出现) |
+| 人工验收保护 | :3001/:8000 不动;:8001 人工进程(如有)不碰;共享 DB 不写验收数据(隔离 store) |
+| 环境停止 | 隔离进程 graceful kill;不影响其他端口 |
+
+### W. 验证矩阵
+
+| # | 场景 | 输入 | Guard 预期 | 契约预期 | 工具预期 | 用户结果 | 持久化断言 | API E2E | Browser |
+|---|---|---|---|---|---|---|---|---|---|
+| N1 | S11 wrong-topic | 谈谈虚拟币洗钱(无此主题) | UNGROUNDED | 无契约 | **零执行** | 澄清(无法确定 finding) | blocked/context_unresolved;obs=[];planner 零调用 | ✅ | ✅ |
+| N2 | INVALID mismatch | 用户指定 F1,解析到 F3 | INVALID | 无/受阻 | 零执行 | 澄清(命名不一致) | decisions 含 INVALID | ✅ | ✅ |
+| P1 | VALID finding query | F5 为什么是风险项(focus/explicit) | VALID 通过 | 正常契约 | signal_explain(F5) | F5 解释 | 契约+obs 正常 | ✅ | ✅ |
+| P2 | case-level query | case overview | 不触发(非 finding) | 正常 | fetch_case | 概览 | — | ✅ | ✅ |
+| P3 | clarification continuation | 澄清后用户补选真实 finding | context_continuation 通过 | 正常 | 对应工具 | 正常继续 | — | ✅ | ✅ |
+| P4 | resume | 恢复合法中断任务 | context_continuation(旧态) | 正常 | 对应工具 | 正常 | resume 证据 | ✅ | ✅ |
+| P5 | compound | 双 finding why | 各自判定 | 双契约/单契约双子目标 | 双执行 | 双答 | — | ✅ | ✅ |
+| P6 | RE_PLAN/partial | 部分失败后 re-plan | 不经 guard(RE_PLAN 无 flag 交互) | 保持 | re-plan 工具 | 正常 | — | ✅ | ✅ |
+| P7 | AMBIGUOUS | 多候选无判别证据 | 澄清(现有路径) | 正常 | 按 M2 OFF 路径 | 澄清 | — | ✅ | ✅ |
+
+### X. 四状态覆盖
+
+| 状态 | 触发条件 | 单测(al351) | API E2E(本方案) | Browser(本方案) | 持久化证据 |
+|---|---|---|---|---|---|
+| TARGET_VALID | 确定性证据绑定(explicit/title/concept/continuation) | ✓ | P1 | P1 | 契约+obs |
+| TARGET_AMBIGUOUS | 多候选无判别证据(语义阶段) | ✓(decide 分支) | P7 路径 | P7 | — |
+| TARGET_UNGROUNDED | 零证据 | ✓(:144-169) | N1 | N1 | blocked/context_unresolved |
+| TARGET_INVALID | 命名与解析不一致 | ✓(单测) | 辅助场景(需 fixture 构造 F1→F3 错配;**无法通过真实用户输入稳定构造**——标记为辅助测试,不冒充真实旅程) | — | — |
+
+### Y. DoD
+
+1. N1/N2 错误目标被阻止(零工具执行、诚实澄清);
+2. P1-P7 合法/澄清场景无错误拦截、错误映射或错误执行;
+3. 四状态均有对应 API E2E 证据(辅助 fixture 场景标注);
+4. API E2E 通过真实 :8011 listener(非 TestClient);
+5. 用户旅程场景通过真实 Browser;
+6. Planner/Executor/Task/用户可见结果全链路记录;
+7. GJ-001/002/003 + 关键旅程回归;
+8. 一个场景失败整体不得 PASS;
+9. 不得通过跳过失败场景或关闭其他功能制造绿色结果。
+
+### Z. 风险与停止条件
+
+- N2(INVALID mismatch)可能无法通过真实用户输入稳定构造——标记为辅助场景,以单元级 decide() 证据替代;
+- Guard ON 对语义提案(P3.5/P4)的拦截行为是 ON 验证轮的核心发现点——若合法旅程被误拦,记录 FAIL 并停止翻转审批;
+- 执行预算:9 场景 × ~2-3min = ~30min(API)+ Browser 旅程;
+- 停止条件:任一 P 场景 FAIL 且确认为 Guard 缺陷 → 停止翻转审批,回报用户。
+
+### AA. P6 Guard 边界校准(2026-11-02 代码追迹确认)
+
+**真实代码事实**:G1 choke point(agent_loop.py:2808 `target_validity.decide`)
+位于 `while True` 迭代循环(:3231)**之前**——一次性准入检查,不在迭代循环内。
+
+**P6 结论**:
+1. RE_PLAN 后新目标**不重新经过 Guard**(by design:RE_PLAN 改变方法不改目标);
+2. 后续验证由 **Planner 的 coverage admission**(planning_coverage 三值) +
+   **Fix-1 环内锚定**(`_anchor_finding_level_steps`,agent_loop.py:4748)
+   + **signal_explain 工具自身的 finding_id 校验**(signal_explain.py:150)
+   独立承担;
+3. **不构成 Guard 绕过缺口**(by design:Guard 校验的目标在 admission 时
+   已确定,RE_PLAN 只改变方法;coverage/锚定/工具自身校验独立兜底)。
+
+**P6 API E2E 断言**:
+- 部分失败 → RE_PLAN → 后续步骤仍受既有约束;
+- Guard 不重新触发(一次性准入,by design);
+- 原始用户目标不因 re-plan 丢失或重映射;
+- Goal Contract 和合法工具执行保持正常。
+
+### AB. N2 INVALID 证据边界(2026-11-02 校准确认)
+
+**真实 API E2E 构造判定**:INVALID(命名与解析不一致)**无法通过真实用户
+输入稳定构造**——它需要"用户明确指定 finding X"但"系统解析到 finding Y≠X"
+的情况;在当前确定性解析(P3 authoritative-title/deterministic matchers)
+优先于 LLM assist 的架构下,解析不一致需要 LLM assist 返回错误 id 且
+confidence ≥0.7——可通过 mock resolver LLM 构造,但**不是真实用户旅程**。
+
+**证据等级结论**:
+- INVALID:decide() 单测 ✓;**API E2E NOT PROVEN**;Browser E2E NOT PROVEN。
+- 其余三状态:decide() 单测 ✓ + loop 级/API E2E 已在 al351 套件覆盖;
+  Browser E2E 在 GJ/P 旅程覆盖。
+
+**处理方式**:N2 保留 decide() 级辅助验证(不冒充 API E2E);API E2E 标记
+NOT PROVEN;不虚构场景。
+
+### AC. GJ 最小回归清单(2026-11-02 校准)
+
+| 标识 | 验证目的 | 与 G1 关系 | 执行入口 | 预期结果 |
+|---|---|---|---|---|
+| GJ-REG-U00010-B1 | 复合 criteria+file 交付 | Guard 不拦截合法 finding 查询 | qa/u00010_ml_score_browser.py(B1 形状) | 正常完成 |
+| GJ-REG-U00033 | ML dedup + F5 解释 | Guard 不拦截合法 finding 查询 | qa/gj_opposite_trade_ratio_browser.py(GJ-002 形状) | F5 解释正常 |
+| GJ-OPP-RATIO-001 | 指标问不误触发 F5 | Guard 不改变目标判定 | qa/gj_opposite_trade_ratio_browser.py(GJ-001 形状) | 仅 metric 目标 |
+| GJ-OPP-RATIO-003 | 复合不丢目标 | Guard 不影响复合目标 | 同上(GJ-003 形状) | 双目标 |
+| al351 S11 loop 级 | Guard ON 拦截 S11 | 核心 ON 验证 | 单元(flag ON monkeypatch) | blocked/context_unresolved |
+
+GJ 回归在 ON 验证轮执行时使用 **:8011 隔离后端** + **:3011 隔离前端** +
+**独立 TaskStore**——不触碰当前人工验收环境。

@@ -12,6 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # excluded via backend/.dockerignore.
 COPY app ./app
 
+# Startup seed for the M2 semantic catalog (app.main provisions it at
+# startup from <repo-of-main>/seed/candidate_metadata_seed.json).
+COPY seed ./seed
+
 # RISK_PLATFORM_BASE_URL (and LLM configuration) are provided through
 # environment configuration at runtime — never baked in.
 ENV APP_NAME="Investigation Agent API"
