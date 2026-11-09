@@ -221,7 +221,8 @@ class TestU00010MLScoreAnchoredExecution:
                "satisfaction": o1.satisfaction.value,
                "goal_outcome": doc.goal_outcome,
                "stop_reason": doc.stop_reason}
-        with open("/Users/vv/investigation-agent-client/docs/evaluations/"
-                  "u00010-ml-score-api-answer.json", "w",
+        # evidence dump for the run log — written into pytest's per-test
+        # tmp dir (never a developer-machine path, never the repo tree)
+        with open(tmp_path / "u00010-ml-score-api-answer.json", "w",
                   encoding="utf-8") as f:
             json.dump(res, f, ensure_ascii=False, indent=2)
